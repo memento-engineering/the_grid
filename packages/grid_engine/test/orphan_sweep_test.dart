@@ -104,6 +104,8 @@ Future<List<BeadWorktree>?> _noWorktrees(RootCheckout root) async =>
 Future<ReapOutcome> _noReap({
   required RootCheckout root,
   required BeadWorktree worktree,
+  bool dryRun = false,
+  bool overrideUnsafe = false,
 }) async => throw StateError('sweepOrphans must not reap worktrees');
 
 const _root = RootCheckout(

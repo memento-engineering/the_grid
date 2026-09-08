@@ -612,6 +612,34 @@ class StationControl {
       if (params.isEmpty) {
         command = const GridCommandRequest.listGates();
       }
+    } else if (method == 'grid/session/ls') {
+      if (params.isEmpty) {
+        command = const GridCommandRequest.listHeldSessions();
+      }
+    } else if (method == 'grid/session/collect') {
+      final sessionIds = params['sessionIds'];
+      final act = params.containsKey('act') ? params['act'] : false;
+      final bulk = params.containsKey('bulk') ? params['bulk'] : false;
+      final overrideUnsafe = params.containsKey('overrideUnsafe')
+          ? params['overrideUnsafe']
+          : false;
+      const allowed = {'sessionIds', 'act', 'bulk', 'overrideUnsafe'};
+      if (params.keys.every(allowed.contains) &&
+          sessionIds is List &&
+          sessionIds.isNotEmpty &&
+          sessionIds.every(
+            (value) => value is String && value.trim().isNotEmpty,
+          ) &&
+          act is bool &&
+          bulk is bool &&
+          overrideUnsafe is bool) {
+        command = GridCommandRequest.collectHeldSessions(
+          sessionIds: sessionIds.cast<String>(),
+          act: act,
+          bulk: bulk,
+          overrideUnsafe: overrideUnsafe,
+        );
+      }
     } else if (method == 'grid/gate/resolve') {
       final gateId = params['gateId'];
       final grades = params['grades'] ?? const <String, Object?>{};

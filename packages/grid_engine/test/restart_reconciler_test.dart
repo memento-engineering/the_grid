@@ -53,6 +53,8 @@ class FakeGit {
   Future<ReapOutcome> reapWorktree({
     required RootCheckout root,
     required BeadWorktree worktree,
+    bool dryRun = false,
+    bool overrideUnsafe = false,
   }) async {
     log.add('reap:${worktree.beadId}');
     reaped.add(worktree.beadId);
@@ -305,10 +307,16 @@ void main() {
         log.add('list:${root.substation}');
         return root == second ? [_wt(workId)] : const <BeadWorktree>[];
       },
-      reapWorktree: ({required root, required worktree}) async {
-        reapedRoots.add(root.substation);
-        return ReapOutcome.removed();
-      },
+      reapWorktree:
+          ({
+            required root,
+            required worktree,
+            dryRun = false,
+            overrideUnsafe = false,
+          }) async {
+            reapedRoots.add(root.substation);
+            return ReapOutcome.removed();
+          },
       workRoots: const [first, second],
       groups: groups,
       writer: writer,
@@ -376,8 +384,13 @@ void main() {
     ]);
     final reconciler = RestartReconciler(
       listWorktrees: (_) async => [_wt(workId)],
-      reapWorktree: ({required root, required worktree}) async =>
-          ReapOutcome.removed(),
+      reapWorktree:
+          ({
+            required root,
+            required worktree,
+            dryRun = false,
+            overrideUnsafe = false,
+          }) async => ReapOutcome.removed(),
       workRoot: _workRoot,
       groups: FakeProcessGroupController(ownGroupId: 999, log: log),
       writer: writer,

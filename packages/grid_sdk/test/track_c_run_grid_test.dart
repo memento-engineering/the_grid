@@ -64,8 +64,13 @@ class _NoGroups implements ProcessGroupController {
 RestartReconciler _sweeper() => RestartReconciler(
   listWorktrees: (root) async =>
       throw StateError('sweepOrphans must not list worktrees'),
-  reapWorktree: ({required root, required worktree}) async =>
-      throw StateError('sweepOrphans must not reap worktrees'),
+  reapWorktree:
+      ({
+        required root,
+        required worktree,
+        dryRun = false,
+        overrideUnsafe = false,
+      }) async => throw StateError('sweepOrphans must not reap worktrees'),
   workRoot: const RootCheckout(
     path: '/root',
     defaultBranch: 'main',

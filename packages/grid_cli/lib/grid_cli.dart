@@ -57,6 +57,7 @@ export 'src/reload_command.dart';
 export 'src/watch_command.dart';
 export 'src/watch_predicate.dart';
 export 'src/gate_command.dart';
+export 'src/session_command.dart';
 export 'src/substation_command.dart';
 export 'src/rework_command.dart';
 export 'src/pause_command.dart';

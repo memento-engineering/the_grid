@@ -398,6 +398,141 @@ void main() {
       },
     );
 
+    test('decodes held-session list and collect commands', () async {
+      final handler = _FakeCommandHandler();
+      final control = await StationControl.start(
+        port: 0,
+        token: 't',
+        view: _sampleStatus,
+        commandHandler: handler,
+      );
+      addTearDown(control.dispose);
+
+      final list = await _post(
+        control.url,
+        '/command',
+        token: 't',
+        fence: '20',
+        idempotencyKey: 'session-list',
+        body: const {
+          'id': 'session-list',
+          'method': 'grid/session/ls',
+          'params': <String, Object?>{},
+        },
+      );
+      expect(list.statusCode, HttpStatus.ok);
+      expect(handler.calls.last, const GridCommandRequest.listHeldSessions());
+
+      final collect = await _post(
+        control.url,
+        '/command',
+        token: 't',
+        fence: '21',
+        idempotencyKey: 'session-collect',
+        body: const {
+          'id': 'session-collect',
+          'method': 'grid/session/collect',
+          'params': {
+            'sessionIds': ['tgdog-s2', 'tgdog-s1'],
+            'act': true,
+            'bulk': true,
+            'overrideUnsafe': true,
+          },
+        },
+      );
+      expect(collect.statusCode, HttpStatus.ok);
+      expect(
+        handler.calls.last,
+        const GridCommandRequest.collectHeldSessions(
+          sessionIds: ['tgdog-s2', 'tgdog-s1'],
+          act: true,
+          bulk: true,
+          overrideUnsafe: true,
+        ),
+      );
+
+      final defaults = await _post(
+        control.url,
+        '/command',
+        token: 't',
+        fence: '22',
+        idempotencyKey: 'session-defaults',
+        body: const {
+          'id': 'session-defaults',
+          'method': 'grid/session/collect',
+          'params': {
+            'sessionIds': ['tgdog-s1'],
+          },
+        },
+      );
+      expect(defaults.statusCode, HttpStatus.ok);
+      expect(
+        handler.calls.last,
+        const GridCommandRequest.collectHeldSessions(sessionIds: ['tgdog-s1']),
+      );
+
+      final callsBeforeMalformed = handler.calls.length;
+      final malformed = <Map<String, Object?>>[
+        const {'sessionIds': <Object?>[]},
+        const {
+          'sessionIds': [''],
+        },
+        const {'sessionIds': 'tgdog-s1'},
+        const {
+          'sessionIds': [1],
+        },
+        const {
+          'sessionIds': ['tgdog-s1'],
+          'act': 'true',
+        },
+        const {
+          'sessionIds': ['tgdog-s1'],
+          'bulk': 1,
+        },
+        const {
+          'sessionIds': ['tgdog-s1'],
+          'overrideUnsafe': null,
+        },
+        const {
+          'sessionIds': ['tgdog-s1'],
+          'extra': true,
+        },
+      ];
+      for (var index = 0; index < malformed.length; index++) {
+        final response = await _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '${23 + index}',
+          idempotencyKey: 'session-malformed-$index',
+          body: {
+            'id': 'session-malformed-$index',
+            'method': 'grid/session/collect',
+            'params': malformed[index],
+          },
+        );
+        expect(response.statusCode, HttpStatus.badRequest);
+        expect(
+          (jsonDecode(response.body) as Map<String, Object?>)['error'],
+          containsPair('code', 'invalid_request'),
+        );
+      }
+      final malformedList = await _post(
+        control.url,
+        '/command',
+        token: 't',
+        fence: '40',
+        idempotencyKey: 'session-list-malformed',
+        body: const {
+          'id': 'session-list-malformed',
+          'method': 'grid/session/ls',
+          'params': {'unexpected': true},
+        },
+      );
+      expect(malformedList.statusCode, HttpStatus.badRequest);
+      expect(handler.calls, hasLength(callsBeforeMalformed));
+    });
+
     test('bearer fence and idempotency guards precede dispatch', () async {
       final handler = _FakeCommandHandler();
       final control = await StationControl.start(
