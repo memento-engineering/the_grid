@@ -289,6 +289,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.3.3"
+  federated_grid_assets:
+    dependency: transitive
+    description:
+      name: federated_grid_assets
+      sha256: "95fc1a75eabba73eb7b28d2bd537a28a2edbe0a5c522bed509283b61bbb8c80b"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.3.0-rc.4"
   ffi:
     dependency: transitive
     description:
@@ -600,6 +608,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.0.0"
+  multicast_dns:
+    dependency: transitive
+    description:
+      name: multicast_dns
+      sha256: "134668a9605c747322d8c3eb0e89a4c0cbdedb29f8d2d5ae29d14daef724987b"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.3.3+1"
   mustache_template:
     dependency: transitive
     description:
@@ -1069,6 +1085,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.4"
+  zero_conf_grid_assets:
+    dependency: transitive
+    description:
+      name: zero_conf_grid_assets
+      sha256: "59c0b96f2447a1feae264b7d264550c06c30cc9ee0a0cb01f9a97911873232cf"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.3.0-rc.2"
 sdks:
   dart: ">=3.12.0 <4.0.0"
   flutter: ">=3.44.0"

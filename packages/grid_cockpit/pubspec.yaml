@@ -19,6 +19,7 @@ dependencies:
     path: ../grid_diagnostics_contract
   grid_station_client:
     path: ../grid_station_client
+  zero_conf_grid_assets: ^0.3.0-rc.2
 
 dev_dependencies:
   build_runner: ^2.4.0

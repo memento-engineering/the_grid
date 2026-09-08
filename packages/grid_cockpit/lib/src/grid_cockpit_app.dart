@@ -5,6 +5,7 @@ import 'package:grid_station_client/grid_station_client.dart';
 
 import 'cockpit_connection_bar.dart';
 import 'cockpit_dashboard.dart';
+import 'mdns_station_discovery.dart';
 
 /// Watch-only application shell for one resident station.
 final class GridCockpitApp extends StatefulWidget {
@@ -12,10 +13,17 @@ final class GridCockpitApp extends StatefulWidget {
   ///
   /// Callers must neither reuse nor replace the controller while this widget
   /// is mounted.
-  const GridCockpitApp({super.key, required this.controller});
+  const GridCockpitApp({
+    super.key,
+    required this.controller,
+    required this.stationDiscovery,
+  });
 
   /// Connection controller owned and disposed by this app.
   final LiveConnectionController controller;
+
+  /// Network station discovery presented by the connection bar.
+  final MdnsStationDiscovery stationDiscovery;
 
   @override
   State<GridCockpitApp> createState() => _GridCockpitAppState();
@@ -56,7 +64,10 @@ final class _GridCockpitAppState extends State<GridCockpitApp> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          CockpitConnectionBar(controller: _controller),
+          CockpitConnectionBar(
+            controller: _controller,
+            stationDiscovery: widget.stationDiscovery,
+          ),
           Expanded(
             child: ValueListenableBuilder<LiveConnectionState>(
               valueListenable: _controller,
