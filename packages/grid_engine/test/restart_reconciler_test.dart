@@ -221,6 +221,7 @@ RestartReconciler _reconciler({
   required FakeGit git,
   required FakeProcessGroupController groups,
   required GraphSnapshot state,
+  GraphSnapshot? work,
   StationBeadWriter? writer,
   Future<void> Function()? freshnessBarrier,
   GraphSnapshot Function()? stateSnapshot,
@@ -232,6 +233,7 @@ RestartReconciler _reconciler({
   writer: writer ?? _chokepoint().writer,
   freshnessBarrier: freshnessBarrier ?? () async {},
   stateSnapshot: stateSnapshot ?? () => state,
+  workSnapshot: work == null ? null : () => work,
 );
 
 void main() {
@@ -438,6 +440,72 @@ void main() {
       expect(report.respawnPending, isEmpty);
       expect(report.respawnCount, 0);
     });
+
+    test(
+      'a terminal held session preserves its worktree while work is open',
+      () async {
+        final log = <String>[];
+        final git = FakeGit(worktrees: [_wt('tgdog-held-work')], log: log);
+        final groups = FakeProcessGroupController(ownGroupId: 999, log: log);
+        final state = _stateSnapshotOf([
+          _session(
+            id: 'tgdog-held-session',
+            workBead: 'tgdog-held-work',
+            closed: true,
+            metadata: const {'grid.escalation': 'breaker-exhausted'},
+          ),
+        ]);
+        final work = _stateSnapshotOf([
+          const Bead(id: 'tgdog-held-work', status: BeadStatus.open),
+        ]);
+
+        final report = await _reconciler(
+          git: git,
+          groups: groups,
+          state: state,
+          work: work,
+        ).reconcile();
+
+        expect(report.respawnPending, hasLength(1));
+        final entry = report.respawnPending.single;
+        expect(entry.sessionId, 'tgdog-held-session');
+        expect(entry.reapOutcome, isNull);
+        expect(git.reaped, isEmpty);
+      },
+    );
+
+    test(
+      'a terminal held session reaps its worktree once work closes',
+      () async {
+        final log = <String>[];
+        final git = FakeGit(worktrees: [_wt('tgdog-held-work')], log: log);
+        final groups = FakeProcessGroupController(ownGroupId: 999, log: log);
+        final state = _stateSnapshotOf([
+          _session(
+            id: 'tgdog-held-session',
+            workBead: 'tgdog-held-work',
+            closed: true,
+            metadata: const {'grid.escalation': 'breaker-exhausted'},
+          ),
+        ]);
+        final work = _stateSnapshotOf([
+          const Bead(id: 'tgdog-held-work', status: BeadStatus.closed),
+        ]);
+
+        final report = await _reconciler(
+          git: git,
+          groups: groups,
+          state: state,
+          work: work,
+        ).reconcile();
+
+        expect(report.skipped, hasLength(1));
+        final entry = report.skipped.single;
+        expect(entry.sessionId, 'tgdog-held-session');
+        expect(entry.reapOutcome!.removed, isTrue);
+        expect(git.reaped, ['tgdog-held-work']);
+      },
+    );
 
     test(
       'a LIVE (non-terminal) session ⇒ respawn-pending, carrying its session '

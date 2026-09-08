@@ -335,13 +335,14 @@ void main() {
     expect(runner.callsFor('close'), hasLength(2));
   });
 
-  test('A48 held session preserves its open gate', () async {
+  test('A48 held session preserves its open gate while work is open', () async {
     runner.exportBeads = [
       session(
         'tgdog-held',
         closed: true,
         metadata: const {
           'rig': 'tgdog',
+          'work_bead': 'tg-work',
           'grid.escalation': 'breaker-exhausted',
         },
       ),
@@ -360,11 +361,54 @@ void main() {
         sessionId: 'tgdog-held',
         trigger: GateCloseCause.sessionTerminal,
         disposition: GateSweepSessionDisposition.held,
+        terminalWorkBead: const Bead(id: 'tg-work', status: BeadStatus.open),
       ),
-      throwsA(isA<StateError>()),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          'gate auto-close refused: held session',
+        ),
+      ),
     );
     expect(runner.callsFor('update'), isEmpty);
     expect(runner.callsFor('close'), isEmpty);
+  });
+
+  test('A48 held session closes its open gate once work closes', () async {
+    runner.exportBeads = [
+      session(
+        'tgdog-held',
+        closed: true,
+        metadata: const {
+          'rig': 'tgdog',
+          'work_bead': 'tg-work',
+          'grid.escalation': 'breaker-exhausted',
+        },
+      ),
+      const Bead(
+        id: 'tgdog-gate',
+        issueType: GridIssueTypes.gate,
+        metadata: {
+          'rig': 'tgdog',
+          'blocks': 'tgdog-held',
+          'node': 'review/route',
+        },
+      ),
+    ];
+
+    final receipts = await writer().closeOpenGatesForTerminal(
+      sessionId: 'tgdog-held',
+      trigger: GateCloseCause.workBeadClosed,
+      disposition: GateSweepSessionDisposition.held,
+      terminalWorkBead: const Bead(id: 'tg-work', status: BeadStatus.closed),
+    );
+
+    expect(receipts, hasLength(1));
+    expect(receipts.single.gateId, 'tgdog-gate');
+    expect(receipts.single.cause, GateCloseCause.workBeadClosed);
+    expect(runner.callsFor('close'), hasLength(1));
+    expect(runner.callsFor('close').single[1], 'tgdog-gate');
   });
 
   test(

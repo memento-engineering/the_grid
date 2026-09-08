@@ -59,6 +59,13 @@ Future<void> _pump(TreeOwner owner) async {
   }
 }
 
+Future<void> _pumpUntil(TreeOwner owner, bool Function() done) async {
+  for (var i = 0; i < 500 && !done(); i++) {
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+    owner.flush();
+  }
+}
+
 SessionProjection _projection(bool complete) => SessionProjection(
   workBeadId: 'tg-work',
   sessionId: 'tgdog-session',
@@ -68,10 +75,33 @@ SessionProjection _projection(bool complete) => SessionProjection(
       : const {},
 );
 
+SessionProjection _exhaustedProjection() => const SessionProjection(
+  workBeadId: 'tg-work',
+  sessionId: 'tgdog-session',
+  isMolecule: true,
+  moleculeBeads: [
+    Bead(
+      id: 'tgdog-finish',
+      issueType: GridIssueTypes.step,
+      metadata: {
+        'rig': stateSubstation,
+        MoleculeStepKeys.stepId: 'finish',
+        MoleculeStepKeys.capability: 'finish',
+        MoleculeStepKeys.kind: 'job',
+        MoleculeStepKeys.path: 'tg-work/finish',
+        MoleculeStepKeys.session: 'tgdog-session',
+        MoleculeStepKeys.state: 'failed',
+        MoleculeStepKeys.restartCount: '3',
+      },
+    ),
+  ],
+);
+
 ({TreeOwner owner, Fakes fakes, RecordingExplorationTransport transport})
 _mount({
   required _RecordingReap reap,
   bool terminal = true,
+  bool breakerExhausted = false,
   List<String>? eventLog,
 }) {
   const beadId = 'tg-work';
@@ -79,7 +109,9 @@ _mount({
   final fakes = buildFakes(createdId: sessionId, eventLog: eventLog);
   final transport = RecordingExplorationTransport();
   final owner = TreeOwner();
-  final session = _projection(false);
+  final session = breakerExhausted
+      ? _exhaustedProjection()
+      : _projection(false);
   final graph = GraphSnapshot.fromParts(
     beads: [bead(beadId)],
     dependencies: const [],
@@ -164,6 +196,43 @@ void main() {
     expect(reapIndex, isNonNegative);
     expect(closeIndex, isNonNegative);
     expect(reapIndex, lessThan(closeIndex));
+  });
+
+  test('breaker-exhaustion escalation never reaps the worktree', () async {
+    final reap = _RecordingReap(ReapOutcome.removed());
+    final mounted = _mount(reap: reap, terminal: false, breakerExhausted: true);
+    addTearDown(mounted.owner.dispose);
+
+    await _pumpUntil(mounted.owner, () {
+      final escalated = mounted.fakes.runner
+          .callsFor('update')
+          .any((call) => call.join(' ').contains('grid.escalation'));
+      final closed = mounted.fakes.runner
+          .callsFor('close')
+          .any((call) => call[1] == 'tgdog-session');
+      return escalated && closed;
+    });
+
+    expect(
+      mounted.fakes.runner
+          .callsFor('update')
+          .where((call) => call.join(' ').contains('grid.escalation')),
+      hasLength(1),
+    );
+    expect(
+      mounted.fakes.runner
+          .callsFor('close')
+          .where((call) => call[1] == 'tgdog-session'),
+      hasLength(1),
+    );
+    expect(reap.calls, isEmpty);
+    for (final flare in [
+      'session.worktreeReaped',
+      'session.worktreeReapHeld',
+      'session.worktreeReapFailed',
+    ]) {
+      expect(mounted.transport.named(flare), isEmpty);
+    }
   });
 
   test('refused reap names all three gates', () async {

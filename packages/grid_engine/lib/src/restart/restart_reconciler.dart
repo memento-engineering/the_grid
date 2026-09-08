@@ -568,7 +568,8 @@ class RestartReconciler {
   ///    reconciled this pass).
   /// 3. Project the OWNED sessions from the post-barrier state snapshot,
   ///    keyed by `work_bead` (so SKIP fires for a foreign work bead).
-  /// 4. For each worktree: SKIP-and-reap a terminal session; else leave it
+  /// 4. For each worktree: SKIP-and-reap an ordinary terminal session, or a
+  ///    held terminal session whose work bead closed; else leave it
   ///    respawn-pending.
   /// 5. SWEEP the molecule survivors' leased groups through the vendor — the
   ///    ONE process-identity reconciliation (a session's process identity is
@@ -885,15 +886,14 @@ class RestartReconciler {
     for (final rooted in rootedWorktrees) {
       final wt = rooted.worktree;
       final session = sessionByWorkBead[wt.beadId];
-      var workTerminal = false;
+      final workBead = session == null ? null : workBeads[wt.beadId];
+      final workTerminal = workBead?.isClosed ?? false;
       if (session != null) {
         backed.add(session);
-        final workBead = workBeads[wt.beadId];
-        if (!session.isTerminal && workBead != null && workBead.isClosed) {
-          workTerminal = true;
+        if (!session.isTerminal && workTerminal) {
           final sessionId = session.sessionId;
           if (sessionId != null && terminalBacked.add(sessionId)) {
-            terminalPairs.add((session: session, workBead: workBead));
+            terminalPairs.add((session: session, workBead: workBead!));
           }
         }
       }
@@ -902,6 +902,7 @@ class RestartReconciler {
           rooted.root,
           wt,
           workTerminal ? session!.copyWith(isTerminal: true) : session,
+          workTerminal: workTerminal,
         ),
       );
     }
@@ -1361,16 +1362,21 @@ class RestartReconciler {
   Future<RestartEntry> _reconcileWorktree(
     RootCheckout root,
     BeadWorktree wt,
-    SessionProjection? session,
-  ) async {
-    // SKIP (done): the OWNED session reached a positive terminal — reap the
-    // worktree; do not respawn. Fires even for a FOREIGN wt.beadId because
-    // the outcome marker is on the_grid's own session bead (A40/A37). Any
-    // leased groups a terminal MOLECULE session left are swept in step 5
-    // (see [_sweepMoleculeLeases]) — the reap runs first and the kill is
-    // keyed by pgid, not by the directory just removed; a HISTORICAL flat
+    SessionProjection? session, {
+    required bool workTerminal,
+  }) async {
+    // SKIP (done): the OWNED session reached a terminal that authorizes reap.
+    // Ordinary terminals authorize it immediately; human-held terminals wait
+    // for their matching work bead to close. Fires even for a FOREIGN
+    // wt.beadId because the terminal evidence is on the_grid's own session
+    // bead (A40/A37), while workTerminal came from that id in the captured work
+    // snapshot. Any leased groups a terminal MOLECULE session left are swept
+    // in step 5 (see [_sweepMoleculeLeases]) — the reap runs first and the kill
+    // is keyed by pgid, not by the directory just removed; a HISTORICAL flat
     // session's recorded groups are inert metadata this pass never parses.
-    if (session != null && session.isTerminal) {
+    if (session != null &&
+        session.isTerminal &&
+        (!session.humanHeld || workTerminal)) {
       final outcome = await _reapWorktree(root: root, worktree: wt);
       return RestartEntry(
         worktree: wt,
