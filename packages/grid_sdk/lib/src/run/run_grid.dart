@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart' show TreeProjector;
 import 'package:grid_engine/src/seeds/provider.dart';
 import 'package:state_notifier/state_notifier.dart';
 
+import '../stores/state_store_gc.dart';
 import 'configuration.dart';
 import 'grid_delegate.dart';
 import 'reassemble.dart';
@@ -54,14 +56,17 @@ T runWithGridErrorAttribution<T>({
 /// the delegation pattern's `runGrid(delegate)`). The framework root is
 /// `final`; all station behaviour enters through the delegate.
 ///
-/// It runs five lifecycle rails around a single mounted tree:
+/// It orders the boot sequence and lifecycle rails around one mounted tree:
 ///
 ///  1. `delegate.didLaunch()` — **pre-tree**, synchronous. A failure is
 ///     terminal: it is wrapped as a [GridHookError] and **thrown** (the launch
 ///     aborts loudly — nothing mounts).
-///  2. `await delegate.boot(delegate.state)` — **pre-tree**, asynchronous
+///  2. When `delegate.maintainsStateStoreOnBoot` is true, await advisory
+///     state-store maintenance against `delegate.root`. A failure is reported
+///     as a `maintenance` [GridHookError] and never aborts the launch.
+///  3. `await delegate.boot(delegate.state)` — **pre-tree**, asynchronous
 ///     resource assembly. Failure is terminal and mounts nothing.
-///  3. **Mount the tree**: *configuration provision → `delegate.build`*. The
+///  4. **Mount the tree**: *configuration provision → `delegate.build`*. The
 ///     delegate does **not** ride the tree — `runGrid` holds it and drives the
 ///     configuration scope directly (by construction), because a
 ///     `StateNotifier`'s `.state` must never be reachable as a snapshot
@@ -70,7 +75,7 @@ T runWithGridErrorAttribution<T>({
 ///     on every emission; `delegate.build(context, configuration)` roots the
 ///     station subtree. A configuration re-emission re-composes that subtree on
 ///     a coalesced microtask flush (the reactive loop, mirroring the kernel).
-///  4. **Kick off** `delegate.initGrid()` — post-mount, async, **unawaited**;
+///  5. **Kick off** `delegate.initGrid()` — post-mount, async, **unawaited**;
 ///     on success `delegate.onReady()` fires. A failure in either is captured,
 ///     attributed, and reported loudly via [onError] — the running grid stands.
 ///
@@ -82,12 +87,14 @@ T runWithGridErrorAttribution<T>({
 /// no process transport has nothing to sweep); a runner with work machinery
 /// passes `work.sweepOrphans`.
 ///
-/// [onError] receives the captured refusals from the **post-mount** rails
-/// (`initGrid` / `onReady` / `onTeardown`) and uncaught asynchronous errors
-/// born in the mounted tree's guarded zone. The default prints the refusal's
-/// name and data loudly without making it fatal. `didLaunch`, `boot`, and
-/// synchronous first-mount failures remain outside containment and abort
-/// `runGrid` because no live tree exists to preserve.
+/// [onError] receives an advisory pre-tree `maintenance` refusal when supplied,
+/// plus the captured refusals from the **post-mount** rails (`initGrid` /
+/// `onReady` / `onTeardown`) and uncaught asynchronous errors born in the
+/// mounted tree's guarded zone. Without [onError], a maintenance refusal writes
+/// one attributed line to stderr and continues; the default post-mount sink
+/// prints the refusal's name and data loudly without making it fatal.
+/// `didLaunch`, `boot`, and synchronous first-mount failures remain outside
+/// containment and abort `runGrid` because no live tree exists to preserve.
 ///
 /// [onFlushed] fires once after EVERY completed tree flush (the initial mount
 /// flush included) — the seam a runner hangs off-tree post-flush machinery on
@@ -123,6 +130,7 @@ T runWithGridErrorAttribution<T>({
 Future<GridHandle> runGrid(
   GridDelegate delegate, {
   void Function(GridHookError refusal)? onError,
+  Future<void> Function({required String gridHome})? maintainStateStore,
   void Function()? onFlushed,
   TreeProjector? treeProjector,
   Future<void> Function()? orphanSweep,
@@ -139,6 +147,35 @@ Future<GridHandle> runGrid(
     throw GridHookError('didLaunch', delegate.runtimeType, e, st);
   }
 
+  // 2. Advisory pre-tree maintenance — before boot can open the store server.
+  // This is the deliberate non-fatal exception to the pre-tree posture: it
+  // never enters the post-boot guarded zone and never aborts launch.
+  if (delegate.maintainsStateStoreOnBoot) {
+    try {
+      if (maintainStateStore == null) {
+        await _defaultMaintainStateStore(gridHome: delegate.root);
+      } else {
+        await maintainStateStore(gridHome: delegate.root);
+      }
+    } catch (error, stackTrace) {
+      final refusal = GridHookError(
+        'maintenance',
+        delegate.runtimeType,
+        error,
+        stackTrace,
+      );
+      if (onError == null) {
+        stderr.writeln(
+          '${refusal.name}: ${delegate.runtimeType}.maintenance() threw — '
+          '${_singleLine(error)}',
+        );
+      } else {
+        onError(refusal);
+      }
+    }
+  }
+
+  // 3. Pre-tree resource assembly; a failure aborts the launch.
   try {
     // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
     await delegate.boot(delegate.state);
@@ -165,7 +202,7 @@ Future<GridHandle> runGrid(
     ),
   );
 
-  // 3. The whole live tree is born in one guarded zone. Synchronous failures
+  // 4. The whole live tree is born in one guarded zone. Synchronous failures
   // still cross Zone.run to the caller; only uncaught ASYNCHRONOUS failures
   // reach the zone's handler.
   return guardedZone.run(() {
@@ -221,7 +258,7 @@ Future<GridHandle> runGrid(
       rethrow;
     }
 
-    // 4. Post-mount async kickoff — unawaited by the caller; onReady chained
+    // 5. Post-mount async kickoff — unawaited by the caller; onReady chained
     // after it; both surfaced loud on failure. Detached work inherits the
     // guarded zone because the kickoff itself is created here.
     unawaited(_kickoff(delegate, report));
@@ -229,6 +266,15 @@ Future<GridHandle> runGrid(
     return handle;
   });
 }
+
+Future<void> _defaultMaintainStateStore({required String gridHome}) async {
+  await StateStoreGc(
+    err: (receipt) => throw StateError(receipt),
+  ).run(gridHome: gridHome);
+}
+
+String _singleLine(Object error) =>
+    error.toString().replaceAll(RegExp(r'[\r\n]+'), ' ');
 
 /// The default [runGrid] error sink: report loudly without escalating the
 /// refusal to the process-root uncaught-error handler.

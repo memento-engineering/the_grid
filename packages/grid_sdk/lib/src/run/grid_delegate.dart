@@ -144,6 +144,14 @@ abstract class GridDelegate extends StateNotifier<GridConfiguration> {
     'author the tree wholesale.',
   );
 
+  /// Whether `runGrid` performs advisory state-store maintenance on boot.
+  ///
+  /// Default: false — the fail-closed posture for dry or offline mounts. A
+  /// live resident overrides this getter to return true; maintenance then runs
+  /// against [root] after [didLaunch] and before [boot], before any boot-owned
+  /// resource can open the store server.
+  bool get maintainsStateStoreOnBoot => false;
+
   /// Grid-scoped assets mounted under the default [build]'s `RawAssetGrid`
   /// (v3 §3: an asset is anything mounted into the tree at a scope). Empty by
   /// default; a compose-style station mounts its `Station(...)`, config
@@ -410,10 +418,12 @@ abstract class GridDelegate extends StateNotifier<GridConfiguration> {
 /// invariant is violated).
 ///
 /// A `didLaunch` or `boot` failure is thrown from `runGrid` (the launch aborts).
-/// The post-mount rails ([GridDelegate.initGrid] / [GridDelegate.onReady] /
-/// [GridDelegate.onTeardown]) and uncaught asynchronous errors from the
-/// mounted tree cannot throw to a caller, so `runGrid` reports their refusals
-/// through its error sink (loud and non-fatal by default).
+/// Advisory pre-boot `maintenance` failures instead reach a caller-supplied
+/// `runGrid` error sink or its one-line stderr fallback and do not abort the
+/// live launch. The post-mount rails ([GridDelegate.initGrid] /
+/// [GridDelegate.onReady] / [GridDelegate.onTeardown]) and uncaught
+/// asynchronous errors from the mounted tree use the guarded zone's loud,
+/// non-fatal error sink.
 class GridHookError extends Error {
   /// Wraps [cause] (with its [causeStackTrace]) thrown by [hook] on a delegate
   /// of type [delegateType], optionally attributed to [nodePath] and/or
@@ -427,8 +437,8 @@ class GridHookError extends Error {
     this.stepId,
   });
 
-  /// The rail that threw: `didLaunch` / `boot` / `initGrid` / `onReady` /
-  /// `onTeardown`.
+  /// The hook that threw: `didLaunch` / `maintenance` / `boot` / `initGrid` /
+  /// `onReady` / `onTeardown`.
   final String hook;
 
   /// The runtime type of the delegate whose rail threw.

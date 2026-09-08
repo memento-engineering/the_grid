@@ -191,7 +191,6 @@ Future<_Outcome> _runUp(
     readVmServiceUri: () async => null,
     inspectPrimaryCheckout: (substation) async =>
         const PrimaryCheckoutFreshness(state: PrimaryCheckoutState.fresh),
-    maintainStateStore: ({required gridHome}) async {},
     readStateStoreTypes: ({required gridHome}) async => <String, dynamic>{
       'custom_types': [
         for (final type in GridIssueTypes.customTypes) type.wire,

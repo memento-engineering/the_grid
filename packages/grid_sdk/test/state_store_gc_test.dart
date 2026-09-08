@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:grid_cli/grid_cli.dart';
+import 'package:grid_sdk/grid_sdk.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
