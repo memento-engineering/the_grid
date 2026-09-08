@@ -177,6 +177,32 @@ void main() {
     ]);
   });
 
+  test('station.uncaughtError is never rate-suppressed', () {
+    final lines = <String>[];
+    final reporter = StationDiagnosticsReporter(writeLine: lines.add);
+    final data = <String, String>{
+      'error': 'Bad state: detached boom',
+      'stackTrace': '#0 mountedTask',
+      'attribution': 'unavailable',
+    };
+
+    reporter.flare('station.uncaughtError', data);
+    reporter.flare('station.uncaughtError', data);
+
+    expect(lines, hasLength(2));
+    for (final line in lines) {
+      expect(jsonDecode(line), <String, Object?>{
+        'type': 'flare',
+        'name': 'station.uncaughtError',
+        'data': <String, Object?>{
+          'error': 'Bad state: detached boom',
+          'stackTrace': '#0 mountedTask',
+          'attribution': 'unavailable',
+        },
+      });
+    }
+  });
+
   test('dispose closes the projector snapshots', () async {
     final reporter = StationDiagnosticsReporter(writeLine: (_) {});
     final done = expectLater(reporter.treeProjector.snapshots, emitsDone);

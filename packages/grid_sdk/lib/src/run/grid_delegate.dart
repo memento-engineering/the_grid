@@ -411,13 +411,21 @@ abstract class GridDelegate extends StateNotifier<GridConfiguration> {
 ///
 /// A `didLaunch` or `boot` failure is thrown from `runGrid` (the launch aborts).
 /// The post-mount rails ([GridDelegate.initGrid] / [GridDelegate.onReady] /
-/// [GridDelegate.onTeardown]) cannot throw to a caller, so `runGrid` reports
-/// their refusals through its error sink (loud by default — rethrown into the
-/// current zone).
+/// [GridDelegate.onTeardown]) and uncaught asynchronous errors from the
+/// mounted tree cannot throw to a caller, so `runGrid` reports their refusals
+/// through its error sink (loud and non-fatal by default).
 class GridHookError extends Error {
   /// Wraps [cause] (with its [causeStackTrace]) thrown by [hook] on a delegate
-  /// of type [delegateType].
-  GridHookError(this.hook, this.delegateType, this.cause, this.causeStackTrace);
+  /// of type [delegateType], optionally attributed to [nodePath] and/or
+  /// [stepId].
+  GridHookError(
+    this.hook,
+    this.delegateType,
+    this.cause,
+    this.causeStackTrace, {
+    this.nodePath,
+    this.stepId,
+  });
 
   /// The rail that threw: `didLaunch` / `boot` / `initGrid` / `onReady` /
   /// `onTeardown`.
@@ -431,6 +439,36 @@ class GridHookError extends Error {
 
   /// The original error's stack trace (preserved for attribution).
   final StackTrace causeStackTrace;
+
+  /// The mounted node path that owned the asynchronous work, when supplied.
+  final String? nodePath;
+
+  /// The formula step that owned the asynchronous work, when supplied.
+  final String? stepId;
+
+  /// The station flare name for this refusal.
+  ///
+  /// `uncaughtError` is the one complete hook name; every other hook gains the
+  /// `Error` suffix.
+  String get name => hook == 'uncaughtError'
+      ? 'station.uncaughtError'
+      : 'station.${hook}Error';
+
+  /// Flat, transport-neutral flare data preserving the original failure.
+  Map<String, String> get data => <String, String>{
+    'hook': hook,
+    'delegateType': '$delegateType',
+    'error': '$cause',
+    'stackTrace': '$causeStackTrace',
+    'attribution': switch ((nodePath, stepId)) {
+      (final String _, final String _) => 'nodePath+stepId',
+      (final String _, null) => 'nodePath',
+      (null, final String _) => 'stepId',
+      (null, null) => 'unavailable',
+    },
+    if (nodePath case final value?) 'nodePath': value,
+    if (stepId case final value?) 'stepId': value,
+  };
 
   @override
   String toString() =>

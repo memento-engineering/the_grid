@@ -602,21 +602,29 @@ void main() {
       expect(handle.isTornDown, isFalse);
     });
 
-    test('the DEFAULT onError is loud: an unhandled rail refusal surfaces to '
-        'the zone', () async {
+    test('the DEFAULT onError is a named non-fatal zone print', () async {
       final zoneErrors = <Object>[];
-      await runZonedGuarded(() async {
-        final delegate = RecordingDelegate(
-          onInitGrid: () => throw StateError('init blew up'),
-        );
-        // No onError → the default rethrows into the current zone.
-        final handle = await runGrid(delegate);
-        addTearDown(handle.teardown);
-        await pump();
-      }, (error, stack) => zoneErrors.add(error));
+      final lines = <String>[];
+      await runZonedGuarded(
+        () async {
+          final delegate = RecordingDelegate(
+            onInitGrid: () => throw StateError('init blew up'),
+          );
+          final handle = await runGrid(delegate);
+          addTearDown(handle.teardown);
+          await pump();
+        },
+        (error, stack) => zoneErrors.add(error),
+        zoneSpecification: ZoneSpecification(
+          print: (self, parent, zone, line) => lines.add(line),
+        ),
+      );
 
-      expect(zoneErrors.single, isA<GridHookError>());
-      expect((zoneErrors.single as GridHookError).hook, 'initGrid');
+      expect(zoneErrors, isEmpty);
+      expect(lines, hasLength(1));
+      expect(lines.single, contains('station.initGridError'));
+      expect(lines.single, contains('init blew up'));
+      expect(lines.single, contains('stackTrace:'));
     });
   });
 

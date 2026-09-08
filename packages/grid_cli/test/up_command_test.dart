@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
@@ -166,6 +167,7 @@ final class _Harness {
     required this.monitor,
     required this.admission,
     required this.trajectory,
+    required this.emitRootError,
   });
 
   static Future<_Harness> create({
@@ -183,6 +185,7 @@ final class _Harness {
     WedgeMonitor? monitor,
     StationAdmissionStatus? admission,
     Map<String, Object?> trajectory = const <String, Object?>{},
+    bool emitRootError = false,
     Map<String, PrimaryCheckoutFreshness> checkoutFreshness =
         const <String, PrimaryCheckoutFreshness>{},
   }) async {
@@ -211,6 +214,7 @@ final class _Harness {
       monitor: monitor,
       admission: admission,
       trajectory: trajectory,
+      emitRootError: emitRootError,
     );
   }
 
@@ -232,6 +236,7 @@ final class _Harness {
   final WedgeMonitor? monitor;
   final StationAdmissionStatus? admission;
   final Map<String, Object?> trajectory;
+  final bool emitRootError;
   final events = <String>[];
   final _stdout = ByteConsumer();
   final _stderr = ByteConsumer();
@@ -316,6 +321,7 @@ final class _Harness {
       runMountedGrid:
           (
             delegate, {
+            required onError,
             required onFlushed,
             required orphanSweep,
             required onDelegateSwapped,
@@ -330,6 +336,18 @@ final class _Harness {
               await delegate.boot(const GridConfiguration());
               events.add('runGrid');
               _throwIf('runGrid');
+              if (emitRootError) {
+                onError(
+                  GridHookError(
+                    'uncaughtError',
+                    delegate.runtimeType,
+                    StateError('detached root boom'),
+                    StackTrace.current,
+                    nodePath: 'earth/tg-a/review',
+                    stepId: 'grade',
+                  ),
+                );
+              }
             } on Object {
               delegate.dispose();
               rethrow;
@@ -921,15 +939,41 @@ void main() {
     expect(command.argParser.options, isNot(contains('bead')));
   });
 
-  test('the shell neither assembles work nor hardcodes diagnostics', () {
+  test('the shell only owns the root-error reporter, never work assembly', () {
     final source = File('lib/src/up_command.dart').readAsStringSync();
     expect(source, isNot(contains('buildBuiltinEnvironmentRegistry')));
-    // tg-1fa2.4: station-work assembly and the diagnostics-reporter effect
-    // are boot-owned (the delegate's), never the shell's.
+    // Station-work assembly stays boot-owned (the delegate's). The shell owns
+    // only the process-lifetime root-error reporter shared with `/stream`.
     expect(source, isNot(contains('assembleStationWork')));
-    expect(source, isNot(contains('StationDiagnosticsReporter')));
+    expect(source, contains('StationDiagnosticsReporter'));
     expect(source, isNot(contains('GhPrOpener')));
   });
+
+  test(
+    'the injected runner routes a named root record to stderr flare JSON',
+    () async {
+      final h = await _Harness.create(emitRootError: true);
+      addTearDown(h.dispose);
+
+      expect(await h.run(), 0);
+
+      final flare = h.stderrText
+          .trim()
+          .split('\n')
+          .map(jsonDecode)
+          .cast<Map<String, Object?>>()
+          .singleWhere((line) => line['name'] == 'station.uncaughtError');
+      expect(flare['type'], 'flare');
+      final data = flare['data']! as Map<String, Object?>;
+      expect(data, containsPair('hook', 'uncaughtError'));
+      expect(data, containsPair('delegateType', '_Delegate'));
+      expect(data, containsPair('error', 'Bad state: detached root boom'));
+      expect(data['stackTrace'], isNotEmpty);
+      expect(data, containsPair('attribution', 'nodePath+stepId'));
+      expect(data, containsPair('nodePath', 'earth/tg-a/review'));
+      expect(data, containsPair('stepId', 'grade'));
+    },
+  );
 
   group('UpCommand assembly', () {
     test(
@@ -1854,6 +1898,7 @@ void main() {
     Future<GridResource> mount(_RunnerDelegate delegate) =>
         defaultRunMountedGrid(
           delegate,
+          onError: (_) {},
           onFlushed: () {},
           orphanSweep: () async {},
           onDelegateSwapped: (_) {},
@@ -1903,6 +1948,7 @@ void main() {
       var sweepRan = false;
       final resource = await defaultRunMountedGrid(
         delegate,
+        onError: (_) {},
         onFlushed: () {},
         // The sweep-after-dispose regression class, pinned HERE (grid_cli is
         // self-sufficient — not only in grid_sdk's track_c): the sweep reaps

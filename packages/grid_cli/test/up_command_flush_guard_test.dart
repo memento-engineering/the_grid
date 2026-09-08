@@ -86,21 +86,25 @@ final class _BoomDelegate extends GridDelegate {
   return (driver: driver, state: state);
 }
 
-Future<GridResource> _run(_BoomDelegate delegate, StationDriver driver) =>
-    defaultRunMountedGrid(
-      delegate,
-      onFlushed: driver.afterFlush,
-      orphanSweep: () async {},
-      onDelegateSwapped: (_) {},
-      treeProjector: null,
-    );
+Future<GridResource> _run(
+  _BoomDelegate delegate,
+  StationDriver driver,
+  void Function(GridHookError refusal) onError,
+) => defaultRunMountedGrid(
+  delegate,
+  onError: onError,
+  onFlushed: driver.afterFlush,
+  orphanSweep: () async {},
+  onDelegateSwapped: (_) {},
+  treeProjector: null,
+);
 
 void main() {
   test('POSITIVE CONTROL: a CLEAN flush through the production runner samples '
       'the live session the state store carries', () async {
     final rig = _armDriver();
     final delegate = _BoomDelegate();
-    final grid = await _run(delegate, rig.driver);
+    final grid = await _run(delegate, rig.driver, (_) {});
     addTearDown(grid.teardown);
 
     expect(rig.driver.wedge, isA<Flowing>());
@@ -123,23 +127,18 @@ void main() {
       'runGrid path leaves the wedge heartbeat ALIVE', () async {
     final rig = _armDriver();
     final delegate = _BoomDelegate();
-    final zoneErrors = <Object>[];
-    late GridResource grid;
+    final errors = <GridHookError>[];
+    final grid = await _run(delegate, rig.driver, errors.add);
+    rig.state.push(_graph([sessionBead(id: 'tgdog-s1', workBeadId: 'tg-1')]));
+    await pump();
+    expect(rig.driver.wedge.toJson()['live'], 0);
 
-    await runZonedGuarded(() async {
-      grid = await _run(delegate, rig.driver);
-      rig.state.push(_graph([sessionBead(id: 'tgdog-s1', workBeadId: 'tg-1')]));
-      await pump();
-      expect(rig.driver.wedge.toJson()['live'], 0);
+    // The rebuild throws on the very tick that would have re-sampled.
+    delegate.explode();
+    await pump();
 
-      // The rebuild throws on the very tick that would have re-sampled.
-      delegate.explode();
-      await pump();
-    }, (error, stack) => zoneErrors.add(error));
-
-    expect(zoneErrors, hasLength(1), reason: 'the failure is reported LOUD');
-    expect(zoneErrors.single, isA<GridHookError>());
-    expect((zoneErrors.single as GridHookError).hook, 'flush');
+    expect(errors, hasLength(1), reason: 'the failure is reported LOUD');
+    expect(errors.single.hook, 'flush');
     // Before the guard this stayed `Flowing`/`live: 0` for the life of the
     // process: the alarm could not fire in the one scenario it exists for.
     expect(rig.driver.wedge, isA<Stalling>());

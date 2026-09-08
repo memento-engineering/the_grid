@@ -41,11 +41,16 @@ final class StationDiagnosticsReporter implements ExplorationTransport {
 
   @override
   void flare(String name, Map<String, String> data) {
-    final now = _now();
-    final bucket = _bucketFor(name, data);
-    final last = _lastFlareAt[bucket];
-    if (last != null && now.difference(last) < _flareRateLimit) return;
-    _lastFlareAt[bucket] = now;
+    // Every contained root failure must retain its own stack. Collapsing two
+    // occurrences would make a live but repeatedly failing station quieter
+    // than the process crash this boundary replaces.
+    if (name != 'station.uncaughtError') {
+      final now = _now();
+      final bucket = _bucketFor(name, data);
+      final last = _lastFlareAt[bucket];
+      if (last != null && now.difference(last) < _flareRateLimit) return;
+      _lastFlareAt[bucket] = now;
+    }
     _writeLine(
       jsonEncode(<String, Object?>{
         'type': 'flare',
