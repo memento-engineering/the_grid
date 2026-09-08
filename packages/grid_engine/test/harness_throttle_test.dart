@@ -230,6 +230,25 @@ void main() {
   });
 
   group('a silent exit is INFRA, retried on the throttle schedule', () {
+    test('an empty non-result remains an infra silent exit', () async {
+      final h = _drive(const Failed.noResult(), exitOutput: '');
+      addTearDown(() {
+        h.owner.dispose();
+        unawaited(h.fakes.provider.close());
+      });
+      await _pump();
+
+      final meta = h.fakes.runner.metadataOfUpdate(0);
+      expect(meta[MoleculeStepKeys.restartCount], '1');
+      expect(h.sink.only('step.transition')['failure_class'], 'infra');
+
+      final flare = h.flares.named(kHarnessThrottledFlare).single;
+      expect(flare.data['silentExits'], '1');
+      expect(flare.data['exitOutput'], '');
+      expect(flare.data['underlying'], '');
+      expect(h.fakes.runner.callsFor('create'), isEmpty);
+    });
+
     test('the first silent exit records infra, backs off 5 min, and does NOT '
         'gate the round', () async {
       final h = _drive(const Failed.noResult(_artifactless));
