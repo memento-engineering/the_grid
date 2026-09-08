@@ -139,7 +139,10 @@ void main() {
           issueType: IssueType.task,
           design: 'operator design',
           acceptanceCriteria: 'operator acceptance',
-          metadata: {'rig': 'tg'},
+          metadata: {
+            'rig': 'tg',
+            StationBeadWriter.specAuthorKey: StationBeadWriter.operatorAuthor,
+          },
         );
         final workRunner = _RecordingRunner(exportBeads: [operatorWorkBead]);
         final work = _Source(_snapshot([operatorWorkBead]));

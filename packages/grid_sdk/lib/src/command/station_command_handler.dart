@@ -1096,7 +1096,7 @@ final class StationCommandHandler implements GridCommandHandler {
 
     String? reapFailure;
     try {
-      await workStore.writer.clearSpecifyAuthoredSpec(beadId);
+      await workStore.writer.clearRoundAuthoredSpec(beadId);
       await _stateWriter.update(
         session.id,
         metadata: {SessionBeadKeys.workBead: reworkKeyFor(beadId, round)},

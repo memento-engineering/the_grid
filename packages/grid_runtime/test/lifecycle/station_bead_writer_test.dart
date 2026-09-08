@@ -94,24 +94,12 @@ void main() {
       runner = RecordingBdRunner(guardedWriteHelp: 'Flags:\n  --actor string');
       bd = BdCliService(runner);
       runner.exportBeads = const [
-        Bead(
-          id: 'tgdog-one',
-          status: BeadStatus.open,
-          metadata: {
-            StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor,
-          },
-        ),
-        Bead(
-          id: 'tgdog-two',
-          status: BeadStatus.open,
-          metadata: {
-            StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor,
-          },
-        ),
+        Bead(id: 'tgdog-one', status: BeadStatus.open),
+        Bead(id: 'tgdog-two', status: BeadStatus.open),
       ];
 
-      await writer().clearSpecifyAuthoredSpec('tgdog-one');
-      await writer().clearSpecifyAuthoredSpec('tgdog-two');
+      await writer().clearRoundAuthoredSpec('tgdog-one');
+      await writer().clearRoundAuthoredSpec('tgdog-two');
 
       final updates = runner
           .callsFor('update')
@@ -133,18 +121,12 @@ void main() {
       runner = RecordingBdRunner(guardedWriteHelp: 'Flags:\n  --actor string');
       bd = BdCliService(runner);
       runner.exportBeads = const [
-        Bead(
-          id: 'tgdog-one',
-          status: BeadStatus.open,
-          metadata: {
-            StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor,
-          },
-        ),
+        Bead(id: 'tgdog-one', status: BeadStatus.open),
       ];
 
       await writer(
         onFlare: (_, __) => throw StateError('sink down'),
-      ).clearSpecifyAuthoredSpec('tgdog-one');
+      ).clearRoundAuthoredSpec('tgdog-one');
 
       expect(runner.callsFor('update'), hasLength(1));
     });
@@ -165,10 +147,10 @@ void main() {
     });
 
     test(
-      'clearSpecifyAuthoredSpec refuses a non-owned bead before bd update',
+      'clearRoundAuthoredSpec refuses a non-owned bead before bd update',
       () async {
         await expectLater(
-          writer().clearSpecifyAuthoredSpec('gascity-work1'),
+          writer().clearRoundAuthoredSpec('gascity-work1'),
           throwsA(isA<OwnershipRefused>()),
         );
         expect(runner.calls, isEmpty);
@@ -412,52 +394,87 @@ void main() {
     );
 
     test(
-      'writeSpecifyAuthoredSpec stamps fields and provenance atomically',
+      'writeOperatorText stamps operator provenance on design and on acceptance',
       () async {
-        await writer().writeSpecifyAuthoredSpec(
-          'tgdog-work1',
-          design: 'a design',
-          acceptanceCriteria: 'the acceptance',
+        Future<RecordingBdRunner> write(
+          OperatorBeadTextField field,
+          String content, {
+          bool append = false,
+        }) async {
+          final recording = RecordingBdRunner();
+          runner = recording;
+          bd = BdCliService(recording);
+          await writer().writeOperatorText(
+            'tgdog-work1',
+            field: field,
+            content: content,
+            append: append,
+          );
+          return recording;
+        }
+
+        final design = await write(
+          OperatorBeadTextField.design,
+          'operator design',
+        );
+        final designUpdate = design.callsFor('update').single;
+        expect(designUpdate, containsAllInOrder(['--design-file', '-']));
+        expect(design.stdins.single, 'operator design');
+        expect(
+          jsonDecode(design.metadataOfUpdate(0)!) as Map<String, dynamic>,
+          {StationBeadWriter.specAuthorKey: StationBeadWriter.operatorAuthor},
         );
 
-        final updates = runner.callsFor('update');
-        expect(updates, hasLength(1));
-        expect(updates.single, containsAllInOrder(['--design-file', '-']));
-        expect(runner.stdins.single, 'a design');
+        final acceptance = await write(
+          OperatorBeadTextField.acceptance,
+          'operator acceptance',
+        );
+        final acceptanceUpdate = acceptance.callsFor('update').single;
         expect(
-          updates.single,
-          containsAllInOrder(['--acceptance', 'the acceptance']),
+          acceptanceUpdate,
+          containsAllInOrder(['--acceptance', 'operator acceptance']),
         );
         expect(
-          jsonDecode(runner.metadataOfUpdate(0)!) as Map<String, dynamic>,
-          {StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor},
+          jsonDecode(acceptance.metadataOfUpdate(0)!) as Map<String, dynamic>,
+          {StationBeadWriter.specAuthorKey: StationBeadWriter.operatorAuthor},
         );
-        expect(runner.everyMutationHasActor, isTrue);
-        expect(runner.calls, hasLength(1));
-        expect(runner.calls.single.first, 'update');
-        expect(runner.neverCalledShow, isTrue);
+
+        final description = await write(
+          OperatorBeadTextField.description,
+          'operator description',
+        );
+        expect(description.callsFor('update').single, contains('--body-file'));
+        expect(description.metadataOfUpdate(0), isNull);
+
+        final notes = await write(
+          OperatorBeadTextField.notes,
+          '',
+          append: true,
+        );
+        expect(notes.callsFor('update'), hasLength(1));
+        expect(notes.metadataOfUpdate(0), isNull);
       },
     );
 
-    test('clearSpecifyAuthoredSpec clears and unmarks a marked spec', () async {
+    test('clearRoundAuthoredSpec clears an UNSTAMPED spec', () async {
       runner.exportBeads = const [
         Bead(
           id: 'tgdog-work1',
           status: BeadStatus.open,
-          assignee: StationBeadWriter.specifyAuthor,
-          metadata: {
-            StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor,
-          },
+          assignee: 'architect',
+          design: 'retired design',
+          acceptanceCriteria: 'retired acceptance',
         ),
       ];
 
-      await writer().clearSpecifyAuthoredSpec('tgdog-work1');
+      await writer().clearRoundAuthoredSpec('tgdog-work1');
 
       expect(runner.callsFor('export'), isEmpty);
       final updates = runner.callsFor('update');
-      final mutation = updates.singleWhere((call) => !call.contains('--help'));
+      expect(updates, hasLength(1));
+      final mutation = updates.single;
       expect(mutation, containsAllInOrder(['update', 'tgdog-work1']));
-      expect(mutation, containsAllInOrder(['--if-assignee', 'specify']));
+      expect(mutation, containsAllInOrder(['--if-assignee', 'architect']));
       expect(mutation, containsAllInOrder(['--if-status', 'open']));
       expect(mutation, containsAllInOrder(['--design-file', '-']));
       expect(runner.stdins.last, '');
@@ -508,17 +525,20 @@ void main() {
     });
 
     test(
-      'clearSpecifyAuthoredSpec preserves and flares an unmarked spec',
+      'clearRoundAuthoredSpec preserves an operator-authored spec and flares',
       () async {
         runner.exportBeads = const [
           Bead(
             id: 'tgdog-work1',
             design: 'operator design',
             acceptanceCriteria: 'operator acceptance',
+            metadata: {
+              StationBeadWriter.specAuthorKey: StationBeadWriter.operatorAuthor,
+            },
           ),
         ];
 
-        await writer().clearSpecifyAuthoredSpec('tgdog-work1');
+        await writer().clearRoundAuthoredSpec('tgdog-work1');
 
         expect(runner.callsFor('export'), isEmpty);
         expect(runner.callsFor('update'), isEmpty);
@@ -530,11 +550,18 @@ void main() {
     );
 
     test('a throwing preservation flare does not fail rework', () async {
-      runner.exportBeads = const [Bead(id: 'tgdog-work1')];
+      runner.exportBeads = const [
+        Bead(
+          id: 'tgdog-work1',
+          metadata: {
+            StationBeadWriter.specAuthorKey: StationBeadWriter.operatorAuthor,
+          },
+        ),
+      ];
 
       await writer(
         onFlare: (_, __) => throw StateError('sink unavailable'),
-      ).clearSpecifyAuthoredSpec('tgdog-work1');
+      ).clearRoundAuthoredSpec('tgdog-work1');
 
       expect(runner.callsFor('export'), isEmpty);
       expect(runner.callsFor('update'), isEmpty);
