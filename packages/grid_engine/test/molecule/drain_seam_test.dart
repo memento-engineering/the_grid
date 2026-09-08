@@ -60,18 +60,26 @@ Future<void> _pump() async {
   }
 }
 
-/// Polls [condition] with a short real delay, up to [maxTries] — the
-/// robust variant [_pump]'s fixed microtask-count drain cannot guarantee: a
+/// Polls [condition] with a short real delay for a nominal five seconds and
+/// fails with the labeled [what] when [maxTries] is exhausted — the robust
+/// variant [_pump]'s fixed microtask-count drain cannot guarantee: a
 /// molecule MINT's `createMolecule` pour rides the REAL `BdCliService`
 /// `applyGraph`, which writes a genuine temp file (`dart:io`) before the
 /// FAKE `BdRunner` boundary is ever reached — a bounded zero-duration pump
 /// is not reliably enough turns of the real event loop for that I/O to
 /// settle. Every other write in this suite resolves synchronously through
 /// [RecordingBdRunner] (no real I/O), so [_pump] stays the right tool there.
-Future<void> _pumpUntil(bool Function() condition, {int maxTries = 500}) async {
-  for (var i = 0; i < maxTries && !condition(); i++) {
+Future<void> _pumpUntil(
+  bool Function() condition, {
+  required String what,
+  int maxTries = 5000,
+}) async {
+  for (var i = 0; i < maxTries; i++) {
+    if (condition()) return;
     await Future<void>.delayed(const Duration(milliseconds: 1));
   }
+  if (condition()) return;
+  throw TestFailure('Timed out waiting for $what after $maxTries attempts');
 }
 
 JoinedSnapshot _joined({
@@ -206,6 +214,22 @@ class _LiveArmProcessCap extends ProcessCapability {
 }
 
 void main() {
+  test(
+    '_pumpUntil fails loudly with its condition label on exhaustion',
+    () async {
+      await expectLater(
+        _pumpUntil(() => false, what: 'sentinel condition', maxTries: 2),
+        throwsA(
+          isA<TestFailure>().having(
+            (failure) => failure.message,
+            'message',
+            'Timed out waiting for sentinel condition after 2 attempts',
+          ),
+        ),
+      );
+    },
+  );
+
   group('the drain seam — a historical flat session still ADOPTS', () {
     test(
       'a mid-flight legacy FLAT session (no grid.session.model marker) adopts '
@@ -284,7 +308,10 @@ void main() {
         // `createMolecule`'s pour rides the REAL `BdCliService.applyGraph`
         // (a genuine temp-file write before the fake `BdRunner` boundary) —
         // poll rather than a bounded microtask pump (see `_pumpUntil`'s doc).
-        await _pumpUntil(() => f.runner.graphApplyCalls.isNotEmpty);
+        await _pumpUntil(
+          () => f.runner.graphApplyCalls.isNotEmpty,
+          what: 'first molecule graph apply',
+        );
 
         // `callsFor('create')` INCLUDES graph-apply pours (they share the
         // `create` leading subcommand) — isolate the PLAIN single-bead
@@ -441,16 +468,28 @@ void main() {
             'tg-9/land' => 'tgdog-step9-land',
             _ => throw StateError('unknown step path $path'),
           };
-          await _pumpUntil(() => f.provider.started.any((s) => s.name == name));
+          await _pumpUntil(
+            () => f.provider.started.any((s) => s.name == name),
+            what: 'process $name to start',
+          );
           f.provider.emit(SessionStarted(name: name, pid: 10, pgid: 10));
-          await _pumpUntil(() => hasStepStamp(beadId, StepState.running));
+          await _pumpUntil(
+            () => hasStepStamp(beadId, StepState.running),
+            what: '$beadId running stamp',
+          );
           f.provider.emit(Exited(name: name, exitCode: 0));
-          await _pumpUntil(() => hasStepStamp(beadId, StepState.complete));
+          await _pumpUntil(
+            () => hasStepStamp(beadId, StepState.complete),
+            what: '$beadId complete stamp',
+          );
         }
 
         await _pump();
         m.owner.flush();
-        await _pumpUntil(() => f.runner.graphApplyCalls.isNotEmpty);
+        await _pumpUntil(
+          () => f.runner.graphApplyCalls.isNotEmpty,
+          what: 'validated molecule graph apply',
+        );
 
         expect(
           f.runner.workCreates.where((c) => !c.contains('--graph')),
@@ -484,6 +523,7 @@ void main() {
                     call[3] == 'tgdog-step9-build' &&
                     call.contains('supersedes'),
               ),
+          what: 'supersedes dependency for tgdog-step9-build',
         );
         expect(
           f.runner
@@ -518,7 +558,10 @@ void main() {
           criticGrade: 'A',
           includeSuccessor: true,
         );
-        await _pumpUntil(() => f.runner.callsFor('batch').isNotEmpty);
+        await _pumpUntil(
+          () => f.runner.callsFor('batch').isNotEmpty,
+          what: 'molecule reap batch',
+        );
         final batch = f.runner.callsFor('batch').single;
         expect(
           f.runner.stdins[f.runner.calls.indexOf(batch)],
