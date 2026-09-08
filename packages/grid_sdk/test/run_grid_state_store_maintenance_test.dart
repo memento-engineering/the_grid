@@ -10,6 +10,14 @@ final class _Leaf extends MultiChildSeed {
   const _Leaf() : super(children: const <Seed>[]);
 }
 
+final class _NullResolver implements SessionResolver {
+  const _NullResolver();
+
+  @override
+  Seed sessionFor({required bead, session}) =>
+      throw UnimplementedError('never reached');
+}
+
 class _RecordingDelegate extends GridDelegate {
   _RecordingDelegate({this.rootPath = '/grid/home'});
 
@@ -43,6 +51,33 @@ final class _EnabledDelegate extends _RecordingDelegate {
   bool get maintainsStateStoreOnBoot {
     postureReads++;
     return true;
+  }
+}
+
+final class _UnavailableStateDelegate extends _EnabledDelegate {
+  _UnavailableStateDelegate({required super.rootPath, required this.workRoot});
+
+  final String workRoot;
+  bool disposed = false;
+
+  @override
+  Future<void> boot(GridConfiguration configuration) async {
+    events.add('boot');
+    await assembleStationWork(
+      stateStore: GridStateStore.forGridRoot(rootPath),
+      substations: [SubstationWorkSpec(name: 'proj', root: workRoot)],
+      resolver: const _NullResolver(),
+      dryRun: false,
+      preferSql: false,
+      providerOverride: DryRunProvider(),
+      gitOverride: DryStationGitService(),
+    );
+  }
+
+  @override
+  void dispose() {
+    disposed = true;
+    super.dispose();
   }
 }
 
@@ -120,6 +155,29 @@ Directory _repositoryRoot() {
       throw StateError('repository root not found from ${Directory.current}');
     }
     candidate = parent;
+  }
+}
+
+void _seedEmbeddedStore(String root, {required String database}) {
+  Directory(p.join(root, '.beads')).createSync(recursive: true);
+  File(
+    p.join(root, '.beads', 'metadata.json'),
+  ).writeAsStringSync('{"dolt_mode":"embedded","dolt_database":"$database"}');
+}
+
+void _seedProxiedStore(String root, {required String database, int? port}) {
+  final doltDir = Directory(p.join(root, '.beads', 'dolt'))
+    ..createSync(recursive: true);
+  File(p.join(root, '.beads', 'metadata.json')).writeAsStringSync(
+    '{"dolt_mode":"proxied-server","dolt_database":"$database"}',
+  );
+  File(
+    p.join(doltDir.path, 'beads_dart.secret'),
+  ).writeAsStringSync('$database-secret');
+  if (port != null) {
+    File(
+      p.join(doltDir.path, 'proxy.pid'),
+    ).writeAsStringSync('{"pid":2,"port":$port}');
   }
 }
 
@@ -235,6 +293,64 @@ void main() {
         'boot',
         'build',
       ]);
+    },
+  );
+
+  test(
+    'unavailable live state endpoint aborts through the boot rail',
+    () async {
+      final gridHome = Directory.systemTemp.createTempSync(
+        'run-grid-state-endpoint-',
+      );
+      addTearDown(() => gridHome.deleteSync(recursive: true));
+      final workRoot = p.join(gridHome.path, 'project');
+      final runtimeDir = p.join(gridHome.path, '.grid');
+      _seedEmbeddedStore(workRoot, database: 'proj');
+      _seedProxiedStore(runtimeDir, database: 'tgstate');
+      _seedProxiedStore(gridHome.path, database: 'work', port: 65202);
+      final statePid = p.join(runtimeDir, '.beads', 'dolt', 'proxy.pid');
+      final delegate = _UnavailableStateDelegate(
+        rootPath: gridHome.path,
+        workRoot: workRoot,
+      );
+      final advisoryReports = <GridHookError>[];
+
+      await expectLater(
+        runGrid(
+          delegate,
+          maintainStateStore: ({required gridHome}) async {
+            delegate.events.add('maintenance:$gridHome');
+          },
+          onError: advisoryReports.add,
+        ),
+        throwsA(
+          isA<GridHookError>()
+              .having((error) => error.hook, 'hook', 'boot')
+              .having(
+                (error) => error.cause,
+                'cause',
+                isA<StoreRefusal>()
+                    .having(
+                      (refusal) => refusal.message,
+                      'message',
+                      contains(runtimeDir),
+                    )
+                    .having(
+                      (refusal) => refusal.message,
+                      'message',
+                      contains(statePid),
+                    ),
+              ),
+        ),
+      );
+
+      expect(advisoryReports, isEmpty);
+      expect(delegate.events, <String>[
+        'didLaunch',
+        'maintenance:${gridHome.path}',
+        'boot',
+      ]);
+      expect(delegate.disposed, isTrue);
     },
   );
 

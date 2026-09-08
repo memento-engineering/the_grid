@@ -130,6 +130,30 @@ final class StateStoreGc {
         );
       }
 
+      // The first store-scoped bd client call restarts the persistent proxy
+      // whose local artifacts were cleared above. Boot may resolve the state
+      // endpoint immediately after this method returns, so existence is part
+      // of maintenance success rather than a later client concern.
+      final info = await _runProcess('bd', const <String>[
+        'info',
+        '--json',
+      ], workingDirectory: runtimeDir);
+      if (info.exitCode != 0) {
+        throw ProcessException(
+          'bd',
+          const <String>['info', '--json'],
+          '${info.stdout}${info.stderr}',
+          info.exitCode,
+        );
+      }
+      final proxyPid = File(p.join(proxyRoot, 'proxy.pid'));
+      if (!await proxyPid.exists()) {
+        throw FileSystemException(
+          'bd info --json did not restore the state-store proxy',
+          proxyPid.path,
+        );
+      }
+
       final after = await _readSize(databaseDir);
       final elapsed = _now().difference(startedAt).inMilliseconds;
       _out(

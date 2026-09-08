@@ -180,6 +180,46 @@ void main() {
         );
       });
 
+      test('missing nearest proxy.pid never resolves a parent proxy', () {
+        final runtimeDir = Directory(p.join(tmp.path, 'runtime'))..createSync();
+        final runtimeDolt = Directory(p.join(runtimeDir.path, '.beads', 'dolt'))
+          ..createSync(recursive: true);
+        File(
+          p.join(runtimeDir.path, '.beads', 'metadata.json'),
+        ).writeAsStringSync(
+          '{"dolt_mode":"proxied-server","dolt_database":"state"}',
+        );
+        File(
+          p.join(runtimeDolt.path, 'beads_dart.secret'),
+        ).writeAsStringSync('state-secret');
+
+        final parentDolt = Directory(p.join(tmp.path, '.beads', 'dolt'))
+          ..createSync(recursive: true);
+        File(p.join(tmp.path, '.beads', 'metadata.json')).writeAsStringSync(
+          '{"dolt_mode":"proxied-server","dolt_database":"work"}',
+        );
+        File(
+          p.join(parentDolt.path, 'proxy.pid'),
+        ).writeAsStringSync('{"pid":2,"port":65202}');
+        File(
+          p.join(parentDolt.path, 'beads_dart.secret'),
+        ).writeAsStringSync('work-secret');
+
+        final missingPid = p.join(runtimeDolt.path, 'proxy.pid');
+        final ws = BeadsWorkspace.discover(start: runtimeDir.path);
+
+        expect(ws, isNotNull);
+        expect(p.canonicalize(ws!.root), p.canonicalize(runtimeDir.path));
+        expect(ws.endpoint, isNull);
+        expect(
+          ws.endpointDiagnostic,
+          'Cannot resolve proxied-server SQL endpoint: $missingPid is '
+          "missing; start bd's proxy for this workspace.",
+        );
+        expect(ws.endpointDiagnostic, isNot(contains(parentDolt.path)));
+        expect(ws.endpointDiagnostic, isNot(contains('65202')));
+      });
+
       for (final pidCase in <String, ({String payload, String diagnostic})>{
         'non-object JSON': (
           payload: '[]',
