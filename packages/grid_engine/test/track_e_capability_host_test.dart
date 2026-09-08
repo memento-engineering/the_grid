@@ -97,13 +97,16 @@ class _ThrowingResultProcessCap extends _RecordingProcessCap {
 }
 
 class _ServiceCap extends ServiceCapability {
-  _ServiceCap(this.outcome, this.log);
+  _ServiceCap(this.outcome, this.log, {this.runGate});
   final StepOutcome outcome;
   final List<String> log;
+  final Completer<void>? runGate;
 
   @override
   Future<StepOutcome> run(TreeContext context, StepArgs args) async {
     log.add('run(${args.beadId})');
+    final gate = runGate;
+    if (gate != null) await gate.future;
     return outcome;
   }
 
@@ -180,12 +183,14 @@ const _stepBeadId = 'tgdog-step1';
 /// host in this suite mounts under (tg-eli phase 2: a bare host with no
 /// `InheritedCircuit` refuses LOUD — proven in
 /// `test/molecule/host_molecule_targeting_test.dart`, not re-proven here).
-InheritedCircuit _moleculeCircuit({String nodePath = 'tg-1/agent'}) =>
-    InheritedCircuit(
-      root: BeadPathKey(const ['tg-1', 'tgdog-s', _stepBeadId]),
-      beadIdByNodePath: {nodePath: _stepBeadId},
-      cursor: const {},
-    );
+InheritedCircuit _moleculeCircuit({
+  String nodePath = 'tg-1/agent',
+  CircuitCursor cursor = const {},
+}) => InheritedCircuit(
+  root: BeadPathKey(const ['tg-1', 'tgdog-s', _stepBeadId]),
+  beadIdByNodePath: {nodePath: _stepBeadId},
+  cursor: cursor,
+);
 
 /// The step bead's expected timing metadata for a TERMINAL write under the
 /// fixed [_clock] (`stepBeadMetadata` normalizes to UTC — an intentional
@@ -212,18 +217,40 @@ const _realVendor = SelfManagedProcessVendor(
 
 ({TreeOwner owner, Branch root, Fakes fakes}) _host(
   Capability cap, {
+  Fakes? fakes,
+  CircuitCursor? injectedCursor,
   ServiceBundle services = const ServiceBundle(),
   Workspace? workspace,
   StepMount? mount,
   ProcessLeaseVendor? leaseVendor,
   DateTime Function()? nowFn,
 }) {
-  final fakes = buildFakes();
+  final resolvedFakes = fakes ?? buildFakes();
   final owner = TreeOwner();
   final stepMount = mount ?? _mount(cap);
-  Seed tree = CapabilityHost(capability: cap, mount: stepMount);
+  final CapabilityRegistry registry;
+  Seed tree;
+  if (injectedCursor == null) {
+    registry = RecordingCapabilityRegistry(clock: _clock, nowFn: nowFn);
+    tree = CapabilityHost(capability: cap, mount: stepMount);
+  } else {
+    registry = DefaultCapabilityRegistry(
+      capabilities: {'agent': cap},
+      circuits: {_circuit.id: _circuit},
+      clock: nowFn ?? () => _clock,
+    );
+    tree = CircuitScope(
+      circuit: _circuit,
+      cursor: injectedCursor,
+      nodePath: 'tg-1',
+    );
+    tree = InheritedSeed<SessionHandle>(value: stepMount.session, child: tree);
+  }
   tree = InheritedSeed<InheritedCircuit>(
-    value: _moleculeCircuit(nodePath: stepMount.nodePath),
+    value: _moleculeCircuit(
+      nodePath: stepMount.nodePath,
+      cursor: injectedCursor ?? const {},
+    ),
     child: tree,
   );
   if (cap is ProcessCapability) {
@@ -238,9 +265,9 @@ const _realVendor = SelfManagedProcessVendor(
   // SessionScope's computation), per the ProcessAllocation spawn-path assert.
   final root = owner.mountRoot(
     InheritedSeed<StationServices>(
-      value: fakes.ctx,
+      value: resolvedFakes.ctx,
       child: InheritedSeed<CapabilityRegistry>(
-        value: RecordingCapabilityRegistry(clock: _clock, nowFn: nowFn),
+        value: registry,
         child: InheritedSeed<ServiceBundle>(
           value: services,
           child: InheritedSeed<Workspace>(
@@ -251,7 +278,7 @@ const _realVendor = SelfManagedProcessVendor(
       ),
     ),
   );
-  return (owner: owner, root: root, fakes: fakes);
+  return (owner: owner, root: root, fakes: resolvedFakes);
 }
 
 /// A [SourceControl] that records `provision(beadId)` into a shared [log] so a
@@ -803,6 +830,84 @@ void main() {
   });
 
   group('Track E — ServiceCapability', () {
+    test(
+      'reconstructed running in-process capability reruns at the step boundary',
+      () async {
+        final cursor = <String, NodeCursor>{};
+        final fakes = buildFakes();
+        final flares = RecordingExplorationTransport();
+        final runGate = Completer<void>();
+        final log = <String>[];
+        final cap = _ServiceCap(const Ok(), log, runGate: runGate);
+        TreeOwner? firstOwner;
+        TreeOwner? secondOwner;
+
+        try {
+          final first = _host(
+            cap,
+            fakes: fakes,
+            injectedCursor: cursor,
+            services: ServiceBundle(transport: flares),
+          );
+          firstOwner = first.owner;
+          await _pump();
+
+          final firstRunCount = log
+              .where((entry) => entry == 'run(tg-1)')
+              .length;
+          expect(firstRunCount, 1);
+
+          // Model the durable projection a station restart receives after the
+          // first in-process incarnation crashed while its body was in flight.
+          cursor['tg-1/agent'] = const NodeCursor(state: StepState.running);
+          firstOwner.dispose();
+          firstOwner = null;
+          await _pump();
+
+          // Observe only the reconstruction. The fakes themselves remain the
+          // same store and transport instances across both assemblies.
+          fakes.runner.calls.clear();
+          flares.flares.clear();
+
+          final second = _host(
+            cap,
+            fakes: fakes,
+            injectedCursor: cursor,
+            services: ServiceBundle(transport: flares),
+          );
+          secondOwner = second.owner;
+          await _pump();
+
+          final runRecords = log
+              .where((entry) => entry == 'run(tg-1)')
+              .toList();
+          final reran = runRecords.skip(firstRunCount).contains('run(tg-1)');
+          final createdGate = fakes.runner.callsFor('create').any((args) {
+            final typeIndex = args.indexOf('--type');
+            return typeIndex >= 0 &&
+                typeIndex + 1 < args.length &&
+                args[typeIndex + 1] == 'gate';
+          });
+          final failedLoudly =
+              flares.named('step.gated').isNotEmpty && createdGate;
+
+          expect(
+            reran || failedLoudly,
+            isTrue,
+            reason: 'a reconstructed running service must never mount silently',
+          );
+          expect(runRecords, ['run(tg-1)', 'run(tg-1)']);
+          expect(fakes.provider.started, isEmpty);
+        } finally {
+          secondOwner?.dispose();
+          firstOwner?.dispose();
+          if (!runGate.isCompleted) runGate.complete();
+          await _pump();
+          await fakes.provider.close();
+        }
+      },
+    );
+
     test('run → Ok writes complete; teardown runs on dispose', () async {
       final log = <String>[];
       final h = _host(_ServiceCap(const Ok(), log));
