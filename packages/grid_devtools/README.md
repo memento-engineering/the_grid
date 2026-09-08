@@ -2,14 +2,18 @@
 
 DevTools extension for the_grid — **eyes on a running station**.
 
-`grid_devtools` is a Flutter web panel DevTools embeds beside a running grid
-process. It attaches over the **exploration protocol only** (ADR-0002
-Decision 3): everything it renders arrives through the `ext.leonard.*`
-service extensions the `grid_exploration` host registers in the target — it
-never links `beads_dart` for live data. The panel is a handshake header (the
-host's advertised protocol version + extension namespaces/tools) over an
-events timeline that seeds from the `ext.leonard.grid.events` ring buffer
-and then grows live off the `grid.controller.event` postEvent stream.
+grid_devtools has two connection paths. VmServiceGridClient performs
+ext.leonard.core.handshake and exploration operations over DevTools' shared
+VM-service connection. Independently, LiveConnectionController from
+grid_station_client discovers or accepts station credentials, and
+WebSocketTreeWireSource opens the authenticated StationControl /stream WebSocket for
+live TreeSnapshot data.
+
+The exploration view is a handshake header (the host's advertised protocol version +
+extension namespaces/tools) over an events timeline. It seeds from the
+`ext.leonard.grid.events` ring buffer and then grows live from the
+`grid.controller.event` postEvent stream. The station tree projection comes from the
+separate `/stream` connection.
 
 ## How it connects
 
@@ -20,6 +24,14 @@ web). `VmServiceGridClient` borrows that connection and never disposes it.
 When the target has no grid host registered, the handshake's JSON-RPC
 "method not found" surfaces as `GridBindingMissing` and the shell renders a
 distinct "no grid host detected" banner, re-probing on every reconnect.
+
+The live projection path is independent of that shared VM-service connection.
+`LiveConnectionController` from `grid_station_client` discovers a station lock or
+accepts an explicit control URL and bearer, and `WebSocketTreeWireSource` connects to
+the authenticated StationControl `/stream` WebSocket. Under
+the_grid#station-control-is-the-operator-and-ui-wire, the VM service is a JIT debugging
+convenience while `/stream` is the operator and UI wire; no operator or UI contract
+depends on the VM service.
 
 **The wire constants are hand-pinned, deliberately.**
 `lib/src/protocol/grid_exploration_client.dart` re-declares the method names —
@@ -38,10 +50,10 @@ leonard's reader), and `grid_exploration`'s
 `test/conformance_fixture_test.dart` locks the host's bytes to a pinned
 fixture — so drift on either side breaks a test.
 
-Every panel talks through the `GridExplorationClient` seam (Futures for acts,
-Streams for observations). Production wires `VmServiceGridClient`; the widget
-tests inject `test/fake_grid_exploration_client.dart` — no live VM service
-anywhere in the suite.
+Exploration handshakes and events use `GridExplorationClient` (Futures for acts,
+Streams for observations); live projections use `grid_station_client`. Production
+wires `VmServiceGridClient` for exploration, while widget tests can inject
+`test/fake_grid_exploration_client.dart` with no live VM service in the suite.
 
 ## Build & run
 
