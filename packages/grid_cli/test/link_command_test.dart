@@ -4,7 +4,8 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_cli/grid_cli.dart';
-import 'package:grid_engine/grid_engine.dart' show GridIssueTypes;
+import 'package:grid_engine/grid_engine.dart'
+    show GridIssueTypes, kCrossLinkTargetCloseRule;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
 
@@ -167,8 +168,9 @@ void main() {
     expect(listed, 0);
     expect(lines, [
       'houston-link1 tg-missing [unobserved] --blocked-by '
-          'pow-missing [unobserved]',
-      'houston-link2 tg-q9k [open] --blocked-by pow-60g [closed]',
+          'pow-missing [unobserved] — ACTIVE',
+      'houston-link2 tg-q9k [open] --blocked-by pow-60g [closed] '
+          '— INERT (target closed)',
     ]);
     for (final store in [state, tg, pow]) {
       expect(store.calls.where((call) => call.first == 'export'), isEmpty);
@@ -187,6 +189,90 @@ void main() {
         ),
       );
     }
+  });
+
+  test(
+    'link ls marks a closed target INERT in human and JSON output and explains target-close lifecycle in help',
+    () async {
+      state.beads.add(_link('houston-link1', 'tg-q9k', 'pow-60g'));
+
+      final human = <String>[];
+      expect(
+        await runLink(
+          arguments: _linkArgs(['ls', '--grid-root', temp.path]),
+          stateStorePrefix: 'houston',
+          endpoints: endpoints,
+          bdFactory: factory,
+          out: human.add,
+        ),
+        0,
+      );
+      expect(human, [
+        'houston-link1 tg-q9k [open] --blocked-by pow-60g [closed] '
+            '— INERT (target closed)',
+      ]);
+
+      final encoded = <String>[];
+      expect(
+        await runLink(
+          arguments: _linkArgs(['ls', '--grid-root', temp.path, '--json']),
+          stateStorePrefix: 'houston',
+          endpoints: endpoints,
+          bdFactory: factory,
+          out: encoded.add,
+        ),
+        0,
+      );
+      expect(encoded, hasLength(1));
+      expect(jsonDecode(encoded.single), [
+        {
+          'id': 'houston-link1',
+          'from': 'tg-q9k',
+          'fromStatus': 'open',
+          'to': 'pow-60g',
+          'toStatus': 'closed',
+          'edgeState': 'INERT (target closed)',
+        },
+      ]);
+      expect(
+        LinkCommand(
+          stateStorePrefix: 'houston',
+          endpoints: endpoints,
+        ).description,
+        contains(kCrossLinkTargetCloseRule),
+      );
+    },
+  );
+
+  test('link creation refuses --json before any store operation', () async {
+    final errors = <String>[];
+    expect(
+      await runLink(
+        arguments: _linkArgs([
+          'tg-q9k',
+          '--blocked-by',
+          'pow-60g',
+          '--grid-root',
+          temp.path,
+          '--prefix',
+          'tg',
+          '--prefix',
+          'pow',
+          '--actor',
+          'specify',
+          '--reason',
+          'waits on power',
+          '--json',
+        ]),
+        stateStorePrefix: 'houston',
+        endpoints: endpoints,
+        bdFactory: factory,
+        err: errors.add,
+      ),
+      64,
+    );
+    expect(errors, ['grid link: --json is accepted only by link ls.']);
+    expect([state, tg, pow].expand((store) => store.calls), isEmpty);
   });
 
   test(
@@ -539,7 +625,11 @@ ArgParser _parser({bool blockedBy = false}) {
     ..addOption('reason')
     ..addOption('reason-file')
     ..addOption('actor');
-  if (blockedBy) parser.addOption('blocked-by');
+  if (blockedBy) {
+    parser
+      ..addOption('blocked-by')
+      ..addFlag('json', negatable: false);
+  }
   return parser;
 }
 

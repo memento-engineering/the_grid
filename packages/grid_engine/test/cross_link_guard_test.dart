@@ -100,25 +100,35 @@ void main() {
   )..start();
 
   group('the state-store link edge source', () {
-    test('an OPEN link blocks its `from` bead in the joined frontier while the '
-        '`to` target is open', () {
-      workSrc = FakeSource(
-        graphOf([work('tg-1'), work('tg-2'), work('pow-9')]),
-      );
-      stateSrc = FakeSource(
-        graphOf([linkBead('houston-l1', from: 'tg-1')], readyIds: const {}),
-      );
-      final bridge = bridgeOf();
-      addTearDown(bridge.dispose);
+    test(
+      'an OPEN link with an OPEN target still excludes and does not flare targetClosed',
+      () {
+        workSrc = FakeSource(
+          graphOf([work('tg-1'), work('tg-2'), work('pow-9')]),
+        );
+        stateSrc = FakeSource(
+          graphOf([linkBead('houston-l1', from: 'tg-1')], readyIds: const {}),
+        );
+        final bridge = bridgeOf();
+        addTearDown(bridge.dispose);
 
-      final joined = read(bridge.notifier);
-      expect(joined.graph.readyIds, isNot(contains('tg-1')));
-      expect(
-        joined.graph.readyIds,
-        contains('tg-2'),
-        reason: 'the sanity control — only the linked bead is held out',
-      );
-    });
+        final joined = read(bridge.notifier);
+        expect(joined.graph.readyIds, isNot(contains('tg-1')));
+        expect(
+          joined.graph.readyIds,
+          contains('tg-2'),
+          reason: 'the sanity control — only the linked bead is held out',
+        );
+        expect(
+          joined.frontierExclusionsByBeadId['tg-1'],
+          contains(kCrossLinkTargetCloseRule),
+        );
+        expect(
+          loud.where((message) => message.startsWith('crossLink.targetClosed')),
+          isEmpty,
+        );
+      },
+    );
 
     test(
       'CLOSING the link bead retires the edge and re-admits the bead',
@@ -147,7 +157,7 @@ void main() {
     );
 
     test(
-      'CLOSING the `to` target re-admits the bead while the link stays open',
+      'an OPEN link whose target has CLOSED flares crossLink.targetClosed once',
       () async {
         workSrc = FakeSource(graphOf([work('tg-1'), work('pow-9')]));
         stateSrc = FakeSource(
@@ -167,8 +177,45 @@ void main() {
         await Future<void>.delayed(Duration.zero);
 
         expect(read(bridge.notifier).graph.readyIds, contains('tg-1'));
+        expect(
+          loud.where((message) => message.startsWith('crossLink.targetClosed')),
+          [
+            'crossLink.targetClosed: linkBeadId="houston-l1" '
+                'fromId="tg-1" toId="pow-9". '
+                '$kCrossLinkTargetCloseRule',
+          ],
+        );
       },
     );
+
+    test('crossLink.targetClosed does not repeat across joins', () async {
+      workSrc = FakeSource(
+        graphOf([work('tg-1'), work('pow-9', closed: true)]),
+      );
+      stateSrc = FakeSource(
+        graphOf([linkBead('houston-l1', from: 'tg-1')], readyIds: const {}),
+      );
+      final bridge = bridgeOf();
+      addTearDown(bridge.dispose);
+
+      workSrc.emit(
+        graphOf([work('tg-1'), work('pow-9', closed: true)], tick: 1),
+      );
+      stateSrc.emit(
+        graphOf(
+          [linkBead('houston-l1', from: 'tg-1')],
+          readyIds: const {},
+          tick: 2,
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(read(bridge.notifier).graph.readyIds, contains('tg-1'));
+      expect(
+        loud.where((message) => message.startsWith('crossLink.targetClosed')),
+        hasLength(1),
+      );
+    });
 
     test('a `to` target NO federated member observes blocks fail-closed and is '
         'LOUD about both ids', () {
@@ -189,7 +236,8 @@ void main() {
       expect(read(bridge.notifier).frontierExclusionsByBeadId, {
         'tg-1':
             'frontier cross-link: link bead houston-l1 blocks tg-1 on '
-            'unobserved target "space-404" (fail-closed)',
+            'unobserved target "space-404" (fail-closed). '
+            '$kCrossLinkTargetCloseRule',
       });
     });
 
@@ -213,10 +261,12 @@ void main() {
       expect(joined.frontierExclusionsByBeadId, {
         'tg-5kb':
             'frontier cross-link: link bead tranquility-awgj18 blocks '
-            'tg-5kb on open target "genesis-7ob"',
+            'tg-5kb on open target "genesis-7ob". '
+            '$kCrossLinkTargetCloseRule',
         'tg-wv9':
             'frontier cross-link: link bead tranquility-8fzpwn blocks '
-            'tg-wv9 on open target "genesis-7ob"',
+            'tg-wv9 on open target "genesis-7ob". '
+            '$kCrossLinkTargetCloseRule',
       });
     });
 
