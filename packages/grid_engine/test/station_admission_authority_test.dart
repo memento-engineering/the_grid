@@ -1017,6 +1017,152 @@ void main() {
   });
 
   test(
+    'frontier-abandoned reservation stays released until the bead is ready',
+    () async {
+      final station = _stationOver(RecordingBdRunner(), maxConcurrentWork: 1);
+      addTearDown(station.dispose);
+      final first = _bead('tg-1');
+      final rival = _bead('tg-2');
+      final config = _config.copyWith(maxConcurrentWork: 1);
+      final candidates = [
+        StationAdmissionCandidate(bead: first, session: null),
+        StationAdmissionCandidate(bead: rival, session: null),
+      ];
+      final initiallyReady = _snapshot([first, rival]);
+
+      final initial = station.admission.admitPending(
+        initiallyReady,
+        config,
+        const ServiceBundle(),
+        candidates,
+      );
+      final firstReservation = initial.admitted.single;
+      expect(firstReservation.candidate.bead.id, 'tg-1');
+
+      await station.admission.abandonSessionAttempt(
+        workBeadId: 'tg-1',
+        sessionId: null,
+        reservationToken: firstReservation.reservationToken,
+        services: const ServiceBundle(),
+        blockUntilFreshReady: true,
+      );
+      expect(station.admission.admissionStatus.reservations, isEmpty);
+
+      final dependencyBlocked = JoinedSnapshot(
+        graph: GraphSnapshot.fromParts(
+          beads: [first, rival],
+          dependencies: const [
+            BeadDependency(issueId: 'tg-1', dependsOnId: 'tg-2'),
+          ],
+          readyIds: const {'tg-2'},
+          capturedAt: DateTime.utc(2026, 9, 8),
+        ),
+      );
+      final released = station.admission.admitPending(
+        dependencyBlocked,
+        config,
+        const ServiceBundle(),
+        candidates,
+      );
+
+      expect(released.waiting.single.bead.id, 'tg-1');
+      expect(released.admitted.single.candidate.bead.id, 'tg-2');
+      expect(
+        station.admission.admissionStatus.reservations.map(
+          (reservation) => reservation.bead,
+        ),
+        ['tg-2'],
+      );
+
+      await station.admission.abandonSessionAttempt(
+        workBeadId: 'tg-2',
+        sessionId: null,
+        reservationToken: released.admitted.single.reservationToken,
+        services: const ServiceBundle(),
+      );
+      final readyAgain = station.admission.admitPending(
+        initiallyReady,
+        config,
+        const ServiceBundle(),
+        candidates,
+      );
+      expect(readyAgain.admitted.single.candidate.bead.id, 'tg-1');
+      expect(
+        identical(
+          readyAgain.admitted.single.reservationToken,
+          firstReservation.reservationToken,
+        ),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'frontier block preserves a live retired-round mount in substation capacity',
+    () async {
+      final station = _stationOver(RecordingBdRunner(), maxConcurrentWork: 2);
+      addTearDown(station.dispose);
+      final retiredBead = _bead('tg-1');
+      final rival = _bead('tg-2');
+      const retired = SessionProjection(
+        workBeadId: 'tg-1#r1',
+        sessionId: 'tgdog-round1',
+      );
+      final retiredCandidate = StationAdmissionCandidate(
+        bead: retiredBead,
+        session: retired,
+      );
+      final rivalCandidate = StationAdmissionCandidate(
+        bead: rival,
+        session: null,
+      );
+      final config = _config.copyWith(maxConcurrentWork: 1);
+      final initiallyReady = _snapshot([retiredBead, rival]);
+
+      final initial = station.admission.admitPending(
+        initiallyReady,
+        config,
+        const ServiceBundle(),
+        [retiredCandidate],
+      );
+      final retiredReservation = initial.admitted.single;
+      expect(retiredReservation.candidate.bead.id, 'tg-1');
+
+      await station.admission.abandonSessionAttempt(
+        workBeadId: 'tg-1',
+        sessionId: null,
+        reservationToken: retiredReservation.reservationToken,
+        services: const ServiceBundle(),
+        blockUntilFreshReady: true,
+      );
+
+      final dependencyBlocked = JoinedSnapshot(
+        graph: GraphSnapshot.fromParts(
+          beads: [retiredBead, rival],
+          dependencies: const [
+            BeadDependency(issueId: 'tg-1', dependsOnId: 'tg-2'),
+          ],
+          readyIds: const {'tg-2'},
+          capturedAt: DateTime.utc(2026, 9, 8),
+        ),
+      );
+      final blocked = station.admission.admitPending(
+        dependencyBlocked,
+        config,
+        const ServiceBundle(),
+        [retiredCandidate, rivalCandidate],
+      );
+
+      expect(blocked.waiting.map((candidate) => candidate.bead.id), [
+        'tg-1',
+        'tg-2',
+      ]);
+      expect(blocked.admitted, isEmpty);
+      expect(station.admission.admissionStatus.reservations, isEmpty);
+    },
+  );
+
+  test(
     'reservation token is reused only while one held grant survives',
     () async {
       final station = _stationOver(RecordingBdRunner(), maxConcurrentWork: 1);
