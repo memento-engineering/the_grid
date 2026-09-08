@@ -68,6 +68,7 @@ final class _GridCockpitAppState extends State<GridCockpitApp> {
                   child: CircularProgressIndicator(),
                 ),
                 LiveDisconnected() ||
+                LiveDiscoveryUnavailable() ||
                 LiveManual() ||
                 LiveFailed() => const Center(
                   child: Text('Connect to a station to view live work.'),

@@ -12,9 +12,45 @@ Map<String, Object?> _lock({String? controlUrl, String? token}) => {
 };
 
 void main() {
+  test('unavailable capability bypasses discovery adapters', () async {
+    var capabilityCalls = 0;
+    var rootCalls = 0;
+    var readCalls = 0;
+    final discovery = StationLockDiscovery(
+      isCapable: () async {
+        capabilityCalls++;
+        return false;
+      },
+      workspaceRoots: () async {
+        rootCalls++;
+        return [Uri.parse('file:///workspace/')];
+      },
+      readFile: (_) async {
+        readCalls++;
+        return jsonEncode(_lock());
+      },
+    );
+
+    await expectLater(
+      discovery.discover(),
+      throwsA(
+        isA<StationLockDiscoveryUnavailable>().having(
+          (error) => error.toString(),
+          'message',
+          'Station lock auto-discovery is unavailable',
+        ),
+      ),
+    );
+
+    expect(capabilityCalls, 1);
+    expect(rootCalls, 0);
+    expect(readCalls, 0);
+  });
+
   test('reads roots in order and returns the first usable AOT lock', () async {
     final reads = <Uri>[];
     final discovery = StationLockDiscovery(
+      isCapable: () async => true,
       workspaceRoots: () async => [
         Uri.parse('file:///first/'),
         Uri.parse('file:///second/'),
@@ -42,6 +78,7 @@ void main() {
 
   test('whitespace credentials produce an accumulated typed failure', () {
     final discovery = StationLockDiscovery(
+      isCapable: () async => true,
       workspaceRoots: () async => [Uri.parse('file:///workspace/')],
       readFile: (_) async => jsonEncode(_lock(controlUrl: '\t', token: '  ')),
     );
@@ -62,6 +99,7 @@ void main() {
     'root enumeration failures are reported without escaping raw errors',
     () {
       final discovery = StationLockDiscovery(
+        isCapable: () async => true,
         workspaceRoots: () async => throw StateError('roots unavailable'),
         readFile: (_) async => throw UnimplementedError(),
       );

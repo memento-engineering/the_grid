@@ -14,7 +14,7 @@ final class LiveConnectionBar extends StatefulWidget {
 }
 
 class _LiveConnectionBarState extends State<LiveConnectionBar> {
-  final _url = TextEditingController();
+  final _url = TextEditingController(text: 'localhost:<port>');
   final _token = TextEditingController();
 
   @override
@@ -34,6 +34,9 @@ class _LiveConnectionBarState extends State<LiveConnectionBar> {
         final status = switch (state) {
           LiveDisconnected() => 'Replay • live disconnected',
           LiveDiscovering() => 'Discovering local station…',
+          LiveDiscoveryUnavailable() =>
+            'Auto-connect is unavailable in this session. '
+                'Enter the station URL and token.',
           LiveManual(:final message) => message ?? 'Enter station credentials.',
           LiveConnecting() => 'Connecting…',
           LiveConnected() => 'Live station connected',

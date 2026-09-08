@@ -141,6 +141,7 @@ class _GridDevToolsShellState extends State<GridDevToolsShell> {
           LiveConnected(:final source) => source,
           LiveDisconnected() ||
           LiveDiscovering() ||
+          LiveDiscoveryUnavailable() ||
           LiveManual() ||
           LiveConnecting() ||
           LiveFailed() => widget.treeSource ?? _defaultSource!,
