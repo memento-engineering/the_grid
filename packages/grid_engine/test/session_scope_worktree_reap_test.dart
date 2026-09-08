@@ -44,6 +44,8 @@ class _RecordingReap {
   Future<ReapOutcome> call({
     required RootCheckout root,
     required BeadWorktree worktree,
+    bool dryRun = false,
+    bool overrideUnsafe = false,
   }) async {
     eventLog?.add('reap');
     calls.add(worktree);

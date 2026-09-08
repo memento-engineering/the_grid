@@ -47,6 +47,9 @@ final class StationCommandHandler implements GridCommandHandler {
     required StationBeadWriter stateWriter,
     required BeadOwnershipPredicate stateOwnership,
     required Map<String, WorkCommandStore> workStoresByIdentity,
+    ListBeadWorktrees? listBeadWorktrees,
+    ReapWorktree? reapWorktree,
+    Map<String, RootCheckout> workRootsByIdentity = const {},
     StationTrajectoryRecorder? recorder,
     TrajectoryStepSnapshot Function()? stepSnapshot,
     int Function(String sessionId)? headEpochForSession,
@@ -61,9 +64,12 @@ final class StationCommandHandler implements GridCommandHandler {
        _headEpochForSession = headEpochForSession,
        _dualReadMode = dualReadMode,
        _dualReadAccounting = dualReadAccounting,
+       _listBeadWorktrees = listBeadWorktrees,
+       _reapWorktree = reapWorktree,
        _workStoresByIdentity = Map<String, WorkCommandStore>.of(
          workStoresByIdentity,
-       );
+       ),
+       _workRootsByIdentity = Map<String, RootCheckout>.of(workRootsByIdentity);
 
   final SnapshotSource _stateSource;
   final Future<void> Function() _refreshState;
@@ -95,6 +101,9 @@ final class StationCommandHandler implements GridCommandHandler {
   final DualReadAccounting? _dualReadAccounting;
 
   final Map<String, WorkCommandStore> _workStoresByIdentity;
+  final ListBeadWorktrees? _listBeadWorktrees;
+  final ReapWorktree? _reapWorktree;
+  final Map<String, RootCheckout> _workRootsByIdentity;
   SubstationRoster? _roster;
   Future<void> _tail = Future<void>.value();
 
@@ -109,9 +118,15 @@ final class StationCommandHandler implements GridCommandHandler {
   }
 
   /// Registers [spec]'s work-store rails under both identity axes.
-  void registerWorkStore(SubstationWorkSpec spec, WorkCommandStore store) {
+  void registerWorkStore(
+    SubstationWorkSpec spec,
+    WorkCommandStore store, {
+    RootCheckout? workRoot,
+  }) {
     if (_workStoresByIdentity.containsKey(spec.name) ||
-        _workStoresByIdentity.containsKey(spec.prefix)) {
+        _workStoresByIdentity.containsKey(spec.prefix) ||
+        _workRootsByIdentity.containsKey(spec.name) ||
+        _workRootsByIdentity.containsKey(spec.prefix)) {
       throw StateError(
         'StationCommandHandler.registerWorkStore: "${spec.name}" collides '
         'with an existing work-store identity.',
@@ -119,11 +134,18 @@ final class StationCommandHandler implements GridCommandHandler {
     }
     _workStoresByIdentity[spec.name] = store;
     _workStoresByIdentity[spec.prefix] = store;
+    if (workRoot != null) {
+      _workRootsByIdentity[spec.name] = workRoot;
+      _workRootsByIdentity[spec.prefix] = workRoot;
+    }
   }
 
   /// Unregisters [spec]'s work-store rails under both identity axes.
   void unregisterWorkStore(SubstationWorkSpec spec) {
     _workStoresByIdentity
+      ..remove(spec.name)
+      ..remove(spec.prefix);
+    _workRootsByIdentity
       ..remove(spec.name)
       ..remove(spec.prefix);
   }
@@ -179,6 +201,19 @@ final class StationCommandHandler implements GridCommandHandler {
     GridGateLs() => _listGates(),
     GridGateResolve(:final gateId, :final grades, :final rationale) =>
       _resolveGate(gateId: gateId, grades: grades, rationale: rationale),
+    GridSessionLs() => _listHeldSessions(),
+    GridSessionCollect(
+      :final sessionIds,
+      :final act,
+      :final bulk,
+      :final overrideUnsafe,
+    ) =>
+      _collectHeldSessions(
+        sessionIds: sessionIds,
+        act: act,
+        bulk: bulk,
+        overrideUnsafe: overrideUnsafe,
+      ),
     GridSetBeadText(
       :final beadId,
       :final field,
@@ -221,6 +256,411 @@ final class StationCommandHandler implements GridCommandHandler {
       force: force,
     ),
   };
+
+  Future<GridCommandResult> _listHeldSessions() async {
+    final listBeadWorktrees = _listBeadWorktrees;
+    if (listBeadWorktrees == null) {
+      return _refused(
+        'source_control_unavailable',
+        'This station composes no source-control listing seam.',
+      );
+    }
+    try {
+      await _refreshState();
+    } on Object catch (error) {
+      return _refused(
+        'snapshot_unavailable',
+        'The resident state snapshot could not be refreshed: $error',
+      );
+    }
+    final state = _stateSource.current;
+    if (state == null) {
+      return _refused(
+        'snapshot_unavailable',
+        'The resident state store has no current snapshot.',
+      );
+    }
+    final sessions =
+        state.beads
+            .where(
+              (bead) =>
+                  bead.issueType == GridIssueTypes.session &&
+                  bead.isClosed &&
+                  _sessionDispositionOf(bead) ==
+                      GateSweepSessionDisposition.held,
+            )
+            .toList(growable: false)
+          ..sort((left, right) => left.id.compareTo(right.id));
+    final projections =
+        <({Bead session, String workBeadId, RootCheckout root})>[];
+    for (final session in sessions) {
+      final workBeadId = _normalizedWorkBeadIdOf(session);
+      final root = _workRootFor(workBeadId);
+      if (workBeadId.isEmpty || root == null) {
+        return _refused(
+          'work_store_not_owned',
+          'Held session "${session.id}" does not map to an owned mounted '
+              'work store.',
+        );
+      }
+      projections.add((session: session, workBeadId: workBeadId, root: root));
+    }
+    final worktreesByRoot = <RootCheckout, List<BeadWorktree>>{};
+    for (final root in projections.map((row) => row.root).toSet()) {
+      final List<BeadWorktree>? worktrees;
+      try {
+        worktrees = await listBeadWorktrees(root);
+      } on Object catch (error) {
+        return _refused(
+          'worktree_probe_failed',
+          'Could not list worktrees under "${root.path}": $error',
+        );
+      }
+      if (worktrees == null) {
+        return _refused(
+          'worktree_probe_failed',
+          'Could not list worktrees under "${root.path}".',
+        );
+      }
+      worktreesByRoot[root] = worktrees;
+    }
+    final rows = <Map<String, Object?>>[];
+    for (final projection in projections) {
+      final matches = worktreesByRoot[projection.root]!
+          .where((worktree) => worktree.beadId == projection.workBeadId)
+          .toList(growable: false);
+      if (matches.length > 1) {
+        return _refused(
+          'worktree_probe_failed',
+          'Held session "${projection.session.id}" maps to '
+              '${matches.length} worktrees; refusing an ambiguous listing.',
+        );
+      }
+      if (matches.isEmpty) continue;
+      rows.add(
+        _heldSessionRow(
+          session: projection.session,
+          workBeadId: projection.workBeadId,
+          worktree: matches.single,
+        ),
+      );
+    }
+    return GridCommandResult.completed(
+      message: '${rows.length} held session(s) with preserved worktrees.',
+      value: {'operation': 'grid/session/ls', 'sessions': rows},
+    );
+  }
+
+  Future<GridCommandResult> _collectHeldSessions({
+    required List<String> sessionIds,
+    required bool act,
+    required bool bulk,
+    required bool overrideUnsafe,
+  }) async {
+    if (sessionIds.isEmpty || sessionIds.any((id) => id.trim().isEmpty)) {
+      return _refused(
+        'session_not_found',
+        'At least one nonblank session id is required.',
+      );
+    }
+    if (sessionIds.toSet().length != sessionIds.length) {
+      return _refused('duplicate_session', 'Every session id must be unique.');
+    }
+    if (sessionIds.length > 1 && !bulk) {
+      return _refused(
+        'bulk_required',
+        'Collecting more than one session requires explicit bulk '
+            'authorization.',
+      );
+    }
+    final listBeadWorktrees = _listBeadWorktrees;
+    final reapWorktree = _reapWorktree;
+    if (listBeadWorktrees == null || reapWorktree == null) {
+      return _refused(
+        'source_control_unavailable',
+        'This station composes no source-control collection seams.',
+      );
+    }
+    try {
+      await _refreshState();
+    } on Object catch (error) {
+      return _refused(
+        'snapshot_unavailable',
+        'The resident state snapshot could not be refreshed: $error',
+      );
+    }
+    final state = _stateSource.current;
+    if (state == null) {
+      return _refused(
+        'snapshot_unavailable',
+        'The resident state store has no current snapshot.',
+      );
+    }
+    final sortedIds = List<String>.of(sessionIds)..sort();
+    final candidates =
+        <({Bead session, String workBeadId, RootCheckout root})>[];
+    final claimedWorkBeads = <String>{};
+    for (final sessionId in sortedIds) {
+      final session = state.bead(sessionId);
+      if (session == null) {
+        return _refused(
+          'session_not_found',
+          'Session "$sessionId" was not found.',
+        );
+      }
+      if (session.issueType != GridIssueTypes.session) {
+        return _refused('not_a_session', '"$sessionId" is not a session.');
+      }
+      if (!session.isClosed) {
+        return _refused(
+          'session_not_closed',
+          'Session "$sessionId" is not closed.',
+        );
+      }
+      if (_sessionDispositionOf(session) != GateSweepSessionDisposition.held) {
+        return _refused(
+          'session_not_held',
+          'Session "$sessionId" does not derive to held.',
+        );
+      }
+      if (!_stateOwnership.owns(session)) {
+        return _refused(
+          'ownership_refused',
+          'Session "$sessionId" is outside this station ownership set.',
+        );
+      }
+      final workBeadId = _normalizedWorkBeadIdOf(session);
+      final root = _workRootFor(workBeadId);
+      if (workBeadId.isEmpty || root == null) {
+        return _refused(
+          'work_store_not_owned',
+          'Session "$sessionId" does not map to an owned mounted work '
+              'store.',
+        );
+      }
+      if (!claimedWorkBeads.add(workBeadId)) {
+        return _refused(
+          'worktree_in_use',
+          'Worktree "$workBeadId" is targeted by more than one requested '
+              'session.',
+        );
+      }
+      final liveSuccessor = state.beads.any(
+        (candidate) =>
+            candidate.id != sessionId &&
+            candidate.issueType == GridIssueTypes.session &&
+            !candidate.isClosed &&
+            _normalizedWorkBeadIdOf(candidate) == workBeadId,
+      );
+      if (liveSuccessor) {
+        return _refused(
+          'worktree_in_use',
+          'Worktree "$workBeadId" is used by another open session.',
+        );
+      }
+      candidates.add((session: session, workBeadId: workBeadId, root: root));
+    }
+
+    final worktreesByRoot = <RootCheckout, List<BeadWorktree>>{};
+    for (final root in candidates.map((candidate) => candidate.root).toSet()) {
+      final List<BeadWorktree>? worktrees;
+      try {
+        worktrees = await listBeadWorktrees(root);
+      } on Object catch (error) {
+        return _refused(
+          'worktree_probe_failed',
+          'Could not list worktrees under "${root.path}": $error',
+        );
+      }
+      if (worktrees == null) {
+        return _refused(
+          'worktree_probe_failed',
+          'Could not list worktrees under "${root.path}".',
+        );
+      }
+      worktreesByRoot[root] = worktrees;
+    }
+    final targets =
+        <
+          ({
+            Bead session,
+            String workBeadId,
+            RootCheckout root,
+            BeadWorktree worktree,
+          })
+        >[];
+    for (final candidate in candidates) {
+      final matches = worktreesByRoot[candidate.root]!
+          .where((worktree) => worktree.beadId == candidate.workBeadId)
+          .toList(growable: false);
+      if (matches.isEmpty) {
+        return _refused(
+          'worktree_not_found',
+          'Session "${candidate.session.id}" has no preserved worktree.',
+        );
+      }
+      if (matches.length != 1) {
+        return _refused(
+          'worktree_probe_failed',
+          'Session "${candidate.session.id}" maps to ${matches.length} '
+              'worktrees; refusing an ambiguous target.',
+        );
+      }
+      targets.add((
+        session: candidate.session,
+        workBeadId: candidate.workBeadId,
+        root: candidate.root,
+        worktree: matches.single,
+      ));
+    }
+
+    for (final target in targets) {
+      final ReapOutcome outcome;
+      try {
+        outcome = await reapWorktree(
+          root: target.root,
+          worktree: target.worktree,
+          dryRun: true,
+          overrideUnsafe: overrideUnsafe,
+        );
+      } on Object catch (error) {
+        return _refused(
+          'worktree_reap_refused',
+          'Session "${target.session.id}" preflight failed: $error',
+        );
+      }
+      if (outcome.refused) {
+        return _refused(
+          'worktree_reap_refused',
+          'Session "${target.session.id}" preflight refused: '
+              '${outcome.refusedReason}',
+        );
+      }
+    }
+
+    if (!act) {
+      return GridCommandResult.completed(
+        message: '${targets.length} held session(s) would be collected.',
+        value: {
+          'operation': 'grid/session/collect',
+          'sessions': [
+            for (final target in targets)
+              {
+                ..._heldSessionRow(
+                  session: target.session,
+                  workBeadId: target.workBeadId,
+                  worktree: target.worktree,
+                ),
+                'status': 'would_collect',
+              },
+          ],
+        },
+      );
+    }
+
+    final rows = <Map<String, Object?>>[];
+    for (final target in targets) {
+      final ReapOutcome outcome;
+      try {
+        outcome = await reapWorktree(
+          root: target.root,
+          worktree: target.worktree,
+          dryRun: false,
+          overrideUnsafe: overrideUnsafe,
+        );
+      } on Object catch (error) {
+        _recordWorktreeHeld(target, null);
+        return _refused(
+          'worktree_reap_refused',
+          'Session "${target.session.id}" acted reap failed: $error',
+        );
+      }
+      if (!outcome.removed) {
+        _recordWorktreeHeld(target, outcome);
+        return _refused(
+          'worktree_reap_refused',
+          'Session "${target.session.id}" acted reap refused: '
+              '${outcome.refusedReason ?? 'worktree was not removed'}',
+        );
+      }
+      _recorder.worktreeReaped(
+        sessionId: target.session.id,
+        worktree: target.worktree.path,
+        branch: target.worktree.branch,
+        uncommitted: _gateEvidence(outcome.uncommitted),
+        unpushed: _gateEvidence(outcome.unpushed),
+        stashes: _gateEvidence(outcome.stashed),
+      );
+      rows.add({
+        ..._heldSessionRow(
+          session: target.session,
+          workBeadId: target.workBeadId,
+          worktree: target.worktree,
+        ),
+        'status': 'collected',
+      });
+    }
+    return GridCommandResult.completed(
+      message: '${rows.length} held session(s) collected.',
+      value: {'operation': 'grid/session/collect', 'sessions': rows},
+    );
+  }
+
+  GateSweepSessionDisposition _sessionDispositionOf(Bead session) =>
+      sessionDispositionOfMetadata(session.metadata);
+
+  String _normalizedWorkBeadIdOf(Bead session) {
+    final raw = _meta(session, SessionBeadKeys.workBead) ?? '';
+    return StationTrajectoryRecorder.parseLegacyWorkKey(raw).workBeadId;
+  }
+
+  RootCheckout? _workRootFor(String workBeadId) {
+    final identity = BeadOwnershipPredicate.ownedPrefixOf(
+      workBeadId,
+      _workRootsByIdentity.keys,
+    );
+    return identity == null ? null : _workRootsByIdentity[identity];
+  }
+
+  Map<String, Object?> _heldSessionRow({
+    required Bead session,
+    required String workBeadId,
+    required BeadWorktree worktree,
+  }) => {
+    'workBeadId': workBeadId,
+    'sessionId': session.id,
+    'worktree': worktree.path,
+    'branch': worktree.branch,
+    'heldReason': _heldReason(session),
+  };
+
+  String _heldReason(Bead session) => [
+    for (final key in const [
+      SessionBeadKeys.escalation,
+      SessionBeadKeys.reworkDeclined,
+    ])
+      if (session.metadata[key] case final value?) '$key=$value',
+  ].join('; ');
+
+  void _recordWorktreeHeld(
+    ({
+      Bead session,
+      String workBeadId,
+      RootCheckout root,
+      BeadWorktree worktree,
+    })
+    target,
+    ReapOutcome? outcome,
+  ) {
+    _recorder.worktreeHeld(
+      sessionId: target.session.id,
+      worktree: target.worktree.path,
+      branch: target.worktree.branch,
+      uncommitted: _gateEvidence(outcome?.uncommitted),
+      unpushed: _gateEvidence(outcome?.unpushed),
+      stashes: _gateEvidence(outcome?.stashed),
+    );
+  }
 
   Future<GridCommandResult> _attachSubstation({
     required String name,
@@ -1133,6 +1573,12 @@ String? _meta(Bead bead, String key) {
   final value = bead.metadata[key];
   return value is String && value.isNotEmpty ? value : null;
 }
+
+int? _gateEvidence(GateOutcome? outcome) => switch (outcome) {
+  GateOutcome.clear => 0,
+  GateOutcome.present => 1,
+  GateOutcome.probeError || null => null,
+};
 
 bool _isGrade(String value) =>
     value.length == 1 &&

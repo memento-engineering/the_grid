@@ -30,6 +30,8 @@ class _FakeGit {
   Future<ReapOutcome> reapWorktree({
     required RootCheckout root,
     required BeadWorktree worktree,
+    bool dryRun = false,
+    bool overrideUnsafe = false,
   }) async => ReapOutcome.removed();
 }
 

@@ -24,6 +24,17 @@ sealed class GridCommandRequest with _$GridCommandRequest {
     String? rationale,
   }) = GridGateResolve;
 
+  /// Lists closed held sessions whose preserved worktree still exists.
+  const factory GridCommandRequest.listHeldSessions() = GridSessionLs;
+
+  /// Collects the preserved worktrees for the named held [sessionIds].
+  const factory GridCommandRequest.collectHeldSessions({
+    required List<String> sessionIds,
+    @Default(false) bool act,
+    @Default(false) bool bulk,
+    @Default(false) bool overrideUnsafe,
+  }) = GridSessionCollect;
+
   /// Writes one prose field on an owned work bead.
   const factory GridCommandRequest.setBeadText({
     required String beadId,

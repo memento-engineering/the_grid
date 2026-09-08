@@ -62,26 +62,47 @@ class BeadWorktree {
   final String branch;
 }
 
-/// The outcome of a reap attempt — distinguishes a clean removal from a
-/// fail-closed REFUSAL, so the dispatcher (and a test) can assert WHY a
-/// worktree was kept. Mirrors gc's reaper skip-vs-remove split
-/// (`cmd/gc/bead_worktree_reaper.go:101-141`).
+/// The outcome of a reap attempt — distinguishes a clean removal, a permitted
+/// preview, and a fail-closed REFUSAL, so the caller can assert WHY a worktree
+/// was removed or kept. Every successful outcome preserves the three observed
+/// gate values, including known-present values permitted by the bounded
+/// operator override.
 class ReapOutcome {
   const ReapOutcome._({
     required this.removed,
+    required this.wouldRemove,
     required this.refusedReason,
     required this.uncommitted,
     required this.unpushed,
     required this.stashed,
   });
 
-  /// Removed cleanly (all three gates clear).
-  factory ReapOutcome.removed() => const ReapOutcome._(
+  /// Removed after the observed gates permitted the attempt.
+  factory ReapOutcome.removed({
+    GateOutcome uncommitted = GateOutcome.clear,
+    GateOutcome unpushed = GateOutcome.clear,
+    GateOutcome stashed = GateOutcome.clear,
+  }) => ReapOutcome._(
     removed: true,
+    wouldRemove: false,
     refusedReason: null,
-    uncommitted: GateOutcome.clear,
-    unpushed: GateOutcome.clear,
-    stashed: GateOutcome.clear,
+    uncommitted: uncommitted,
+    unpushed: unpushed,
+    stashed: stashed,
+  );
+
+  /// A permitted dry-run that would remove the worktree if acted.
+  factory ReapOutcome.wouldRemove({
+    required GateOutcome uncommitted,
+    required GateOutcome unpushed,
+    required GateOutcome stashed,
+  }) => ReapOutcome._(
+    removed: false,
+    wouldRemove: true,
+    refusedReason: null,
+    uncommitted: uncommitted,
+    unpushed: unpushed,
+    stashed: stashed,
   );
 
   /// Refused: at least one gate blocked (present OR probe error). Carries the
@@ -94,6 +115,7 @@ class ReapOutcome {
     required String reason,
   }) => ReapOutcome._(
     removed: false,
+    wouldRemove: false,
     refusedReason: reason,
     uncommitted: uncommitted,
     unpushed: unpushed,
@@ -101,12 +123,14 @@ class ReapOutcome {
   );
 
   final bool removed;
+  final bool wouldRemove;
   final String? refusedReason;
   final GateOutcome uncommitted;
   final GateOutcome unpushed;
   final GateOutcome stashed;
 
-  bool get refused => !removed;
+  /// Whether the attempt was actually refused, excluding a permitted preview.
+  bool get refused => !removed && !wouldRemove;
 }
 
 /// The result of the land step (DIVERGES from gc; ADR-0006 Decision 3): commit
@@ -508,13 +532,16 @@ class StationGitService {
     Set<String> excluding = const <String>{},
   }) => _ops.hasUncommittedWork(workspaceDir, excluding: excluding);
 
-  /// **The three-gate reaper (ported VERBATIM from gc, `git.go:134-213` +
+  /// **The three-gate reaper (ported from gc, `git.go:134-213` +
   /// `bead_worktree_reaper.go:100-141`).** Refuses to remove [worktree] if it
   /// has uncommitted work OR unpushed commits OR a stash — ALL fail-closed on
   /// probe error (a gate probe that errors blocks removal exactly like a
   /// present condition). The gates run FROM the worktree dir (so `git status` /
   /// `git stash list` apply to its branch); `git worktree remove` runs from the
-  /// ROOT repo, never inside the worktree.
+  /// ROOT repo, never inside the worktree. [dryRun] performs the identical
+  /// probes but returns [ReapOutcome.wouldRemove] without removal.
+  /// [overrideUnsafe] permits only known [GateOutcome.present] conditions;
+  /// scope failures and [GateOutcome.probeError] remain non-overridable.
   ///
   /// The caller is responsible for the higher-level removal TRIGGER (lifecycle
   /// bead closed AND branch pushed) — this method is the fail-closed mechanism
@@ -524,6 +551,8 @@ class StationGitService {
   Future<ReapOutcome> reap({
     required RootCheckout root,
     required BeadWorktree worktree,
+    bool dryRun = false,
+    bool overrideUnsafe = false,
   }) async {
     // Scope gate: only ever act on a path strictly under the worktrees root.
     final wtRoot = WorktreeLayout.worktreesRoot(root.path);
@@ -544,9 +573,10 @@ class StationGitService {
     final unpushed = await _ops.hasUnpushedCommits(worktree.path);
     final stashed = await _ops.hasStashes(worktree.path);
 
-    if (gateBlocks(uncommitted) ||
-        gateBlocks(unpushed) ||
-        gateBlocks(stashed)) {
+    final gates = <GateOutcome>[uncommitted, unpushed, stashed];
+    final hasProbeError = gates.contains(GateOutcome.probeError);
+    final hasPresent = gates.contains(GateOutcome.present);
+    if (hasProbeError || (hasPresent && !overrideUnsafe)) {
       final reason =
           'uncommitted=${uncommitted.name} '
           'unpushed=${unpushed.name} '
@@ -559,11 +589,20 @@ class StationGitService {
       );
     }
 
-    // All gates clear — remove from the ROOT repo (never from inside the
-    // worktree). No --force: the gates ARE the safety, not a force flag.
+    if (dryRun) {
+      return ReapOutcome.wouldRemove(
+        uncommitted: uncommitted,
+        unpushed: unpushed,
+        stashed: stashed,
+      );
+    }
+
+    // The gates permit removal — from the ROOT repo, never from inside the
+    // worktree. The explicit operator override is the only forced path.
     final result = await _ops.worktreeRemove(
       rootRepo: root.path,
       path: worktree.path,
+      force: overrideUnsafe,
     );
     if (!result.ok) {
       return ReapOutcome.refused(
@@ -581,6 +620,10 @@ class StationGitService {
     // and a delete failure must not flip an already-successful worktree
     // removal into a refusal.
     await _ops.branchDelete(rootRepo: root.path, branch: worktree.branch);
-    return ReapOutcome.removed();
+    return ReapOutcome.removed(
+      uncommitted: uncommitted,
+      unpushed: unpushed,
+      stashed: stashed,
+    );
   }
 }

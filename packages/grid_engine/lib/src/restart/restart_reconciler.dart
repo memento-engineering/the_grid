@@ -97,13 +97,16 @@ void _reportOnlyOrphanSink(String message) {}
 typedef ListBeadWorktrees =
     Future<List<BeadWorktree>?> Function(RootCheckout root);
 
-/// The reap seam: the three-gate fail-closed worktree remover. Bound to the
-/// grid git service's `reap` by the composing extension/runtime — injected
-/// narrow for the same opinion-free reason as [ListBeadWorktrees].
+/// The reap seam: the three-gate fail-closed worktree remover. [dryRun]
+/// previews after running the same probes; [overrideUnsafe] permits only known
+/// present gates and never a scope or probe failure. Both default false so
+/// lifecycle and restart callers retain their automatic behavior.
 typedef ReapWorktree =
     Future<ReapOutcome> Function({
       required RootCheckout root,
       required BeadWorktree worktree,
+      bool dryRun,
+      bool overrideUnsafe,
     });
 
 /// The disposition of one surviving worktree after restart reconciliation.

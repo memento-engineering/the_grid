@@ -57,6 +57,8 @@ class _FakeGit {
   Future<ReapOutcome> reapWorktree({
     required RootCheckout root,
     required BeadWorktree worktree,
+    bool dryRun = false,
+    bool overrideUnsafe = false,
   }) async {
     reaped.add(worktree.beadId);
     return ReapOutcome.removed();

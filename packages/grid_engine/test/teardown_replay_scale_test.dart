@@ -163,8 +163,13 @@ void main() {
 
       final reconciler = RestartReconciler(
         listWorktrees: (_) async => const [],
-        reapWorktree: ({required root, required worktree}) async =>
-            ReapOutcome.removed(),
+        reapWorktree:
+            ({
+              required root,
+              required worktree,
+              dryRun = false,
+              overrideUnsafe = false,
+            }) async => ReapOutcome.removed(),
         workRoot: const RootCheckout(
           path: '/workspace/example',
           defaultBranch: 'main',
