@@ -222,6 +222,7 @@ export 'src/command/bead_round.dart';
 //                           `runGrid(onFlushed:)`; `shutdown()` AFTER
 //                           `grid.teardown()`.
 export 'src/work/store_connection.dart';
+export 'src/work/settle.dart' show settle;
 export 'src/work/station_work.dart';
 export 'src/work/work_assembly.dart';
 // The narrow engine seam a RUNNER names when assembling (ADR-0008 D2 —

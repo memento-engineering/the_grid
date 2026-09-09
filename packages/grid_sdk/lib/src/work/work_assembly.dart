@@ -13,6 +13,7 @@ import '../stores/stores.dart';
 import '../trajectory/session_closure.dart';
 import '../trajectory/trajectory_config.dart';
 import '../trajectory/trajectory_harness.dart';
+import 'settle.dart';
 import 'store_connection.dart';
 import 'station_work.dart';
 
@@ -564,24 +565,45 @@ class StationWorkRuntime implements SubstationProvisioner {
   Future<void> shutdown() async {
     if (_shutdown) return;
     _shutdown = true;
-    _driver.dispose();
-    wiring.services.admission.dispose();
+    await settle(
+      'station driver dispose',
+      _driver.dispose,
+      onRefusal: _onRefusal,
+    );
+    // The driver normally owns this disposal. Retain a separate idempotent
+    // fallback so a throwing driver step cannot strand the bridge.
+    await settle(
+      'join bridge dispose',
+      _driver.bridge.dispose,
+      onRefusal: _onRefusal,
+    );
+    await settle(
+      'station admission dispose',
+      wiring.services.admission.dispose,
+      onRefusal: _onRefusal,
+    );
     // Trajectory down BEFORE the stores it reads (§1.2 shutdown order) —
-    // guarded so it NEVER blocks sources shutdown (r2, major 9): the harness
-    // settles every step internally (queue drain → fixpoint → boundary
-    // commit → dispose) and never throws; the catch is insurance, so
-    // _sourcesShutdown() below is unconditionally reached.
-    try {
-      await trajectory.shutdown();
-    } on Object catch (error) {
-      _onRefusal(
-        'trajectory shutdown failed (sources still stopping) — '
-        '$error',
-      );
+    // settled so it NEVER blocks sources shutdown (r2, major 9). The harness
+    // also settles its internal queue drain → fixpoint → boundary commit →
+    // dispose sequence, while this outer step protects the source tail.
+    await settle(
+      'trajectory shutdown',
+      trajectory.shutdown,
+      onRefusal: _onRefusal,
+    );
+    if (_runtimeProviderDisposer(_provider) case final dispose?) {
+      await settle('runtime provider dispose', dispose, onRefusal: _onRefusal);
     }
     await _sourcesShutdown();
   }
 }
+
+Future<void> Function()? _runtimeProviderDisposer(RuntimeProvider provider) =>
+    switch (provider) {
+      SubprocessProvider provider => provider.dispose,
+      DryRunProvider provider => provider.dispose,
+      _ => null,
+    };
 
 /// The LOUD lines a restart pass's DROPPED zombie reaps produce.
 ///
@@ -617,6 +639,34 @@ typedef WorkNoteAppender = Future<void> Function(String beadId, String line);
 typedef CapabilityRegistryBuilder =
     CapabilityRegistry Function(WorkNoteAppender appendWorkNote);
 
+/// Builds one initial station work or state runtime bundle.
+///
+/// [buildDefault] lazily acquires the production bundle for [workspace]. A
+/// replacement builder owns whether to invoke it; assembly does not evaluate
+/// the production path before calling this seam.
+typedef StationWorkBundleBuilder =
+    Future<GridRuntimeBundle> Function({
+      required String storeName,
+      required BeadsWorkspace workspace,
+      required Future<GridRuntimeBundle> Function() buildDefault,
+    });
+
+/// Builds the initial federated work source around a lazy production default.
+typedef StationWorkFederatedSourceBuilder =
+    FederatedSnapshotSource Function({
+      required FederatedSnapshotSource Function() buildDefault,
+    });
+
+/// Builds the station join bridge around a lazy production default.
+typedef StationWorkJoinBridgeBuilder =
+    StationJoinBridge Function({
+      required StationJoinBridge Function() buildDefault,
+    });
+
+/// Builds the station driver around a lazy production default.
+typedef StationWorkDriverBuilder =
+    StationDriver Function({required StationDriver Function() buildDefault});
+
 /// Assembles the station's off-tree work machinery over REAL stores at their
 /// roots — the v3 replacement for the deleted `buildControllers` +
 /// `buildLiveWiring` + `composeStation` assembly (H3), consumed by every
@@ -636,6 +686,11 @@ typedef CapabilityRegistryBuilder =
 /// `git` executed, provisioning materializes nothing). Live wires
 /// `ProcessBdRunner` over the state store, `SubprocessProvider`, and the real
 /// `git`/`gh` service. The per-seam overrides are TEST seams.
+/// [bundleBuilder], [federatedSourceBuilder], [joinBridgeBuilder], and
+/// [driverBuilder] receive lazy production defaults. A builder may replace its
+/// resource without acquiring the default; once returned, that resource's
+/// lifetime transfers to this assembly. Null builders invoke their default
+/// exactly once in the existing acquisition order.
 /// The default sync FLOOR interval (tg-zd4v): the bounded worst-case refresh
 /// age on the SQL read path, where the working-set probe is edge-triggered
 /// and a quiet store would otherwise never re-capture. Coarse relative to the
@@ -666,6 +721,10 @@ Future<StationWorkRuntime> assembleStationWork({
   Duration syncFloorInterval = kDefaultSyncFloorInterval,
   TrajectoryConfig trajectoryConfig = const TrajectoryConfig(),
   TrajectoryHarness? trajectoryOverride,
+  StationWorkBundleBuilder? bundleBuilder,
+  StationWorkFederatedSourceBuilder? federatedSourceBuilder,
+  StationWorkJoinBridgeBuilder? joinBridgeBuilder,
+  StationWorkDriverBuilder? driverBuilder,
 }) async {
   if (registry != null && registryBuilder != null) {
     throw ArgumentError(
@@ -767,11 +826,86 @@ Future<StationWorkRuntime> assembleStationWork({
     );
   }
 
+  final refusalSink = onRefusal ?? (String m) => stdout.writeln(m);
+  final disposers = <({String step, FutureOr<void> Function() dispose})>[];
+  try {
+    return await _acquireStationWork(
+      stateStore: stateStore,
+      substations: substations,
+      resolver: resolver,
+      dryRun: dryRun,
+      registry: registry,
+      registryBuilder: registryBuilder,
+      maxConcurrentWork: maxConcurrentWork,
+      preferSql: preferSql,
+      providerOverride: providerOverride,
+      gitOverride: gitOverride,
+      stateBdOverride: stateBdOverride,
+      workBdOverrides: workBdOverrides,
+      groupsOverride: groupsOverride,
+      onOrphan: onOrphan,
+      onUnresolvedExternalDep: onUnresolvedExternalDep,
+      transport: transport,
+      wedgeThreshold: wedgeThreshold,
+      wedgePollInterval: wedgePollInterval,
+      syncFloorInterval: syncFloorInterval,
+      trajectoryConfig: trajectoryConfig,
+      trajectoryOverride: trajectoryOverride,
+      bundleBuilder: bundleBuilder,
+      federatedSourceBuilder: federatedSourceBuilder,
+      joinBridgeBuilder: joinBridgeBuilder,
+      driverBuilder: driverBuilder,
+      workspacesByName: workspacesByName,
+      stateWorkspace: stateWs,
+      stateSubstation: stateSubstation,
+      refusalSink: refusalSink,
+      disposers: disposers,
+    );
+  } on Object catch (error, stackTrace) {
+    for (final disposer in disposers.reversed) {
+      await settle(disposer.step, disposer.dispose, onRefusal: refusalSink);
+    }
+    Error.throwWithStackTrace(error, stackTrace);
+  }
+}
+
+Future<StationWorkRuntime> _acquireStationWork({
+  required GridStateStore stateStore,
+  required List<SubstationWorkSpec> substations,
+  required SessionResolver resolver,
+  required bool dryRun,
+  required CapabilityRegistry? registry,
+  required CapabilityRegistryBuilder? registryBuilder,
+  required int maxConcurrentWork,
+  required bool preferSql,
+  required RuntimeProvider? providerOverride,
+  required StationGitService? gitOverride,
+  required BdCliService? stateBdOverride,
+  required Map<String, BdCliService> workBdOverrides,
+  required ProcessGroupController? groupsOverride,
+  required void Function(String message)? onOrphan,
+  required void Function(String message)? onUnresolvedExternalDep,
+  required ExplorationTransport? transport,
+  required Duration wedgeThreshold,
+  required Duration wedgePollInterval,
+  required Duration syncFloorInterval,
+  required TrajectoryConfig trajectoryConfig,
+  required TrajectoryHarness? trajectoryOverride,
+  required StationWorkBundleBuilder? bundleBuilder,
+  required StationWorkFederatedSourceBuilder? federatedSourceBuilder,
+  required StationWorkJoinBridgeBuilder? joinBridgeBuilder,
+  required StationWorkDriverBuilder? driverBuilder,
+  required Map<String, BeadsWorkspace> workspacesByName,
+  required BeadsWorkspace stateWorkspace,
+  required String stateSubstation,
+  required void Function(String message) refusalSink,
+  required List<({String step, FutureOr<void> Function() dispose})> disposers,
+}) async {
   // --- the controllers (one per work store + the state store).
   final bundles = <String, GridRuntimeBundle>{};
   for (final entry in workspacesByName.entries) {
     final storeName = entry.key;
-    bundles[entry.key] = await GridRuntimeFactory.build(
+    Future<GridRuntimeBundle> buildDefault() => GridRuntimeFactory.build(
       workspace: entry.value,
       preferSql: preferSql,
       syncFloorInterval: syncFloorInterval,
@@ -781,9 +915,21 @@ Future<StationWorkRuntime> assembleStationWork({
         {'substation': storeName, 'source': source},
       ),
     );
+    final bundle =
+        await (bundleBuilder?.call(
+              storeName: storeName,
+              workspace: entry.value,
+              buildDefault: buildDefault,
+            ) ??
+            buildDefault());
+    bundles[entry.key] = bundle;
+    disposers.add((
+      step: 'work bundle shutdown (${entry.key})',
+      dispose: bundle.shutdown,
+    ));
   }
-  final stateBundle = await GridRuntimeFactory.build(
-    workspace: stateWs,
+  Future<GridRuntimeBundle> buildStateDefault() => GridRuntimeFactory.build(
+    workspace: stateWorkspace,
     preferSql: preferSql,
     syncFloorInterval: syncFloorInterval,
     lifecycleTypes: {...IssueType.coreTypes, ...GridIssueTypes.all},
@@ -792,6 +938,14 @@ Future<StationWorkRuntime> assembleStationWork({
       {'substation': 'state', 'source': source},
     ),
   );
+  final stateBundle =
+      await (bundleBuilder?.call(
+            storeName: 'state',
+            workspace: stateWorkspace,
+            buildDefault: buildStateDefault,
+          ) ??
+          buildStateDefault());
+  disposers.add((step: 'state bundle shutdown', dispose: stateBundle.shutdown));
   final readPathName = [
     for (final e in bundles.entries) '${e.key}=${e.value.readPath.name}',
     'state=${stateBundle.readPath.name}',
@@ -803,7 +957,8 @@ Future<StationWorkRuntime> assembleStationWork({
   final unresolvedSink =
       onUnresolvedExternalDep ?? (String m) => stdout.writeln(m);
 
-  final work = FederatedSnapshotSource(
+  FederatedSnapshotSource
+  buildFederatedSourceDefault() => FederatedSnapshotSource(
     {
       for (final e in bundles.entries)
         e.key: _RuntimeSnapshotSource(e.value.runtime),
@@ -823,6 +978,10 @@ Future<StationWorkRuntime> assembleStationWork({
     // other engine LOUD signal (ADR-0008 D9 / ADR-0012 D2's armed reporter).
     onFlare: (name, data) => transport?.flare(name, data),
   );
+  final work =
+      federatedSourceBuilder?.call(buildDefault: buildFederatedSourceDefault) ??
+      buildFederatedSourceDefault();
+  disposers.add((step: 'federated source dispose', dispose: work.dispose));
   final SnapshotSource stateSource = _RuntimeSnapshotSource(
     stateBundle.runtime,
   );
@@ -844,8 +1003,7 @@ Future<StationWorkRuntime> assembleStationWork({
       stateBdOverride ??
       (dryRun
           ? BdCliService(NoOpBdRunner(substation: stateSubstation))
-          : BdCliService(ProcessBdRunner(workspaceRoot: stateWs.root)));
-  final refusalSink = onRefusal ?? (String m) => stdout.writeln(m);
+          : BdCliService(ProcessBdRunner(workspaceRoot: stateWorkspace.root)));
   final writer = StationBeadWriter(
     bd: bd,
     reader: stateBundle.probeReader,
@@ -865,6 +1023,9 @@ Future<StationWorkRuntime> assembleStationWork({
   // stage1-wiring §2.3 — and the constructor itself starts nothing.
   final provider =
       providerOverride ?? (dryRun ? DryRunProvider() : SubprocessProvider());
+  if (_runtimeProviderDisposer(provider) case final dispose?) {
+    disposers.add((step: 'runtime provider dispose', dispose: dispose));
+  }
 
   late final TrajectoryHarness trajectory;
   final trajectoryAdmissionHalt =
@@ -929,6 +1090,7 @@ Future<StationWorkRuntime> assembleStationWork({
         // subscribes only once LIVE, so a dry arm (disabled) never listens.
         runtimeEvents: provider.events,
       );
+  disposers.add((step: 'trajectory shutdown', dispose: trajectory.shutdown));
   // The harness's ONE derivation layer (stage1-wiring §2), threaded from here
   // to every observation site the design names: ambient over the work subtree
   // via `StationWorkWiring.trajectory`, and by constructor into the four
@@ -1149,6 +1311,10 @@ Future<StationWorkRuntime> assembleStationWork({
     // `clear`), so a dry run is unchanged.
     workSignal: stationWorkSignal(git),
   );
+  disposers.add((
+    step: 'station admission dispose',
+    dispose: services.admission.dispose,
+  ));
 
   // ONE production vendor for BOTH consumers (tg-eli phase 1: reuse, never
   // duplicate): the tree's molecule allocations (`StationWorkWiring`) and the
@@ -1201,7 +1367,7 @@ Future<StationWorkRuntime> assembleStationWork({
     // never-adopt defaults; arming is a deliberate later wire, all-or-nothing.
   );
 
-  final bridge = StationJoinBridge(
+  StationJoinBridge buildJoinBridgeDefault() => StationJoinBridge(
     work: work,
     state: stateSource,
     onUnresolvedCrossLink: unresolvedSink,
@@ -1233,16 +1399,24 @@ Future<StationWorkRuntime> assembleStationWork({
               trajectory.onStepCursorsChanged(listener, fireImmediately: false),
     stepDualRead: stepDualRead,
   );
+  final bridge =
+      joinBridgeBuilder?.call(buildDefault: buildJoinBridgeDefault) ??
+      buildJoinBridgeDefault();
+  disposers.add((step: 'join bridge dispose', dispose: bridge.dispose));
   // The wedge (tg-jwh) flares `station.wedged` through the SAME emit-only
   // transport the engine's other LOUD signals use (ADR-0008 D9 / D-8) — no
   // parallel escalation channel.
-  final driver = StationDriver(
+  StationDriver buildDriverDefault() => StationDriver(
     bridge: bridge,
     registry: resolvedRegistry,
     transport: transport,
     wedgeThreshold: wedgeThreshold,
     wedgePollInterval: wedgePollInterval,
   );
+  final driver =
+      driverBuilder?.call(buildDefault: buildDriverDefault) ??
+      buildDriverDefault();
+  disposers.add((step: 'station driver dispose', dispose: driver.dispose));
 
   final liveResolver = switch (resolver) {
     CircuitResolver(:final rootCircuitFor) => CircuitResolver(
@@ -1296,9 +1470,23 @@ Future<StationWorkRuntime> assembleStationWork({
       await stateBundle.runtime.start();
     },
     sourcesShutdown: () async {
-      await stateBundle.shutdown();
-      await Future.wait(bundles.values.map((b) => b.shutdown()));
-      await work.dispose();
+      await settle(
+        'state bundle shutdown',
+        stateBundle.shutdown,
+        onRefusal: refusalSink,
+      );
+      for (final entry in bundles.entries) {
+        await settle(
+          'work bundle shutdown (${entry.key})',
+          entry.value.shutdown,
+          onRefusal: refusalSink,
+        );
+      }
+      await settle(
+        'federated source dispose',
+        work.dispose,
+        onRefusal: refusalSink,
+      );
     },
     freshnessBarrier: freshnessBarrier,
     syncStats: () => {
@@ -1460,6 +1648,7 @@ class DryRunProvider implements RuntimeProvider {
   final StreamController<RuntimeEvent> _events =
       StreamController<RuntimeEvent>.broadcast();
   final Set<String> _running = <String>{};
+  bool _disposed = false;
 
   /// Every (would-be) spawn name, in call order (for the dry-run report).
   final List<String> wouldSpawn = <String>[];
@@ -1523,6 +1712,14 @@ class DryRunProvider implements RuntimeProvider {
 
   @override
   RuntimeCapabilities get capabilities => RuntimeCapabilities.subprocess;
+
+  /// Releases the dry transport's in-memory sessions and event stream.
+  Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    _running.clear();
+    await _events.close();
+  }
 }
 
 /// The dry-run [StationGitService]: inherits the no-op-runner worktree probe
