@@ -94,8 +94,20 @@ void main() {
       runner = RecordingBdRunner(guardedWriteHelp: 'Flags:\n  --actor string');
       bd = BdCliService(runner);
       runner.exportBeads = const [
-        Bead(id: 'tgdog-one', status: BeadStatus.open),
-        Bead(id: 'tgdog-two', status: BeadStatus.open),
+        Bead(
+          id: 'tgdog-one',
+          status: BeadStatus.open,
+          metadata: {
+            StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor,
+          },
+        ),
+        Bead(
+          id: 'tgdog-two',
+          status: BeadStatus.open,
+          metadata: {
+            StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor,
+          },
+        ),
       ];
 
       await writer().clearRoundAuthoredSpec('tgdog-one');
@@ -121,7 +133,13 @@ void main() {
       runner = RecordingBdRunner(guardedWriteHelp: 'Flags:\n  --actor string');
       bd = BdCliService(runner);
       runner.exportBeads = const [
-        Bead(id: 'tgdog-one', status: BeadStatus.open),
+        Bead(
+          id: 'tgdog-one',
+          status: BeadStatus.open,
+          metadata: {
+            StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor,
+          },
+        ),
       ];
 
       await writer(
@@ -394,6 +412,34 @@ void main() {
     );
 
     test(
+      'writeSpecifyAuthoredSpec stamps specify provenance atomically',
+      () async {
+        await writer().writeSpecifyAuthoredSpec(
+          'tgdog-work1',
+          design: 'a design',
+          acceptanceCriteria: 'the acceptance',
+        );
+
+        final updates = runner.callsFor('update');
+        expect(updates, hasLength(1));
+        expect(updates.single, containsAllInOrder(['--design-file', '-']));
+        expect(runner.stdins.single, 'a design');
+        expect(
+          updates.single,
+          containsAllInOrder(['--acceptance', 'the acceptance']),
+        );
+        expect(
+          jsonDecode(runner.metadataOfUpdate(0)!) as Map<String, dynamic>,
+          {StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor},
+        );
+        expect(runner.everyMutationHasActor, isTrue);
+        expect(runner.calls, hasLength(1));
+        expect(runner.calls.single.first, 'update');
+        expect(runner.neverCalledShow, isTrue);
+      },
+    );
+
+    test(
       'writeOperatorText stamps operator provenance on design and on acceptance',
       () async {
         Future<RecordingBdRunner> write(
@@ -456,43 +502,78 @@ void main() {
       },
     );
 
-    test('clearRoundAuthoredSpec clears an UNSTAMPED spec', () async {
-      runner.exportBeads = const [
-        Bead(
+    test(
+      'clearRoundAuthoredSpec preserves an unstamped spec byte-for-byte and flares',
+      () async {
+        const original = Bead(
           id: 'tgdog-work1',
           status: BeadStatus.open,
-          assignee: 'architect',
-          design: 'retired design',
-          acceptanceCriteria: 'retired acceptance',
-        ),
-      ];
+          assignee: 'governor',
+          description: 'hand-written description',
+          design: 'hand-written design',
+          acceptanceCriteria: 'hand-written acceptance',
+          notes: 'hand-written notes',
+          metadata: {'unrelated': 'value'},
+        );
+        runner.exportBeads = const [original];
 
-      await writer().clearRoundAuthoredSpec('tgdog-work1');
+        await writer().clearRoundAuthoredSpec('tgdog-work1');
 
-      expect(runner.callsFor('export'), isEmpty);
-      final updates = runner.callsFor('update');
-      expect(updates, hasLength(1));
-      final mutation = updates.single;
-      expect(mutation, containsAllInOrder(['update', 'tgdog-work1']));
-      expect(mutation, containsAllInOrder(['--if-assignee', 'architect']));
-      expect(mutation, containsAllInOrder(['--if-status', 'open']));
-      expect(mutation, containsAllInOrder(['--design-file', '-']));
-      expect(runner.stdins.last, '');
-      expect(mutation, containsAllInOrder(['--acceptance', '']));
-      expect(
-        mutation,
-        containsAllInOrder([
-          '--unset-metadata',
-          StationBeadWriter.specAuthorKey,
-        ]),
-      );
-      expect(mutation, isNot(contains('--description')));
-      expect(mutation, isNot(contains('--notes')));
-      expect(mutation, isNot(contains('--append-notes')));
-      expect(runner.everyMutationHasActor, isTrue);
-      expect(runner.neverCalledShow, isTrue);
-      expect(refusals, isEmpty);
-    });
+        expect(runner.callsFor('export'), isEmpty);
+        expect(runner.callsFor('update'), isEmpty);
+        expect(runner.exportBeads.single, original);
+        expect(flares, hasLength(1));
+        expect(flares.single.name, 'rework.specPreserved');
+        expect(flares.single.data, {'beadId': 'tgdog-work1'});
+        expect(runner.neverCalledShow, isTrue);
+      },
+    );
+
+    test(
+      'clearRoundAuthoredSpec clears only specify-authored spec atomically',
+      () async {
+        runner.exportBeads = const [
+          Bead(
+            id: 'tgdog-work1',
+            status: BeadStatus.open,
+            assignee: 'architect',
+            description: 'description survives',
+            design: 'retired design',
+            acceptanceCriteria: 'retired acceptance',
+            notes: 'notes survive',
+            metadata: {
+              StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor,
+            },
+          ),
+        ];
+
+        await writer().clearRoundAuthoredSpec('tgdog-work1');
+
+        expect(runner.callsFor('export'), isEmpty);
+        final updates = runner.callsFor('update');
+        expect(updates, hasLength(1));
+        final mutation = updates.single;
+        expect(mutation, containsAllInOrder(['update', 'tgdog-work1']));
+        expect(mutation, containsAllInOrder(['--if-assignee', 'architect']));
+        expect(mutation, containsAllInOrder(['--if-status', 'open']));
+        expect(mutation, containsAllInOrder(['--design-file', '-']));
+        expect(runner.stdins.last, '');
+        expect(mutation, containsAllInOrder(['--acceptance', '']));
+        expect(
+          mutation,
+          containsAllInOrder([
+            '--unset-metadata',
+            StationBeadWriter.specAuthorKey,
+          ]),
+        );
+        expect(mutation, isNot(contains('--description')));
+        expect(mutation, isNot(contains('--notes')));
+        expect(mutation, isNot(contains('--append-notes')));
+        expect(runner.everyMutationHasActor, isTrue);
+        expect(runner.neverCalledShow, isTrue);
+        expect(refusals, isEmpty);
+      },
+    );
 
     test('guard mismatch surfaces a typed ownership refusal once', () async {
       const guardMismatchEnvelope =
@@ -525,26 +606,37 @@ void main() {
     });
 
     test(
-      'clearRoundAuthoredSpec preserves an operator-authored spec and flares',
+      'clearRoundAuthoredSpec preserves non-specify provenance and flares',
       () async {
-        runner.exportBeads = const [
-          Bead(
-            id: 'tgdog-work1',
-            design: 'operator design',
-            acceptanceCriteria: 'operator acceptance',
-            metadata: {
-              StationBeadWriter.specAuthorKey: StationBeadWriter.operatorAuthor,
-            },
-          ),
-        ];
+        for (final author in const [
+          StationBeadWriter.operatorAuthor,
+          'unrecognized-author',
+        ]) {
+          runner.exportBeads = [
+            Bead(
+              id: 'tgdog-work1',
+              design: '$author design',
+              acceptanceCriteria: '$author acceptance',
+              metadata: {StationBeadWriter.specAuthorKey: author},
+            ),
+          ];
 
-        await writer().clearRoundAuthoredSpec('tgdog-work1');
+          await writer().clearRoundAuthoredSpec('tgdog-work1');
+        }
 
         expect(runner.callsFor('export'), isEmpty);
         expect(runner.callsFor('update'), isEmpty);
-        expect(flares, hasLength(1));
-        expect(flares.single.name, 'rework.specPreserved');
-        expect(flares.single.data, {'beadId': 'tgdog-work1'});
+        expect(flares, hasLength(2));
+        expect(
+          flares,
+          everyElement(
+            isA<({Map<String, String> data, String name})>()
+                .having((flare) => flare.name, 'name', 'rework.specPreserved')
+                .having((flare) => flare.data, 'data', {
+                  'beadId': 'tgdog-work1',
+                }),
+          ),
+        );
         expect(runner.neverCalledShow, isTrue);
       },
     );
