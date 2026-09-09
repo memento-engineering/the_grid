@@ -764,9 +764,20 @@ bool _sameCanonicalRoot(String left, String right) =>
 /// Appends [line] to the owned lifecycle bead identified by [beadId].
 typedef WorkNoteAppender = Future<void> Function(String beadId, String line);
 
-/// Builds a station capability registry over its owned [appendWorkNote] seam.
+/// Writes SPECIFY-authored prose to the owned work bead identified by [beadId].
+typedef SpecifyAuthoredSpecWriter =
+    Future<void> Function(
+      String beadId, {
+      required String design,
+      required String acceptanceCriteria,
+    });
+
+/// Builds a station capability registry over its owned work-write seams.
 typedef CapabilityRegistryBuilder =
-    CapabilityRegistry Function(WorkNoteAppender appendWorkNote);
+    CapabilityRegistry Function(
+      WorkNoteAppender appendWorkNote,
+      SpecifyAuthoredSpecWriter writeSpecifyAuthoredSpec,
+    );
 
 /// Builds one initial station work or state runtime bundle.
 ///
@@ -1327,19 +1338,27 @@ Future<StationWorkRuntime> _acquireStationWork({
     for (final entry in workCommandStores.entries)
       entry.key: entry.value.writer,
   };
+  StationBeadWriter writerForOwnedBead(String beadId) {
+    final ownedPrefix = BeadOwnershipPredicate.ownedPrefixOf(
+      beadId,
+      writersByOwnedPrefix.keys,
+    );
+    return writersByOwnedPrefix[ownedPrefix] ?? writer;
+  }
+
   final resolvedRegistry =
       registry ??
-      registryBuilder?.call((beadId, line) {
-        final ownedPrefix = BeadOwnershipPredicate.ownedPrefixOf(
+      registryBuilder?.call(
+        (beadId, line) => writerForOwnedBead(
           beadId,
-          writersByOwnedPrefix.keys,
-        );
-        return (writersByOwnedPrefix[ownedPrefix] ?? writer).update(
-          beadId,
-          metadata: const {},
-          appendNotes: line,
-        );
-      });
+        ).update(beadId, metadata: const {}, appendNotes: line),
+        (beadId, {required design, required acceptanceCriteria}) =>
+            writerForOwnedBead(beadId).writeSpecifyAuthoredSpec(
+              beadId,
+              design: design,
+              acceptanceCriteria: acceptanceCriteria,
+            ),
+      );
   // --- the transports (ONE dry/live posture, per-seam overrides = tests).
   // The provider itself is built above, beside the trajectory harness that
   // polls it.

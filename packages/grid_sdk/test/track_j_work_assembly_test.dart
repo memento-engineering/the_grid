@@ -28,6 +28,7 @@ class _NullResolver implements SessionResolver {
 
 final class _RecordingBdRunner implements BdRunner {
   final List<List<String>> calls = <List<String>>[];
+  final List<String?> stdins = <String?>[];
 
   @override
   Future<BdResult> run(
@@ -36,6 +37,7 @@ final class _RecordingBdRunner implements BdRunner {
     String? stdin,
   }) async {
     calls.add(List<String>.unmodifiable(args));
+    stdins.add(stdin);
     final id = args.length > 1 ? args[1] : '';
     return BdResult(
       exitCode: 0,
@@ -455,7 +457,7 @@ void main() {
           dryRun: true,
           stateBdOverride: BdCliService(stateRunner),
           workBdOverrides: {'proj': BdCliService(workRunner)},
-          registryBuilder: (appender) {
+          registryBuilder: (appender, _) {
             appendWorkNote = appender;
             return builtRegistry;
           },
@@ -503,6 +505,98 @@ void main() {
       },
     );
 
+    test(
+      'registry builder seam routes specify-authored spec through owned work writer',
+      () async {
+        _seedStore('${tmp.path}/proj', database: 'pow');
+        _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
+        final stateRunner = _RecordingBdRunner();
+        final workRunner = _RecordingBdRunner();
+        late SpecifyAuthoredSpecWriter writeSpecifyAuthoredSpec;
+
+        final work = await assembleStationWork(
+          stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
+          substations: [
+            SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj'),
+          ],
+          resolver: const _NullResolver(),
+          dryRun: true,
+          stateBdOverride: BdCliService(stateRunner),
+          workBdOverrides: {'proj': BdCliService(workRunner)},
+          registryBuilder: (_, specWriter) {
+            writeSpecifyAuthoredSpec = specWriter;
+            return engine.DefaultCapabilityRegistry();
+          },
+        );
+        addTearDown(work.shutdown);
+
+        await writeSpecifyAuthoredSpec(
+          'proj-spec1',
+          design: 'owned design',
+          acceptanceCriteria: 'owned acceptance',
+        );
+
+        expect(workRunner.calls, [
+          <String>[
+            'update',
+            'proj-spec1',
+            '--json',
+            '--actor',
+            'grid-controller',
+            '--design-file',
+            '-',
+            '--acceptance',
+            'owned acceptance',
+            '--set-metadata',
+            'spec.author=specify',
+          ],
+        ]);
+        expect(workRunner.stdins, ['owned design']);
+        expect(stateRunner.calls, isEmpty);
+        expect(stateRunner.stdins, isEmpty);
+      },
+    );
+
+    test(
+      'registry builder seam refuses specify-authored spec for unowned ids',
+      () async {
+        _seedStore('${tmp.path}/proj', database: 'pow');
+        _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
+        final stateRunner = _RecordingBdRunner();
+        final workRunner = _RecordingBdRunner();
+        late SpecifyAuthoredSpecWriter writeSpecifyAuthoredSpec;
+
+        final work = await assembleStationWork(
+          stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
+          substations: [
+            SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj'),
+          ],
+          resolver: const _NullResolver(),
+          dryRun: true,
+          stateBdOverride: BdCliService(stateRunner),
+          workBdOverrides: {'proj': BdCliService(workRunner)},
+          registryBuilder: (_, specWriter) {
+            writeSpecifyAuthoredSpec = specWriter;
+            return engine.DefaultCapabilityRegistry();
+          },
+        );
+        addTearDown(work.shutdown);
+
+        await expectLater(
+          writeSpecifyAuthoredSpec(
+            'foreign-spec1',
+            design: 'refused design',
+            acceptanceCriteria: 'refused acceptance',
+          ),
+          throwsA(isA<OwnershipRefused>()),
+        );
+        expect(stateRunner.calls, isEmpty);
+        expect(stateRunner.stdins, isEmpty);
+        expect(workRunner.calls, isEmpty);
+        expect(workRunner.stdins, isEmpty);
+      },
+    );
+
     test('registry and registryBuilder refuse before assembly', () async {
       var builderCalled = false;
 
@@ -515,7 +609,7 @@ void main() {
           resolver: const _NullResolver(),
           dryRun: true,
           registry: engine.DefaultCapabilityRegistry(),
-          registryBuilder: (_) {
+          registryBuilder: (_, __) {
             builderCalled = true;
             return engine.DefaultCapabilityRegistry();
           },
