@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart';
+import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:path/path.dart' as p;
@@ -17,6 +18,8 @@ import 'settle.dart';
 import 'store_connection.dart';
 import 'station_work.dart';
 
+part 'work_assembly.freezed.dart';
+
 typedef _MemberFactory =
     Future<GridRuntimeBundle> Function(
       BeadsWorkspace workspace,
@@ -27,6 +30,82 @@ typedef _WorkWriterFactory =
       SubstationWorkSpec spec,
       GridRuntimeBundle bundle,
     );
+
+/// The operation a [StationWorkRuntime] is entering during its first start.
+enum StationWorkStartStage {
+  /// Starts the state and work controller sources.
+  sourcesStart,
+
+  /// Starts the trajectory harness.
+  trajectoryStart,
+
+  /// Refuses a trajectory cut paired with a contradictory posture.
+  cutPostureCheck,
+
+  /// Waits for every controller's fresh baseline.
+  freshnessBarrier,
+
+  /// Reconciles worktrees and sessions surviving an earlier station.
+  restartReconcile,
+
+  /// Replays the terminal tail of sessions interrupted during teardown.
+  teardownReplay,
+
+  /// Starts the bridge-owning station driver.
+  driverStart,
+}
+
+/// The immutable lifecycle of one [StationWorkRuntime].
+///
+/// This is a runtime lifecycle only. It is not a `SessionDisposition` and does
+/// not add a session terminal, marker, or disposition arm.
+@freezed
+sealed class StationWorkRuntimeState with _$StationWorkRuntimeState {
+  /// No startup operation has run.
+  const factory StationWorkRuntimeState.notStarted() =
+      StationWorkRuntimeNotStarted;
+
+  /// The first start is entering [stage].
+  const factory StationWorkRuntimeState.starting({
+    required StationWorkStartStage stage,
+  }) = StationWorkRuntimeStarting;
+
+  /// Every startup stage completed.
+  const factory StationWorkRuntimeState.started() = StationWorkRuntimeStarted;
+
+  /// Startup escaped from [stage] with [error] and [stackTrace].
+  const factory StationWorkRuntimeState.failed({
+    required StationWorkStartStage stage,
+    required Object error,
+    required StackTrace stackTrace,
+  }) = StationWorkRuntimeFailed;
+
+  /// Shutdown began; this runtime cannot be started again.
+  const factory StationWorkRuntimeState.shutdown() = StationWorkRuntimeShutdown;
+}
+
+/// A repeated start refused because the first start permanently failed.
+final class StationWorkStartRefused implements Exception {
+  /// Creates a refusal retaining the runtime's identical [failure].
+  const StationWorkStartRefused(this.failure);
+
+  /// The terminal failure that makes resuming side-effecting startup unsafe.
+  final StationWorkRuntimeFailed failure;
+
+  /// The startup operation from which the original failure escaped.
+  StationWorkStartStage get failedStage => failure.stage;
+
+  /// The object thrown by the first start.
+  Object get originalError => failure.error;
+
+  /// The stack captured when the first start failed.
+  StackTrace get originalStackTrace => failure.stackTrace;
+
+  @override
+  String toString() =>
+      'StationWorkStartRefused(stage: $failedStage, '
+      'originalError: $originalError)';
+}
 
 /// One substation's assembly identity — mirrors the `Substation` the author
 /// mounts (same name / ONE root / prefix axes), because the OFF-tree machinery
@@ -226,10 +305,13 @@ class StationWorkRuntime implements SubstationProvisioner {
   /// The federation's per-member freshness vector (D-F3) — capture age +
   /// ready-staleness per work store, never averaged into one scalar.
   Map<String, MemberFreshness> get workFreshness => _workFreshness();
-  bool _started = false;
-  bool _shutdown = false;
+  StationWorkRuntimeState _lifecycle =
+      const StationWorkRuntimeState.notStarted();
   RestartReport? _lastRestartReport;
   TeardownReplayReport? _lastTeardownReplay;
+
+  /// The current immutable runtime lifecycle.
+  StationWorkRuntimeState get lifecycle => _lifecycle;
 
   /// The last boot's TEARDOWN REPLAY report (tg-tlea) — null before [start].
   /// Which sessions were caught mid-teardown and had their positive-terminal
@@ -297,56 +379,96 @@ class StationWorkRuntime implements SubstationProvisioner {
   /// controllers start → the freshness barrier completes → the restart
   /// reconciler reconciles survivors (respawn-or-skip, BEFORE any tree could
   /// blindly respawn) → the bridge starts following. Call BEFORE `runGrid`
-  /// mounts the armed tree. Idempotent.
+  /// mounts the armed tree. Starting and started calls are idempotent; a call
+  /// after a failed first start throws [StationWorkStartRefused].
   Future<void> start() async {
-    if (_started || _shutdown) return;
-    _started = true;
-    await _sourcesStart();
-    // Trajectory up — §1.2 step 2 of stage1-wiring: connect → belt verify →
-    // epoch claim → tick, all inside the harness, which never throws and
-    // never fails the boot (the trajectory can degrade; work cannot, §3).
-    // The catch is the binding rule's last line of defense, not a live path.
+    switch (_lifecycle) {
+      case StationWorkRuntimeNotStarted():
+        break;
+      case StationWorkRuntimeStarting():
+      case StationWorkRuntimeStarted():
+      case StationWorkRuntimeShutdown():
+        return;
+      case final StationWorkRuntimeFailed failure:
+        throw StationWorkStartRefused(failure);
+    }
+
+    var stage = StationWorkStartStage.sourcesStart;
+    _lifecycle = StationWorkRuntimeState.starting(stage: stage);
     try {
-      await trajectory.start();
-    } on Object catch (error) {
-      _onRefusal(
-        'trajectory start failed (station booting legacy-only) — '
-        '$error',
+      await _sourcesStart();
+
+      stage = StationWorkStartStage.trajectoryStart;
+      _lifecycle = StationWorkRuntimeState.starting(stage: stage);
+      // Trajectory up — §1.2 step 2 of stage1-wiring: connect → belt verify →
+      // epoch claim → tick, all inside the harness, which never throws and
+      // never fails the boot (the trajectory can degrade; work cannot, §3).
+      // The catch is the binding rule's last line of defense, not a live path.
+      try {
+        await trajectory.start();
+      } on Object catch (error) {
+        _onRefusal(
+          'trajectory start failed (station booting legacy-only) — '
+          '$error',
+        );
+      }
+
+      stage = StationWorkStartStage.cutPostureCheck;
+      _lifecycle = StationWorkRuntimeState.starting(stage: stage);
+      // The cut is one lever: a caller cannot pair it with a weaker requested
+      // posture. This read belongs after trajectory attachment but before the
+      // freshness/restart rails and tree build, so a contradiction neither
+      // reaches attempt admission nor mints a mount-attempt write. It throws
+      // outside the harness catch because this is a named boot refusal, not a
+      // non-fatal trajectory failure.
+      final cutPostureRefusal = trajectory.config.cutPostureRefusal;
+      if (cutPostureRefusal != null) throw cutPostureRefusal;
+
+      stage = StationWorkStartStage.freshnessBarrier;
+      _lifecycle = StationWorkRuntimeState.starting(stage: stage);
+      await _freshnessBarrier();
+
+      stage = StationWorkStartStage.restartReconcile;
+      _lifecycle = StationWorkRuntimeState.starting(stage: stage);
+      final report = await _restart.reconcile();
+      _lastRestartReport = report;
+      // A DROPPED zombie reap degrades to the pre-reaper behavior (the frontier
+      // still re-mounts the node), so it is never fatal — but an operator MUST
+      // know the cursor still reads `running` over a corpse, because that lie
+      // blinds the wedge monitor and vetoes `grid rework`. LOUD or GONE
+      // (ADR-0008 D3).
+      for (final line in droppedReapReports(report)) {
+        _onRefusal(line);
+      }
+      for (final line in droppedWorkTerminalSettlementReports(report)) {
+        _onRefusal(line);
+      }
+
+      stage = StationWorkStartStage.teardownReplay;
+      _lifecycle = StationWorkRuntimeState.starting(stage: stage);
+      // The TEARDOWN REPLAY (tg-tlea) — the session-driven pass beside the
+      // worktree-driven reconcile above. It runs BEFORE the driver starts so a
+      // session caught mid-teardown is finished off before the tree could mount
+      // anything against it, and it is non-fatal by construction: a replay that
+      // throws must never stop a station from booting.
+      try {
+        _lastTeardownReplay = await _restart.replayTeardownTail();
+      } on Object catch (error) {
+        _onRefusal('teardown replay failed (station still booting) — $error');
+      }
+
+      stage = StationWorkStartStage.driverStart;
+      _lifecycle = StationWorkRuntimeState.starting(stage: stage);
+      _driver.start();
+      _lifecycle = const StationWorkRuntimeState.started();
+    } on Object catch (error, stackTrace) {
+      _lifecycle = StationWorkRuntimeState.failed(
+        stage: stage,
+        error: error,
+        stackTrace: stackTrace,
       );
+      Error.throwWithStackTrace(error, stackTrace);
     }
-    // The cut is one lever: a caller cannot pair it with a weaker requested
-    // posture. This read belongs after trajectory attachment but before the
-    // freshness/restart rails and tree build, so a contradiction neither
-    // reaches attempt admission nor mints a mount-attempt write. It throws
-    // outside the harness catch because this is a named boot refusal, not a
-    // non-fatal trajectory failure.
-    final cutPostureRefusal = trajectory.config.cutPostureRefusal;
-    if (cutPostureRefusal != null) throw cutPostureRefusal;
-    await _freshnessBarrier();
-    final report = await _restart.reconcile();
-    _lastRestartReport = report;
-    // A DROPPED zombie reap degrades to the pre-reaper behavior (the frontier
-    // still re-mounts the node), so it is never fatal — but an operator MUST
-    // know the cursor still reads `running` over a corpse, because that lie
-    // blinds the wedge monitor and vetoes `grid rework`. LOUD or GONE
-    // (ADR-0008 D3).
-    for (final line in droppedReapReports(report)) {
-      _onRefusal(line);
-    }
-    for (final line in droppedWorkTerminalSettlementReports(report)) {
-      _onRefusal(line);
-    }
-    // The TEARDOWN REPLAY (tg-tlea) — the session-driven pass beside the
-    // worktree-driven reconcile above. It runs BEFORE the driver starts so a
-    // session caught mid-teardown is finished off before the tree could mount
-    // anything against it, and it is non-fatal by construction: a replay that
-    // throws must never stop a station from booting.
-    try {
-      _lastTeardownReplay = await _restart.replayTeardownTail();
-    } on Object catch (error) {
-      _onRefusal('teardown replay failed (station still booting) — $error');
-    }
-    _driver.start();
   }
 
   /// The `runGrid(onFlushed:)` hook — the driver's post-flush cooldown +
@@ -563,8 +685,15 @@ class StationWorkRuntime implements SubstationProvisioner {
   /// (effects torn down) — the bridge outlives the tree, never the reverse.
   /// Idempotent.
   Future<void> shutdown() async {
-    if (_shutdown) return;
-    _shutdown = true;
+    switch (_lifecycle) {
+      case StationWorkRuntimeShutdown():
+        return;
+      case StationWorkRuntimeNotStarted():
+      case StationWorkRuntimeStarting():
+      case StationWorkRuntimeStarted():
+      case StationWorkRuntimeFailed():
+        _lifecycle = const StationWorkRuntimeState.shutdown();
+    }
     await settle(
       'station driver dispose',
       _driver.dispose,
