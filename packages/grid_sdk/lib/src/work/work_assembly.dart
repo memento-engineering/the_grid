@@ -764,6 +764,14 @@ bool _sameCanonicalRoot(String left, String right) =>
 /// Appends [line] to the owned lifecycle bead identified by [beadId].
 typedef WorkNoteAppender = Future<void> Function(String beadId, String line);
 
+/// Writes SPECIFY-authored prose to the owned work bead identified by [beadId].
+typedef SpecifyAuthoredSpecWriter =
+    Future<void> Function(
+      String beadId, {
+      required String design,
+      required String acceptanceCriteria,
+    });
+
 /// Builds a station capability registry over its owned [appendWorkNote] seam.
 typedef CapabilityRegistryBuilder =
     CapabilityRegistry Function(WorkNoteAppender appendWorkNote);
@@ -820,6 +828,17 @@ typedef StationWorkDriverBuilder =
 /// resource without acquiring the default; once returned, that resource's
 /// lifetime transfers to this assembly. Null builders invoke their default
 /// exactly once in the existing acquisition order.
+///
+/// [registryBuilder] retains the original one-argument capability seam.
+/// [registryBuilderWithSpecWriter] adds the SPECIFY-authored prose seam without
+/// changing existing consumers. When both builders are supplied, the enhanced
+/// builder is used and the legacy builder is not invoked. A direct [registry]
+/// is mutually exclusive with either builder.
+///
+/// Both capability seams route through the same per-prefix writer used by the
+/// selected dry or live bd runner. The seam therefore keeps the id shape of
+/// the owner that will assert it and introduces no second write discipline
+/// (decision: dry-bd-seam-mints-under-the-owning-prefix).
 /// The default sync FLOOR interval (tg-zd4v): the bounded worst-case refresh
 /// age on the SQL read path, where the working-set probe is edge-triggered
 /// and a quiet store would otherwise never re-capture. Coarse relative to the
@@ -834,6 +853,11 @@ Future<StationWorkRuntime> assembleStationWork({
   required bool dryRun,
   CapabilityRegistry? registry,
   CapabilityRegistryBuilder? registryBuilder,
+  CapabilityRegistry Function(
+    WorkNoteAppender appendWorkNote,
+    SpecifyAuthoredSpecWriter writeSpecifyAuthoredSpec,
+  )?
+  registryBuilderWithSpecWriter,
   int maxConcurrentWork = kDefaultMaxConcurrentWork,
   bool preferSql = true,
   RuntimeProvider? providerOverride,
@@ -855,9 +879,11 @@ Future<StationWorkRuntime> assembleStationWork({
   StationWorkJoinBridgeBuilder? joinBridgeBuilder,
   StationWorkDriverBuilder? driverBuilder,
 }) async {
-  if (registry != null && registryBuilder != null) {
+  if (registry != null &&
+      (registryBuilder != null || registryBuilderWithSpecWriter != null)) {
     throw ArgumentError(
-      'assembleStationWork: registry and registryBuilder are mutually exclusive.',
+      'assembleStationWork: registry is mutually exclusive with '
+      'registryBuilder and registryBuilderWithSpecWriter.',
     );
   }
   if (substations.isEmpty) {
@@ -965,6 +991,7 @@ Future<StationWorkRuntime> assembleStationWork({
       dryRun: dryRun,
       registry: registry,
       registryBuilder: registryBuilder,
+      registryBuilderWithSpecWriter: registryBuilderWithSpecWriter,
       maxConcurrentWork: maxConcurrentWork,
       preferSql: preferSql,
       providerOverride: providerOverride,
@@ -1005,6 +1032,11 @@ Future<StationWorkRuntime> _acquireStationWork({
   required bool dryRun,
   required CapabilityRegistry? registry,
   required CapabilityRegistryBuilder? registryBuilder,
+  required CapabilityRegistry Function(
+    WorkNoteAppender appendWorkNote,
+    SpecifyAuthoredSpecWriter writeSpecifyAuthoredSpec,
+  )?
+  registryBuilderWithSpecWriter,
   required int maxConcurrentWork,
   required bool preferSql,
   required RuntimeProvider? providerOverride,
@@ -1327,19 +1359,33 @@ Future<StationWorkRuntime> _acquireStationWork({
     for (final entry in workCommandStores.entries)
       entry.key: entry.value.writer,
   };
+  StationBeadWriter writerForOwnedBead(String beadId) {
+    final ownedPrefix = BeadOwnershipPredicate.ownedPrefixOf(
+      beadId,
+      writersByOwnedPrefix.keys,
+    );
+    return writersByOwnedPrefix[ownedPrefix] ?? writer;
+  }
+
+  Future<void> appendWorkNote(String beadId, String line) => writerForOwnedBead(
+    beadId,
+  ).update(beadId, metadata: const {}, appendNotes: line);
+  Future<void> writeSpecifyAuthoredSpec(
+    String beadId, {
+    required String design,
+    required String acceptanceCriteria,
+  }) => writerForOwnedBead(beadId).writeSpecifyAuthoredSpec(
+    beadId,
+    design: design,
+    acceptanceCriteria: acceptanceCriteria,
+  );
   final resolvedRegistry =
       registry ??
-      registryBuilder?.call((beadId, line) {
-        final ownedPrefix = BeadOwnershipPredicate.ownedPrefixOf(
-          beadId,
-          writersByOwnedPrefix.keys,
-        );
-        return (writersByOwnedPrefix[ownedPrefix] ?? writer).update(
-          beadId,
-          metadata: const {},
-          appendNotes: line,
-        );
-      });
+      registryBuilderWithSpecWriter?.call(
+        appendWorkNote,
+        writeSpecifyAuthoredSpec,
+      ) ??
+      registryBuilder?.call(appendWorkNote);
   // --- the transports (ONE dry/live posture, per-seam overrides = tests).
   // The provider itself is built above, beside the trajectory harness that
   // polls it.

@@ -1142,7 +1142,9 @@ void main() {
       final signatureEnd = source.indexOf('}) async {', signatureStart);
       final signature = source.substring(signatureStart, signatureEnd);
       final parameters = RegExp(
-        r'\b(\w+)(?:\s*=.*)?,$',
+        // Top-level parameters only: a function-typed parameter's own
+        // parameter lines are indented deeper and end with a comma too.
+        r'^  (?:\S.*?\s)?(\w+)(?:\s*=.*)?,$',
         multiLine: true,
       ).allMatches(signature).map((match) => match.group(1)).toList();
       expect(parameters, [
@@ -1152,6 +1154,7 @@ void main() {
         'dryRun',
         'registry',
         'registryBuilder',
+        'registryBuilderWithSpecWriter',
         'maxConcurrentWork',
         'preferSql',
         'providerOverride',

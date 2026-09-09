@@ -246,6 +246,9 @@ class StationBeadWriter {
   /// Content-provenance marker for work-bead specification fields.
   static const String specAuthorKey = 'spec.author';
 
+  /// Marker value written by [writeSpecifyAuthoredSpec].
+  static const String specifyAuthor = 'specify';
+
   /// Marker value written for operator-authored specification fields.
   static const String operatorAuthor = 'operator';
 
@@ -1223,11 +1226,34 @@ class StationBeadWriter {
     });
   }
 
-  /// Clears round-authored spec fields on an owned WORK bead before rework.
+  /// Writes SPECIFY-authored fields and their provenance atomically.
   ///
-  /// Only provenance stamped by [writeOperatorText] is preserved and
-  /// signalled. Unstamped or otherwise-authored specs belong to the retired
-  /// round. Description and notes are always untouched.
+  /// A hand-authored `bd update --design` does not stamp [specAuthorKey].
+  /// Therefore only this method establishes SPECIFY provenance; once rework
+  /// clears the prior marker, a later operator overwrite is preserved.
+  Future<void> writeSpecifyAuthoredSpec(
+    String id, {
+    required String design,
+    required String acceptanceCriteria,
+  }) async {
+    _assertOwned('writeSpecifyAuthoredSpec', id, const {});
+    return _serialized(
+      id,
+      () => _updateBead(
+        'writeSpecifyAuthoredSpec',
+        id,
+        design: design,
+        acceptanceCriteria: acceptanceCriteria,
+        mergeMetadata: const {specAuthorKey: specifyAuthor},
+      ),
+    );
+  }
+
+  /// Clears only currently SPECIFY-authored spec fields on an owned WORK bead
+  /// before rework.
+  ///
+  /// Operator-authored or unknown provenance is preserved and signalled;
+  /// description and notes are always untouched.
   Future<void> clearRoundAuthoredSpec(String id) async {
     _assertOwned('clearRoundAuthoredSpec', id, const {});
     return _serialized(id, () async {
@@ -1236,7 +1262,7 @@ class StationBeadWriter {
         types: {...IssueType.coreTypes, ...GridIssueTypes.all},
       );
       final author = bead?.metadata[specAuthorKey] as String?;
-      if (author == operatorAuthor) {
+      if (author != specifyAuthor) {
         _flare('rework.specPreserved', {'beadId': id});
         return;
       }
