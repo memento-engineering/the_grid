@@ -50,6 +50,10 @@ class AgentEnvAllowlist {
     'LC_CTYPE',
     'XDG_CONFIG_HOME',
     'XDG_STATE_HOME',
+    // The wired device a live-device e2e run drives (lenny's `e2e` Command
+    // reads it in preflight). A machine FACT, not a credential — carried by
+    // exact name like the AWS region keys, never as a prefix.
+    'LEONARD_E2E_DEVICE',
   ];
 
   /// Provider-credential env-var name **prefixes** — the only wildcards.
@@ -69,6 +73,10 @@ class AgentEnvAllowlist {
     'MISTRAL_',
     'OLLAMA_',
     'OPENAI_',
+    // A the_grid ADDITION to gc's list: the local swift-infer inference server
+    // (endpoint, agent token, model id). An inference provider like OLLAMA_;
+    // its token is a provider credential and rides the same boundary.
+    'SWIFT_INFER_',
     'OPENROUTER_',
     'TOGETHER_',
     'VERTEX_',
