@@ -1,3 +1,7 @@
+## 0.2.0-rc.18
+
+- Added: `AgentEnvAllowlist` forwards `SWIFT_INFER_*` (the local swift-infer inference server: endpoint, agent token, model id — a provider-credential prefix beside `OLLAMA_`) and the exact key `LEONARD_E2E_DEVICE` (the wired device a live-device e2e run drives, a machine fact carried by name like the AWS region keys). Every other ambient variable stays behind the boundary; lenny's live-device `e2e` preflight can now see what the resident carries (#391).
+
 ## 0.2.0-rc.17
 
 - Fixed: rework preserves only OPERATOR-authored spec text; a specify-authored design and acceptance are cleared at the re-key so a retired round's contradictions do not ride into the next round (tg-3u1h, #376).
