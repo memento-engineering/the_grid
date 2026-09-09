@@ -11,6 +11,95 @@ final class _ConstructionFailure implements Exception {
   const _ConstructionFailure();
 }
 
+final class _EmptySnapshotReader implements SnapshotReader {
+  const _EmptySnapshotReader();
+
+  @override
+  Future<GraphSnapshot> read() async => GraphSnapshot.fromParts(
+    beads: const [],
+    dependencies: const [],
+    readyIds: const [],
+    capturedAt: DateTime.utc(2026, 9, 9),
+  );
+}
+
+final class _EmptyBeadProbeReader implements BeadProbeReader {
+  const _EmptyBeadProbeReader();
+
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) async =>
+      null;
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) async => const [];
+
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) async => const [];
+}
+
+final class _GatedGridControllerRuntime extends GridControllerRuntime {
+  _GatedGridControllerRuntime({
+    required this.label,
+    required List<String> events,
+    this.startGate,
+  }) : record = events,
+       super(reader: const _EmptySnapshotReader(), dirtySources: const []);
+
+  final String label;
+  final List<String> record;
+  final Completer<void>? startGate;
+  final Completer<void> startEntered = Completer<void>();
+  var startCalls = 0;
+  var requeryCalls = 0;
+  var disposeCalls = 0;
+
+  @override
+  Future<void> start() async {
+    startCalls++;
+    record.add('$label source start');
+    if (!startEntered.isCompleted) startEntered.complete();
+    final gate = startGate;
+    if (gate != null) await gate.future;
+    await super.start();
+  }
+
+  @override
+  Future<void> requery() {
+    requeryCalls++;
+    record.add('$label freshness barrier');
+    return super.requery();
+  }
+
+  @override
+  Future<void> dispose() async {
+    disposeCalls++;
+    await super.dispose();
+  }
+}
+
+GridRuntimeBundle _controllerBundle({
+  required _GatedGridControllerRuntime runtime,
+  required List<String> events,
+  required String shutdownEvent,
+}) {
+  var shutdown = false;
+  return GridRuntimeBundle(
+    runtime: runtime,
+    probeReader: const _EmptyBeadProbeReader(),
+    readPath: ReadPath.cli,
+    shutdown: () async {
+      if (shutdown) return;
+      shutdown = true;
+      events.add(shutdownEvent);
+      await runtime.dispose();
+    },
+  );
+}
+
 final class _NullResolver implements SessionResolver {
   const _NullResolver();
 
@@ -78,6 +167,8 @@ final class _RecordingJoinBridge implements StationJoinBridge {
   final JoinedSnapshot _latest;
   bool _started = false;
   bool _disposed = false;
+  var startCalls = 0;
+  var disposeCalls = 0;
 
   @override
   JoinedSnapshot get latest => _latest;
@@ -86,6 +177,7 @@ final class _RecordingJoinBridge implements StationJoinBridge {
   void start() {
     if (_started || _disposed) return;
     _started = true;
+    startCalls++;
   }
 
   @override
@@ -98,8 +190,60 @@ final class _RecordingJoinBridge implements StationJoinBridge {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    disposeCalls++;
     events.add('join bridge dispose');
     notifier.dispose();
+  }
+}
+
+final class _RecordingStartDriver extends StationDriver {
+  _RecordingStartDriver({required super.bridge, required this.events});
+
+  final List<String> events;
+  var startCalls = 0;
+  var disposeCalls = 0;
+
+  @override
+  void start() {
+    startCalls++;
+    events.add('station driver start');
+    super.start();
+  }
+
+  @override
+  void dispose() {
+    disposeCalls++;
+    events.add('station driver dispose');
+    super.dispose();
+  }
+}
+
+final class _StartThrowingRecordingDriver extends StationDriver {
+  _StartThrowingRecordingDriver({
+    required super.bridge,
+    required this.events,
+    required this.error,
+    required this.stackTrace,
+  });
+
+  final List<String> events;
+  final Object error;
+  final StackTrace stackTrace;
+  var startCalls = 0;
+  var disposeCalls = 0;
+
+  @override
+  void start() {
+    startCalls++;
+    events.add('station driver start');
+    Error.throwWithStackTrace(error, stackTrace);
+  }
+
+  @override
+  void dispose() {
+    disposeCalls++;
+    events.add('station driver dispose');
+    super.dispose();
   }
 }
 
@@ -185,9 +329,14 @@ void _seedStore(String dir, {required String database}) {
   ).writeAsStringSync('{"dolt_mode":"embedded","dolt_database":"$database"}');
 }
 
-Future<TrajectoryHarness> _recordingTrajectory(List<String> events) async {
+Future<TrajectoryHarness> _recordingTrajectory(
+  List<String> events, {
+  TrajectoryConfig config = const TrajectoryConfig(
+    mode: TrajectoryConfigMode.required,
+  ),
+}) async {
   final harness = await TrajectoryHarness.build(
-    config: const TrajectoryConfig(mode: TrajectoryConfigMode.required),
+    config: config,
     gridHome: '/unwind-test',
     station: 'state',
     connect: () async => throw StateError('offline test trajectory'),
@@ -335,6 +484,37 @@ void main() {
         events.add('construction failure');
         Error.throwWithStackTrace(failure, stackTrace);
       },
+    );
+
+    Future<StationWorkRuntime> assembleRecordingRuntime({
+      required GridRuntimeBundle workBundle,
+      required GridRuntimeBundle stateBundle,
+      required _RecordingProvider provider,
+      required TrajectoryHarness trajectory,
+      required _RecordingFederatedSource federated,
+      required _RecordingJoinBridge bridge,
+      required StationWorkDriverBuilder driverBuilder,
+      TrajectoryConfig trajectoryConfig = const TrajectoryConfig(),
+    }) => assembleStationWork(
+      stateStore: GridStateStore.forGridRoot('${temporary.path}/home'),
+      substations: [
+        SubstationWorkSpec(name: 'first', root: '${temporary.path}/first'),
+      ],
+      resolver: const _NullResolver(),
+      dryRun: true,
+      preferSql: false,
+      providerOverride: provider,
+      trajectoryConfig: trajectoryConfig,
+      trajectoryOverride: trajectory,
+      bundleBuilder:
+          ({
+            required storeName,
+            required workspace,
+            required buildDefault,
+          }) async => storeName == 'state' ? stateBundle : workBundle,
+      federatedSourceBuilder: ({required buildDefault}) => federated,
+      joinBridgeBuilder: ({required buildDefault}) => bridge,
+      driverBuilder: driverBuilder,
     );
 
     test(
@@ -507,6 +687,275 @@ void main() {
       },
     );
 
+    test('cut refusal records the failed stage and original error', () async {
+      final events = <String>[];
+      final workSource = _GatedGridControllerRuntime(
+        label: 'work',
+        events: events,
+      );
+      final stateSource = _GatedGridControllerRuntime(
+        label: 'state',
+        events: events,
+      );
+      final workBundle = _controllerBundle(
+        runtime: workSource,
+        events: events,
+        shutdownEvent: 'work bundle shutdown (first)',
+      );
+      final stateBundle = _controllerBundle(
+        runtime: stateSource,
+        events: events,
+        shutdownEvent: 'state bundle shutdown',
+      );
+      final provider = _RecordingProvider(events);
+      final trajectory = await _recordingTrajectory(
+        events,
+        config: const TrajectoryConfig(
+          discipline: TrajectoryDiscipline.cut,
+          dualRead: DualReadMode.observe,
+        ),
+      );
+      final federated = _RecordingFederatedSource(events);
+      final bridge = _RecordingJoinBridge(events);
+      late _RecordingStartDriver driver;
+      final runtime = await assembleRecordingRuntime(
+        workBundle: workBundle,
+        stateBundle: stateBundle,
+        provider: provider,
+        trajectory: trajectory,
+        federated: federated,
+        bridge: bridge,
+        driverBuilder: ({required buildDefault}) =>
+            driver = _RecordingStartDriver(bridge: bridge, events: events),
+      );
+      addTearDown(runtime.shutdown);
+
+      Object? caught;
+      StackTrace? caughtStack;
+      try {
+        await runtime.start();
+      } on Object catch (error, stackTrace) {
+        caught = error;
+        caughtStack = stackTrace;
+      }
+
+      expect(caught, isA<CutPostureRefused>());
+      final failure = runtime.lifecycle as StationWorkRuntimeFailed;
+      expect(failure.stage, StationWorkStartStage.cutPostureCheck);
+      expect(failure.error, same(caught));
+      expect(failure.stackTrace, same(caughtStack));
+      expect(driver.startCalls, 0);
+    });
+
+    test('start exposes sources progress and successful idempotence', () async {
+      final events = <String>[];
+      final sourceGate = Completer<void>();
+      final workSource = _GatedGridControllerRuntime(
+        label: 'work',
+        events: events,
+        startGate: sourceGate,
+      );
+      final stateSource = _GatedGridControllerRuntime(
+        label: 'state',
+        events: events,
+      );
+      final workBundle = _controllerBundle(
+        runtime: workSource,
+        events: events,
+        shutdownEvent: 'work bundle shutdown (first)',
+      );
+      final stateBundle = _controllerBundle(
+        runtime: stateSource,
+        events: events,
+        shutdownEvent: 'state bundle shutdown',
+      );
+      final provider = _RecordingProvider(events);
+      final trajectory = await _recordingTrajectory(events);
+      final federated = _RecordingFederatedSource(events);
+      final bridge = _RecordingJoinBridge(events);
+      late _RecordingStartDriver driver;
+      final runtime = await assembleRecordingRuntime(
+        workBundle: workBundle,
+        stateBundle: stateBundle,
+        provider: provider,
+        trajectory: trajectory,
+        federated: federated,
+        bridge: bridge,
+        driverBuilder: ({required buildDefault}) =>
+            driver = _RecordingStartDriver(bridge: bridge, events: events),
+      );
+      addTearDown(() async {
+        if (!sourceGate.isCompleted) sourceGate.complete();
+        await runtime.shutdown();
+      });
+      events.clear();
+
+      expect(runtime.lifecycle, isA<StationWorkRuntimeNotStarted>());
+      final starting = runtime.start();
+      await workSource.startEntered.future;
+      expect(
+        runtime.lifecycle,
+        const StationWorkRuntimeState.starting(
+          stage: StationWorkStartStage.sourcesStart,
+        ),
+      );
+      expect(runtime.lifecycle, isNot(isA<StationWorkRuntimeStarted>()));
+
+      sourceGate.complete();
+      await starting;
+      expect(runtime.lifecycle, isA<StationWorkRuntimeStarted>());
+      expect(workSource.startCalls, 1);
+      expect(stateSource.startCalls, 1);
+      expect(driver.startCalls, 1);
+      expect(bridge.startCalls, 1);
+
+      final firstStartEvents = List<String>.of(events);
+      await runtime.start();
+      expect(runtime.lifecycle, isA<StationWorkRuntimeStarted>());
+      expect(events, firstStartEvents);
+      expect(workSource.startCalls, 1);
+      expect(stateSource.startCalls, 1);
+      expect(driver.startCalls, 1);
+    });
+
+    test(
+      'failed start refuses retry and shutdown unwinds acquired resources',
+      () async {
+        final events = <String>[];
+        final workSource = _GatedGridControllerRuntime(
+          label: 'work',
+          events: events,
+        );
+        final stateSource = _GatedGridControllerRuntime(
+          label: 'state',
+          events: events,
+        );
+        final workBundle = _controllerBundle(
+          runtime: workSource,
+          events: events,
+          shutdownEvent: 'work bundle shutdown (first)',
+        );
+        final stateBundle = _controllerBundle(
+          runtime: stateSource,
+          events: events,
+          shutdownEvent: 'state bundle shutdown',
+        );
+        final provider = _RecordingProvider(events);
+        const cutConfig = TrajectoryConfig(
+          discipline: TrajectoryDiscipline.cut,
+        );
+        final trajectory = await _recordingTrajectory(
+          events,
+          config: cutConfig,
+        );
+        final federated = _RecordingFederatedSource(events);
+        final bridge = _RecordingJoinBridge(events);
+        final originalError = StateError('driver start exploded');
+        final originalStackTrace = StackTrace.current;
+        late _StartThrowingRecordingDriver driver;
+        final runtime = await assembleRecordingRuntime(
+          workBundle: workBundle,
+          stateBundle: stateBundle,
+          provider: provider,
+          trajectory: trajectory,
+          federated: federated,
+          bridge: bridge,
+          trajectoryConfig: cutConfig,
+          driverBuilder: ({required buildDefault}) =>
+              driver = _StartThrowingRecordingDriver(
+                bridge: bridge,
+                events: events,
+                error: originalError,
+                stackTrace: originalStackTrace,
+              ),
+        );
+        var admissionInvalidations = 0;
+        runtime.wiring.services.admission.addInvalidationListener(
+          () => admissionInvalidations++,
+        );
+        events.clear();
+
+        Object? caught;
+        StackTrace? caughtStack;
+        try {
+          await runtime.start();
+        } on Object catch (error, stackTrace) {
+          caught = error;
+          caughtStack = stackTrace;
+        }
+
+        expect(caught, same(originalError));
+        expect(caughtStack, same(originalStackTrace));
+        final failure = runtime.lifecycle as StationWorkRuntimeFailed;
+        expect(failure.stage, StationWorkStartStage.driverStart);
+        expect(failure.error, same(originalError));
+        expect(failure.stackTrace, same(originalStackTrace));
+        final restartReport = runtime.lastRestartReport;
+        final replayReport = runtime.lastTeardownReplay;
+        final firstStartEvents = List<String>.of(events);
+
+        StationWorkStartRefused? refused;
+        try {
+          await runtime.start();
+        } on StationWorkStartRefused catch (error) {
+          refused = error;
+        }
+        expect(refused, isNotNull);
+        expect(refused!.failure, same(failure));
+        expect(refused.failedStage, StationWorkStartStage.driverStart);
+        expect(refused.originalError, same(originalError));
+        expect(refused.originalStackTrace, same(originalStackTrace));
+        expect(
+          refused.toString(),
+          'StationWorkStartRefused('
+          'stage: StationWorkStartStage.driverStart, '
+          'originalError: Bad state: driver start exploded)',
+        );
+        expect(runtime.lifecycle, same(failure));
+        expect(runtime.lastRestartReport, same(restartReport));
+        expect(runtime.lastTeardownReplay, same(replayReport));
+        expect(events, firstStartEvents);
+        expect(workSource.startCalls, 1);
+        expect(stateSource.startCalls, 1);
+        expect(driver.startCalls, 1);
+
+        events.clear();
+        await runtime.shutdown();
+        await runtime.shutdown();
+
+        expect(runtime.lifecycle, isA<StationWorkRuntimeShutdown>());
+        expect(events, [
+          'station driver dispose',
+          'join bridge dispose',
+          'trajectory.shutdown',
+          'runtime provider dispose',
+          'state bundle shutdown',
+          'work bundle shutdown (first)',
+          'federated source dispose',
+        ]);
+        expect(driver.disposeCalls, 1);
+        expect(bridge.disposeCalls, 1);
+        expect(provider.disposeCalls, 1);
+        expect(stateSource.disposeCalls, 1);
+        expect(workSource.disposeCalls, 1);
+        expect(federated.disposeCalls, 1);
+
+        final admissionHalt = runtime.wiring.trajectory!.admissionHalt!;
+        expect(
+          admissionHalt.latch(
+            reason: 'post-shutdown probe',
+            recordClass: 'test',
+          ),
+          isTrue,
+        );
+        expect(
+          admissionInvalidations,
+          0,
+          reason: 'shutdown disposed admission and removed its halt listener',
+        );
+      },
+    );
+
     test(
       'shutdown settles throwing driver and admission disposers once',
       () async {
@@ -660,6 +1109,30 @@ void main() {
         expect(federated.disposeCalls, 1);
       },
     );
+
+    test('start order remains pinned', () {
+      final source = File('lib/src/work/work_assembly.dart').readAsStringSync();
+      final start = source.indexOf('  Future<void> start() async {');
+      final end = source.indexOf('  /// The `runGrid(onFlushed:)` hook', start);
+      expect(start, greaterThanOrEqualTo(0));
+      expect(end, greaterThan(start));
+      final body = source.substring(start, end);
+
+      var cursor = 0;
+      for (final operation in [
+        'await _sourcesStart();',
+        'await trajectory.start();',
+        'trajectory.config.cutPostureRefusal',
+        'await _freshnessBarrier();',
+        'await _restart.reconcile();',
+        'await _restart.replayTeardownTail();',
+        '_driver.start();',
+      ]) {
+        final next = body.indexOf(operation, cursor);
+        expect(next, greaterThanOrEqualTo(cursor), reason: operation);
+        cursor = next + operation.length;
+      }
+    });
 
     test('public assembly signature and acquisition order stay pinned', () {
       final source = File('lib/src/work/work_assembly.dart').readAsStringSync();
