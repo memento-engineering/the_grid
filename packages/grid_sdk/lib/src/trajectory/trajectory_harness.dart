@@ -11,9 +11,9 @@
 ///
 ///   * **Non-fatal with a narrow acknowledgement seam.** [enqueue] remains
 ///     synchronous for ordinary observations. The five decision-bearing
-///     recorder sites alone await [appendAcked], which has a one-tick queue-wait
-///     bound and a sealed disposition. Boot and clean-down retain their
-///     existing awaits.
+///     recorder sites alone await [appendAcked], whose queue wait has a
+///     one-tick writer-stall detector, a 60-tick residence cap, and a sealed
+///     disposition. Boot and clean-down retain their existing awaits.
 ///   * **The trajectory can degrade without crashing work** (§3). [start] and
 ///     [shutdown] catch everything: a failed connect, verify, or claim records
 ///     a mode + cause. Under cut, a lost decision record halts fresh admission
@@ -80,6 +80,11 @@ const String kTrajectoryDatabase = 'trajectory';
 /// window drop-and-count exactly like a failed reconnect.
 const Duration kReconnectDebounce = Duration(seconds: 5);
 
+/// A progressing producer burst still cannot hold an acknowledged request in
+/// the queue forever. This is deliberately a fixed safety invariant rather
+/// than operator configuration.
+const int _kAckQueueResidenceTicks = 60;
+
 /// One derived record awaiting the single writer (§2.5). Constructed by the
 /// engine-side derivation layer, never by the harness — the extraction
 /// boundary keeps record vocabulary out of the mechanics.
@@ -111,10 +116,12 @@ final class TrajectoryAppendRequest {
 }
 
 final class _TrajectoryQueueEntry {
-  _TrajectoryQueueEntry(this.request, [this.completer]);
+  _TrajectoryQueueEntry(this.request, {this.completer, this.ackQueuedAt})
+    : assert((completer == null) == (ackQueuedAt == null));
 
   final TrajectoryAppendRequest request;
   final Completer<TrajectoryAppendResult>? completer;
+  final DateTime? ackQueuedAt;
   Timer? deadline;
   bool settled = false;
 }
@@ -475,6 +482,7 @@ class TrajectoryHarness {
   final Queue<_TrajectoryQueueEntry> _queue = Queue<_TrajectoryQueueEntry>();
   bool _writerActive = false;
   Future<void> _writerDone = Future<void>.value();
+  DateTime? _lastWriterProgressAt;
 
   /// The attempt id of the request the writer loop is CURRENTLY appending —
   /// the hole a queue-only "is an append pending" read would have, because the
@@ -1237,16 +1245,19 @@ class TrajectoryHarness {
   }
 
   /// Enqueues a decision-bearing observation and always completes with its
-  /// committed, lost, or posture-suppressed disposition. The one-tick
-  /// deadline bounds only residence in the queue; the appender's sealed
-  /// outcome and store deadline own completion after dequeue.
+  /// committed, lost, or posture-suppressed disposition. While queued, a
+  /// one-tick deadline detects a writer that has made no progress and re-arms
+  /// after recent progress, up to a fixed 60-tick residence cap. The
+  /// appender's sealed outcome and store deadline own completion after
+  /// dequeue.
   Future<TrajectoryAppendResult> appendAcked(TrajectoryAppendRequest request) {
     final completer = Completer<TrajectoryAppendResult>();
-    final entry = _TrajectoryQueueEntry(request, completer);
-    entry.deadline = _scheduleTimer(
-      config.tickInterval,
-      () => _onAckDeadline(entry),
+    final entry = _TrajectoryQueueEntry(
+      request,
+      completer: completer,
+      ackQueuedAt: _clock(),
     );
+    _armAckDeadline(entry);
     _submit(entry);
     return completer.future;
   }
@@ -1290,8 +1301,27 @@ class TrajectoryHarness {
     }
   }
 
+  void _armAckDeadline(_TrajectoryQueueEntry entry) {
+    _cancelAckDeadline(entry);
+    entry.deadline = _scheduleTimer(
+      config.tickInterval,
+      () => _onAckDeadline(entry),
+    );
+  }
+
   void _onAckDeadline(_TrajectoryQueueEntry entry) {
-    if (entry.settled || !_queue.remove(entry)) return;
+    if (entry.settled || !_queue.contains(entry)) return;
+    final now = _clock();
+    if (now.difference(entry.ackQueuedAt!) <
+        config.tickInterval * _kAckQueueResidenceTicks) {
+      final lastProgress = _lastWriterProgressAt;
+      if (lastProgress != null &&
+          now.difference(lastProgress) < config.tickInterval) {
+        _armAckDeadline(entry);
+        return;
+      }
+    }
+    _queue.remove(entry);
     const reason = 'append acknowledgement deadline';
     _drop(entry, reason);
     _flareLimited(
@@ -1317,6 +1347,7 @@ class TrajectoryHarness {
         final entry = _queue.removeFirst();
         _cancelAckDeadline(entry);
         await _appendOne(entry);
+        _lastWriterProgressAt = _clock();
       }
     } finally {
       _writerActive = false;

@@ -887,6 +887,211 @@ void main() {
       expect(committed, isA<Acked>());
     });
 
+    test('progressing writer re-arms queued acknowledgements instead of '
+        'dropping them', () async {
+      const interval = Duration(seconds: 5);
+      final controlled = [
+        for (var i = 0; i < 5; i++) Completer<AppendOutcome>(),
+      ];
+      appender.appendFutures.addAll(
+        controlled.map((completion) => completion.future),
+      );
+      final h = await harness(
+        config: const TrajectoryConfig(
+          mode: TrajectoryConfigMode.required,
+          dualRead: DualReadMode.observe,
+          tickInterval: interval,
+        ),
+      );
+      await h.start();
+
+      final requests = [
+        _note(0),
+        for (var i = 1; i <= 4; i++) _note(i, decisionBearing: true),
+      ];
+      h.enqueue(requests.first);
+      final timerStart = timers.length;
+      final pending = [
+        for (final request in requests.skip(1)) h.appendAcked(request),
+      ];
+      await pumpEventQueue();
+
+      for (var i = 0; i < controlled.length; i++) {
+        now = now.add(interval);
+        controlled[i].complete(
+          Appended(
+            recordId: 'progress-${i + 1}',
+            seq: i + 1,
+            epochSeq: i + 1,
+            envelope: committedEnvelope(
+              requests[i].record,
+              recordId: 'progress-${i + 1}',
+            ),
+          ),
+        );
+        await pumpEventQueue();
+
+        final activeDeadlines = timers
+            .skip(timerStart)
+            .where((entry) => entry.$3.isActive)
+            .toList(growable: false);
+        for (final deadline in activeDeadlines) {
+          deadline.$2();
+        }
+        await pumpEventQueue();
+      }
+
+      expect(await Future.wait(pending), everyElement(isA<Acked>()));
+      expect(appender.records, hasLength(requests.length));
+      for (var i = 0; i < requests.length; i++) {
+        expect(appender.records[i], same(requests[i].record));
+      }
+      expect(h.status.decisionBearingDropped, 0);
+      expect(h.status.fireAndForgetDropped, 0);
+      expect(flareNames(), isNot(contains('trajectory.dualReadCompromised')));
+      expect(flareNames(), isNot(contains('trajectory.admissionHalted')));
+    });
+
+    test(
+      'stalled writer drops a queued acknowledgement after one tick',
+      () async {
+        const interval = Duration(seconds: 5);
+        final blocked = Completer<AppendOutcome>();
+        appender.appendFutures.add(blocked.future);
+        final h = await harness(
+          config: const TrajectoryConfig(
+            mode: TrajectoryConfigMode.required,
+            dualRead: DualReadMode.observe,
+            tickInterval: interval,
+          ),
+        );
+        await h.start();
+
+        final leader = _note(0);
+        h.enqueue(leader);
+        await pumpEventQueue();
+        final target = _note(1, decisionBearing: true);
+        final pending = h.appendAcked(target);
+        final deadline = timers.last;
+        final timerCount = timers.length;
+
+        now = now.add(interval);
+        deadline.$2();
+
+        expect(await pending, isA<Dropped>());
+        expect(h.status.decisionBearingDropped, 1);
+        expect(h.status.fireAndForgetDropped, 0);
+        expect(
+          timers,
+          hasLength(timerCount),
+          reason: 'the stall must not re-arm',
+        );
+        final dropFlare = flares.singleWhere(
+          (entry) => entry.$1 == 'trajectory.appendDropped',
+        );
+        expect(dropFlare.$2['reason'], 'append acknowledgement deadline');
+
+        blocked.complete(
+          Appended(
+            recordId: 'released-leader',
+            seq: 1,
+            epochSeq: 1,
+            envelope: committedEnvelope(
+              leader.record,
+              recordId: 'released-leader',
+            ),
+          ),
+        );
+        await h.runToFixpoint();
+        expect(
+          appender.records.any((record) => identical(record, target.record)),
+          isFalse,
+        );
+      },
+    );
+
+    test('progressing writer still drops an acknowledgement at the 60-tick '
+        'residence cap', () async {
+      const interval = Duration(seconds: 5);
+      final predecessors = [for (var i = 0; i < 61; i++) _note(i)];
+      final controlled = [
+        for (var i = 0; i < predecessors.length; i++)
+          Completer<AppendOutcome>(),
+      ];
+      appender.appendFutures.addAll(
+        controlled.map((completion) => completion.future),
+      );
+      final h = await harness(
+        config: const TrajectoryConfig(
+          mode: TrajectoryConfigMode.required,
+          dualRead: DualReadMode.observe,
+          tickInterval: interval,
+          queueBound: 128,
+        ),
+      );
+      await h.start();
+
+      for (final predecessor in predecessors) {
+        h.enqueue(predecessor);
+      }
+      final target = _note(61, decisionBearing: true);
+      final pending = h.appendAcked(target);
+      var deadline = timers.last;
+      await pumpEventQueue();
+
+      for (var i = 0; i < 60; i++) {
+        now = now.add(interval);
+        controlled[i].complete(
+          Appended(
+            recordId: 'predecessor-${i + 1}',
+            seq: i + 1,
+            epochSeq: i + 1,
+            envelope: committedEnvelope(
+              predecessors[i].record,
+              recordId: 'predecessor-${i + 1}',
+            ),
+          ),
+        );
+        await pumpEventQueue();
+
+        final timerCount = timers.length;
+        deadline.$2();
+        if (i < 59) {
+          expect(h.status.decisionBearingDropped, 0);
+          expect(timers, hasLength(timerCount + 1));
+          deadline = timers.last;
+        } else {
+          expect(timers, hasLength(timerCount));
+        }
+      }
+
+      expect(await pending, isA<Dropped>());
+      expect(h.status.decisionBearingDropped, 1);
+      expect(h.status.fireAndForgetDropped, 0);
+      expect(appender.records, hasLength(61));
+      expect(
+        appender.records.any((record) => identical(record, target.record)),
+        isFalse,
+      );
+
+      controlled.last.complete(
+        Appended(
+          recordId: 'predecessor-61',
+          seq: 61,
+          epochSeq: 61,
+          envelope: committedEnvelope(
+            predecessors.last.record,
+            recordId: 'predecessor-61',
+          ),
+        ),
+      );
+      await h.runToFixpoint();
+      expect(
+        appender.records.any((record) => identical(record, target.record)),
+        isFalse,
+      );
+    });
+
     test(
       'ack deadline bounds queue wait only when in-flight append succeeds',
       () async {
