@@ -991,6 +991,7 @@ Future<StationWorkRuntime> assembleStationWork({
       dryRun: dryRun,
       registry: registry,
       registryBuilder: registryBuilder,
+      registryBuilderWithSpecWriter: registryBuilderWithSpecWriter,
       maxConcurrentWork: maxConcurrentWork,
       preferSql: preferSql,
       providerOverride: providerOverride,
@@ -1031,6 +1032,11 @@ Future<StationWorkRuntime> _acquireStationWork({
   required bool dryRun,
   required CapabilityRegistry? registry,
   required CapabilityRegistryBuilder? registryBuilder,
+  required CapabilityRegistry Function(
+    WorkNoteAppender appendWorkNote,
+    SpecifyAuthoredSpecWriter writeSpecifyAuthoredSpec,
+  )?
+  registryBuilderWithSpecWriter,
   required int maxConcurrentWork,
   required bool preferSql,
   required RuntimeProvider? providerOverride,
