@@ -1,7 +1,7 @@
 name: grid_sdk
 # Released as git tags per package (power_station ADR-0003 D1:
 # `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
-version: 0.3.0-rc.20
+version: 0.3.0-rc.21
 description: >-
   The public authoring surface of the grid — a station is authored as a Seed:
   compose the SDK's composition types and drive them with `runGrid`.
@@ -25,7 +25,7 @@ dependencies:
   grid_engine: ^0.3.0-rc.23
   # The transports the work assembly wires (tg-yl8): the bd write chokepoint,
   # the process/git services, and their dry-run inert counterparts.
-  grid_runtime: ^0.2.0-rc.16
+  grid_runtime: ^0.2.0-rc.17
   # The trajectory log substrate the station-side harness runs over (tg-zfek
   # Stage 1, stage1-wiring §1.1): the fenced appender, the tick, the connect
   # seams. grid_trajectory stays a LEAF — this edge flows toward it, never

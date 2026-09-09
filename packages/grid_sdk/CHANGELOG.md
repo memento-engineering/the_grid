@@ -1,3 +1,9 @@
+## 0.3.0-rc.21
+
+- Fixed: the boot state-store maintenance step requires the OWNED proxy after gc (`bd info --json` plus `proxy.pid`), guards discovery, and treats an unresolvable state endpoint at boot as a terminal boot-class `GridHookError` instead of letting the state writer resolve to the wrong store (tg-ywor, #387; the lunar epoch-54 dead epoch).
+- Fixed: the sdk half of operator-only spec preservation on rework (tg-3u1h, #376).
+- Floors `grid_runtime` to `^0.2.0-rc.17`.
+
 ## 0.3.0-rc.20
 
 - Added: `runGrid` mounts the tree inside one guarded zone; an uncaught asynchronous error born after mount is contained, attributed as a `GridHookError`, and reported through `onError`, whose default is now loud-but-non-fatal — the resident survives instead of dying (tg-co52, #372).

@@ -1,3 +1,8 @@
+## 0.2.0-rc.17
+
+- Fixed: rework preserves only OPERATOR-authored spec text; a specify-authored design and acceptance are cleared at the re-key so a retired round's contradictions do not ride into the next round (tg-3u1h, #376).
+- Fixed: a session close distinguishes a commit-only close from a complete one, so a rehearsed or never-delivered round no longer stamps the bead complete (tg-6cbf, #379).
+
 ## 0.2.0-rc.16
 
 - Added: `TrajectoryAppendResult`, a sealed `{Acked, Dropped, Suppressed}` union, and `TrajectoryAckRecordSink.appendAcked` beside the void `TrajectoryRecordSink.enqueue`; `StationTrajectoryRecorder.stepRunning`, `stepRearmed`, `sessionCompleted`, `sessionEscalated` and `sessionVoided` return the result as decision-bearing appends (tg-ppo5, #364).
