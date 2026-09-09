@@ -639,6 +639,34 @@ typedef WorkNoteAppender = Future<void> Function(String beadId, String line);
 typedef CapabilityRegistryBuilder =
     CapabilityRegistry Function(WorkNoteAppender appendWorkNote);
 
+/// Builds one initial station work or state runtime bundle.
+///
+/// [buildDefault] lazily acquires the production bundle for [workspace]. A
+/// replacement builder owns whether to invoke it; assembly does not evaluate
+/// the production path before calling this seam.
+typedef StationWorkBundleBuilder =
+    Future<GridRuntimeBundle> Function({
+      required String storeName,
+      required BeadsWorkspace workspace,
+      required Future<GridRuntimeBundle> Function() buildDefault,
+    });
+
+/// Builds the initial federated work source around a lazy production default.
+typedef StationWorkFederatedSourceBuilder =
+    FederatedSnapshotSource Function({
+      required FederatedSnapshotSource Function() buildDefault,
+    });
+
+/// Builds the station join bridge around a lazy production default.
+typedef StationWorkJoinBridgeBuilder =
+    StationJoinBridge Function({
+      required StationJoinBridge Function() buildDefault,
+    });
+
+/// Builds the station driver around a lazy production default.
+typedef StationWorkDriverBuilder =
+    StationDriver Function({required StationDriver Function() buildDefault});
+
 /// Assembles the station's off-tree work machinery over REAL stores at their
 /// roots — the v3 replacement for the deleted `buildControllers` +
 /// `buildLiveWiring` + `composeStation` assembly (H3), consumed by every
@@ -658,12 +686,11 @@ typedef CapabilityRegistryBuilder =
 /// `git` executed, provisioning materializes nothing). Live wires
 /// `ProcessBdRunner` over the state store, `SubprocessProvider`, and the real
 /// `git`/`gh` service. The per-seam overrides are TEST seams.
-/// [workBundleOverrides], [stateBundleOverride], and
-/// [federatedSourceOverride] transfer their resource to this assembly when its
-/// corresponding acquisition stage is reached. [driverOverride] receives the
-/// bridge acquired by the production path and is invoked once at the driver
-/// stage. Null or absent overrides retain the production expressions and
-/// acquisition order.
+/// [bundleBuilder], [federatedSourceBuilder], [joinBridgeBuilder], and
+/// [driverBuilder] receive lazy production defaults. A builder may replace its
+/// resource without acquiring the default; once returned, that resource's
+/// lifetime transfers to this assembly. Null builders invoke their default
+/// exactly once in the existing acquisition order.
 /// The default sync FLOOR interval (tg-zd4v): the bounded worst-case refresh
 /// age on the SQL read path, where the working-set probe is edge-triggered
 /// and a quiet store would otherwise never re-capture. Coarse relative to the
@@ -694,10 +721,10 @@ Future<StationWorkRuntime> assembleStationWork({
   Duration syncFloorInterval = kDefaultSyncFloorInterval,
   TrajectoryConfig trajectoryConfig = const TrajectoryConfig(),
   TrajectoryHarness? trajectoryOverride,
-  Map<String, GridRuntimeBundle> workBundleOverrides = const {},
-  GridRuntimeBundle? stateBundleOverride,
-  FederatedSnapshotSource? federatedSourceOverride,
-  StationDriver Function(StationJoinBridge bridge)? driverOverride,
+  StationWorkBundleBuilder? bundleBuilder,
+  StationWorkFederatedSourceBuilder? federatedSourceBuilder,
+  StationWorkJoinBridgeBuilder? joinBridgeBuilder,
+  StationWorkDriverBuilder? driverBuilder,
 }) async {
   if (registry != null && registryBuilder != null) {
     throw ArgumentError(
@@ -718,15 +745,6 @@ Future<StationWorkRuntime> assembleStationWork({
     throw ArgumentError(
       'assembleStationWork: work bd overrides name unknown substations: '
       '${unknownOverrides.join(', ')}.',
-    );
-  }
-  final unknownBundleOverrides = workBundleOverrides.keys
-      .where((name) => !knownWorkStores.contains(name))
-      .toList(growable: false);
-  if (unknownBundleOverrides.isNotEmpty) {
-    throw ArgumentError(
-      'assembleStationWork: work bundle overrides name unknown substations: '
-      '${unknownBundleOverrides.join(', ')}.',
     );
   }
   // Disjointness across BOTH identity axes (review finding, tg-yl8):
@@ -833,10 +851,10 @@ Future<StationWorkRuntime> assembleStationWork({
       syncFloorInterval: syncFloorInterval,
       trajectoryConfig: trajectoryConfig,
       trajectoryOverride: trajectoryOverride,
-      workBundleOverrides: workBundleOverrides,
-      stateBundleOverride: stateBundleOverride,
-      federatedSourceOverride: federatedSourceOverride,
-      driverOverride: driverOverride,
+      bundleBuilder: bundleBuilder,
+      federatedSourceBuilder: federatedSourceBuilder,
+      joinBridgeBuilder: joinBridgeBuilder,
+      driverBuilder: driverBuilder,
       workspacesByName: workspacesByName,
       stateWorkspace: stateWs,
       stateSubstation: stateSubstation,
@@ -873,10 +891,10 @@ Future<StationWorkRuntime> _acquireStationWork({
   required Duration syncFloorInterval,
   required TrajectoryConfig trajectoryConfig,
   required TrajectoryHarness? trajectoryOverride,
-  required Map<String, GridRuntimeBundle> workBundleOverrides,
-  required GridRuntimeBundle? stateBundleOverride,
-  required FederatedSnapshotSource? federatedSourceOverride,
-  required StationDriver Function(StationJoinBridge bridge)? driverOverride,
+  required StationWorkBundleBuilder? bundleBuilder,
+  required StationWorkFederatedSourceBuilder? federatedSourceBuilder,
+  required StationWorkJoinBridgeBuilder? joinBridgeBuilder,
+  required StationWorkDriverBuilder? driverBuilder,
   required Map<String, BeadsWorkspace> workspacesByName,
   required BeadsWorkspace stateWorkspace,
   required String stateSubstation,
@@ -887,36 +905,46 @@ Future<StationWorkRuntime> _acquireStationWork({
   final bundles = <String, GridRuntimeBundle>{};
   for (final entry in workspacesByName.entries) {
     final storeName = entry.key;
+    Future<GridRuntimeBundle> buildDefault() => GridRuntimeFactory.build(
+      workspace: entry.value,
+      preferSql: preferSql,
+      syncFloorInterval: syncFloorInterval,
+      lifecycleTypes: {...IssueType.coreTypes, ...GridIssueTypes.all},
+      onDirtySourceClosed: (source) => transport?.flare(
+        'sync.dirtySignalsClosed',
+        {'substation': storeName, 'source': source},
+      ),
+    );
     final bundle =
-        workBundleOverrides[storeName] ??
-        await GridRuntimeFactory.build(
-          workspace: entry.value,
-          preferSql: preferSql,
-          syncFloorInterval: syncFloorInterval,
-          lifecycleTypes: {...IssueType.coreTypes, ...GridIssueTypes.all},
-          onDirtySourceClosed: (source) => transport?.flare(
-            'sync.dirtySignalsClosed',
-            {'substation': storeName, 'source': source},
-          ),
-        );
+        await (bundleBuilder?.call(
+              storeName: storeName,
+              workspace: entry.value,
+              buildDefault: buildDefault,
+            ) ??
+            buildDefault());
     bundles[entry.key] = bundle;
     disposers.add((
       step: 'work bundle shutdown (${entry.key})',
       dispose: bundle.shutdown,
     ));
   }
+  Future<GridRuntimeBundle> buildStateDefault() => GridRuntimeFactory.build(
+    workspace: stateWorkspace,
+    preferSql: preferSql,
+    syncFloorInterval: syncFloorInterval,
+    lifecycleTypes: {...IssueType.coreTypes, ...GridIssueTypes.all},
+    onDirtySourceClosed: (source) => transport?.flare(
+      'sync.dirtySignalsClosed',
+      {'substation': 'state', 'source': source},
+    ),
+  );
   final stateBundle =
-      stateBundleOverride ??
-      await GridRuntimeFactory.build(
-        workspace: stateWorkspace,
-        preferSql: preferSql,
-        syncFloorInterval: syncFloorInterval,
-        lifecycleTypes: {...IssueType.coreTypes, ...GridIssueTypes.all},
-        onDirtySourceClosed: (source) => transport?.flare(
-          'sync.dirtySignalsClosed',
-          {'substation': 'state', 'source': source},
-        ),
-      );
+      await (bundleBuilder?.call(
+            storeName: 'state',
+            workspace: stateWorkspace,
+            buildDefault: buildStateDefault,
+          ) ??
+          buildStateDefault());
   disposers.add((step: 'state bundle shutdown', dispose: stateBundle.shutdown));
   final readPathName = [
     for (final e in bundles.entries) '${e.key}=${e.value.readPath.name}',
@@ -929,28 +957,30 @@ Future<StationWorkRuntime> _acquireStationWork({
   final unresolvedSink =
       onUnresolvedExternalDep ?? (String m) => stdout.writeln(m);
 
+  FederatedSnapshotSource
+  buildFederatedSourceDefault() => FederatedSnapshotSource(
+    {
+      for (final e in bundles.entries)
+        e.key: _RuntimeSnapshotSource(e.value.runtime),
+    },
+    // tg-mspw — the union classifies ownership on BOTH identity axes, the
+    // same {name, prefix} pair `identityOwner` above already refuses
+    // collisions on. The member map is keyed by NAME only; every production
+    // id is PREFIX-shaped (`tg-…`, `pow-…`), so names alone resolved nothing.
+    memberPrefixes: {for (final s in substations) s.name: s.prefix},
+    onUnresolvedExternalDep: unresolvedSink,
+    // Ready-staleness by AGE (tg-zd4v face 2): a small multiple of the floor,
+    // so a healthy member (re-capturing every floor tick) never trips it and
+    // a genuinely quiet member stops minting ready ids instead of serving a
+    // frozen frontier into a stale mint.
+    readyStaleAge: syncFloorInterval * 3,
+    // Rising-edge staleness flares ride the SAME emit-only transport as every
+    // other engine LOUD signal (ADR-0008 D9 / ADR-0012 D2's armed reporter).
+    onFlare: (name, data) => transport?.flare(name, data),
+  );
   final work =
-      federatedSourceOverride ??
-      FederatedSnapshotSource(
-        {
-          for (final e in bundles.entries)
-            e.key: _RuntimeSnapshotSource(e.value.runtime),
-        },
-        // tg-mspw — the union classifies ownership on BOTH identity axes, the
-        // same {name, prefix} pair `identityOwner` above already refuses
-        // collisions on. The member map is keyed by NAME only; every production
-        // id is PREFIX-shaped (`tg-…`, `pow-…`), so names alone resolved nothing.
-        memberPrefixes: {for (final s in substations) s.name: s.prefix},
-        onUnresolvedExternalDep: unresolvedSink,
-        // Ready-staleness by AGE (tg-zd4v face 2): a small multiple of the floor,
-        // so a healthy member (re-capturing every floor tick) never trips it and
-        // a genuinely quiet member stops minting ready ids instead of serving a
-        // frozen frontier into a stale mint.
-        readyStaleAge: syncFloorInterval * 3,
-        // Rising-edge staleness flares ride the SAME emit-only transport as every
-        // other engine LOUD signal (ADR-0008 D9 / ADR-0012 D2's armed reporter).
-        onFlare: (name, data) => transport?.flare(name, data),
-      );
+      federatedSourceBuilder?.call(buildDefault: buildFederatedSourceDefault) ??
+      buildFederatedSourceDefault();
   disposers.add((step: 'federated source dispose', dispose: work.dispose));
   final SnapshotSource stateSource = _RuntimeSnapshotSource(
     stateBundle.runtime,
@@ -1337,7 +1367,7 @@ Future<StationWorkRuntime> _acquireStationWork({
     // never-adopt defaults; arming is a deliberate later wire, all-or-nothing.
   );
 
-  final bridge = StationJoinBridge(
+  StationJoinBridge buildJoinBridgeDefault() => StationJoinBridge(
     work: work,
     state: stateSource,
     onUnresolvedCrossLink: unresolvedSink,
@@ -1369,19 +1399,23 @@ Future<StationWorkRuntime> _acquireStationWork({
               trajectory.onStepCursorsChanged(listener, fireImmediately: false),
     stepDualRead: stepDualRead,
   );
+  final bridge =
+      joinBridgeBuilder?.call(buildDefault: buildJoinBridgeDefault) ??
+      buildJoinBridgeDefault();
   disposers.add((step: 'join bridge dispose', dispose: bridge.dispose));
   // The wedge (tg-jwh) flares `station.wedged` through the SAME emit-only
   // transport the engine's other LOUD signals use (ADR-0008 D9 / D-8) — no
   // parallel escalation channel.
+  StationDriver buildDriverDefault() => StationDriver(
+    bridge: bridge,
+    registry: resolvedRegistry,
+    transport: transport,
+    wedgeThreshold: wedgeThreshold,
+    wedgePollInterval: wedgePollInterval,
+  );
   final driver =
-      driverOverride?.call(bridge) ??
-      StationDriver(
-        bridge: bridge,
-        registry: resolvedRegistry,
-        transport: transport,
-        wedgeThreshold: wedgeThreshold,
-        wedgePollInterval: wedgePollInterval,
-      );
+      driverBuilder?.call(buildDefault: buildDriverDefault) ??
+      buildDriverDefault();
   disposers.add((step: 'station driver dispose', dispose: driver.dispose));
 
   final liveResolver = switch (resolver) {

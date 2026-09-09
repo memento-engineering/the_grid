@@ -61,15 +61,50 @@ final class _RecordingFederatedSource extends FederatedSnapshotSource {
   }
 }
 
-final class _ThrowingRecordingDriver extends StationDriver {
-  _ThrowingRecordingDriver({
-    required StationJoinBridge bridge,
-    required this.events,
-  }) : super(bridge: bridge) {
-    // Follow the real bridge so its fallback disposal is independently
-    // observable when this fake's disposal refuses before delegating to it.
-    bridge.start();
+final class _RecordingJoinBridge implements StationJoinBridge {
+  factory _RecordingJoinBridge(List<String> events) {
+    final latest = JoinedSnapshot.empty();
+    return _RecordingJoinBridge._(events, latest);
   }
+
+  _RecordingJoinBridge._(this.events, this._latest)
+    : notifier = JoinedSnapshotNotifier(_latest);
+
+  final List<String> events;
+
+  @override
+  final JoinedSnapshotNotifier notifier;
+
+  final JoinedSnapshot _latest;
+  bool _started = false;
+  bool _disposed = false;
+
+  @override
+  JoinedSnapshot get latest => _latest;
+
+  @override
+  void start() {
+    if (_started || _disposed) return;
+    _started = true;
+  }
+
+  @override
+  void repush() {
+    if (_disposed) return;
+    notifier.push(_latest);
+  }
+
+  @override
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    events.add('join bridge dispose');
+    notifier.dispose();
+  }
+}
+
+final class _ThrowingRecordingDriver extends StationDriver {
+  _ThrowingRecordingDriver({required super.bridge, required this.events});
 
   final List<String> events;
   var disposeCalls = 0;
@@ -279,9 +314,8 @@ void main() {
       required Object failure,
       required StackTrace stackTrace,
       required List<String> events,
-      Map<String, GridRuntimeBundle> workBundleOverrides = const {},
-      GridRuntimeBundle? stateBundleOverride,
-      FederatedSnapshotSource? federatedSourceOverride,
+      StationWorkBundleBuilder? bundleBuilder,
+      StationWorkFederatedSourceBuilder? federatedSourceBuilder,
       void Function(String message)? onRefusal,
     }) => assembleStationWork(
       stateStore: GridStateStore.forGridRoot('${temporary.path}/home'),
@@ -294,9 +328,8 @@ void main() {
       preferSql: false,
       providerOverride: provider,
       trajectoryOverride: trajectory,
-      workBundleOverrides: workBundleOverrides,
-      stateBundleOverride: stateBundleOverride,
-      federatedSourceOverride: federatedSourceOverride,
+      bundleBuilder: bundleBuilder,
+      federatedSourceBuilder: federatedSourceBuilder,
       onRefusal: onRefusal,
       registryBuilder: (_) {
         events.add('construction failure');
@@ -368,9 +401,15 @@ void main() {
             failure: const _ConstructionFailure(),
             stackTrace: StackTrace.current,
             events: events,
-            workBundleOverrides: workBundles,
-            stateBundleOverride: stateBundle,
-            federatedSourceOverride: federated,
+            bundleBuilder:
+                ({
+                  required storeName,
+                  required workspace,
+                  required buildDefault,
+                }) async => storeName == 'state'
+                ? stateBundle
+                : workBundles[storeName]!,
+            federatedSourceBuilder: ({required buildDefault}) => federated,
           ),
           throwsA(isA<_ConstructionFailure>()),
         );
@@ -431,9 +470,15 @@ void main() {
             stackTrace: originalStack,
             events: events,
             onRefusal: refusals.add,
-            workBundleOverrides: workBundles,
-            stateBundleOverride: stateBundle,
-            federatedSourceOverride: federated,
+            bundleBuilder:
+                ({
+                  required storeName,
+                  required workspace,
+                  required buildDefault,
+                }) async => storeName == 'state'
+                ? stateBundle
+                : workBundles[storeName]!,
+            federatedSourceBuilder: ({required buildDefault}) => federated,
           );
         } on Object catch (error, stackTrace) {
           caught = error;
@@ -562,6 +607,7 @@ void main() {
         final federated = _RecordingFederatedSource(events);
         final provider = _RecordingProvider(events);
         final trajectory = await _recordingTrajectory(events);
+        final bridge = _RecordingJoinBridge(events);
         late _ThrowingRecordingDriver driver;
         final runtime = await assembleStationWork(
           stateStore: GridStateStore.forGridRoot('${temporary.path}/home'),
@@ -577,10 +623,16 @@ void main() {
           preferSql: false,
           providerOverride: provider,
           trajectoryOverride: trajectory,
-          workBundleOverrides: workBundles,
-          stateBundleOverride: stateBundle,
-          federatedSourceOverride: federated,
-          driverOverride: (bridge) =>
+          bundleBuilder:
+              ({
+                required storeName,
+                required workspace,
+                required buildDefault,
+              }) async =>
+                  storeName == 'state' ? stateBundle : workBundles[storeName]!,
+          federatedSourceBuilder: ({required buildDefault}) => federated,
+          joinBridgeBuilder: ({required buildDefault}) => bridge,
+          driverBuilder: ({required buildDefault}) =>
               driver = _ThrowingRecordingDriver(bridge: bridge, events: events),
           onRefusal: refusals.add,
         );
@@ -643,23 +695,66 @@ void main() {
         'syncFloorInterval',
         'trajectoryConfig',
         'trajectoryOverride',
+        'bundleBuilder',
+        'federatedSourceBuilder',
+        'joinBridgeBuilder',
+        'driverBuilder',
+      ]);
+
+      expect(
+        source,
+        contains('''typedef StationWorkBundleBuilder =
+    Future<GridRuntimeBundle> Function({
+      required String storeName,
+      required BeadsWorkspace workspace,
+      required Future<GridRuntimeBundle> Function() buildDefault,
+    });'''),
+      );
+      expect(
+        source,
+        contains('''typedef StationWorkFederatedSourceBuilder =
+    FederatedSnapshotSource Function({
+      required FederatedSnapshotSource Function() buildDefault,
+    });'''),
+      );
+      expect(
+        source,
+        contains('''typedef StationWorkJoinBridgeBuilder =
+    StationJoinBridge Function({
+      required StationJoinBridge Function() buildDefault,
+    });'''),
+      );
+      expect(
+        source,
+        contains(
+          '''typedef StationWorkDriverBuilder =
+    StationDriver Function({required StationDriver Function() buildDefault});''',
+        ),
+      );
+      for (final retired in [
         'workBundleOverrides',
         'stateBundleOverride',
         'federatedSourceOverride',
         'driverOverride',
-      ]);
+      ]) {
+        expect(source, isNot(contains(retired)), reason: retired);
+      }
 
       final assembly = source.substring(signatureStart);
       var cursor = 0;
       for (final acquisition in [
-        'workBundleOverrides[storeName] ??',
-        'GridRuntimeFactory.build(',
+        'Future<GridRuntimeBundle> buildDefault() => GridRuntimeFactory.build(',
+        'bundleBuilder?.call(',
+        'buildDefault: buildDefault',
         "step: 'work bundle shutdown (\${entry.key})'",
-        'stateBundleOverride ??',
-        'GridRuntimeFactory.build(',
+        'Future<GridRuntimeBundle> buildStateDefault() => GridRuntimeFactory.build(',
+        'bundleBuilder?.call(',
+        "storeName: 'state'",
+        'buildDefault: buildStateDefault',
         "step: 'state bundle shutdown'",
-        'federatedSourceOverride ??',
-        'FederatedSnapshotSource(',
+        'buildFederatedSourceDefault() => FederatedSnapshotSource(',
+        'federatedSourceBuilder?.call(',
+        'buildDefault: buildFederatedSourceDefault',
         "step: 'federated source dispose'",
         'providerOverride ??',
         "step: 'runtime provider dispose'",
@@ -669,10 +764,11 @@ void main() {
         'groupsOverride ??',
         'StationServices(',
         "step: 'station admission dispose'",
-        'StationJoinBridge(',
+        'StationJoinBridge buildJoinBridgeDefault() => StationJoinBridge(',
+        'joinBridgeBuilder?.call(buildDefault: buildJoinBridgeDefault)',
         "step: 'join bridge dispose'",
-        'driverOverride?.call(bridge) ??',
-        'StationDriver(',
+        'StationDriver buildDriverDefault() => StationDriver(',
+        'driverBuilder?.call(buildDefault: buildDriverDefault)',
         "step: 'station driver dispose'",
       ]) {
         final next = assembly.indexOf(acquisition, cursor);
