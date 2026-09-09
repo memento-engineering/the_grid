@@ -16,8 +16,8 @@ import 'package:test/test.dart';
 /// clock; NO live stores, NO real `claude`/`git`/`bd`. What this file locks
 /// (the acceptance criteria):
 ///
-///  (a) the up/down/starting/unreachable/unauthorized matrix, against a real
-///      ephemeral-port [StationControl] + temp locks;
+///  (a) the up/down/starting/dead-pid/unreachable/unauthorized matrix, against
+///      a real ephemeral-port [StationControl] + temp locks;
 ///  (b) `stop` is SIGTERM-only, bounded, LOUD-by-type on timeout (a distinct
 ///      [TimedOut] variant, never silently collapsed into [Stopped]), a
 ///      clean [AlreadyDown] no-op;
@@ -57,7 +57,7 @@ void main() {
       expect(result, isA<Down>());
     });
 
-    test('a lock naming a DEAD pid → Unreachable, no HTTP attempted', () async {
+    test('AC-3 dead PID returns DeadPid without constructing HTTP', () async {
       final store = _tempStore();
       _mintLock(store, pid: 4242);
       final probed = <int>[];
@@ -71,8 +71,10 @@ void main() {
 
       final result = await attach.status(stateWorkspaceDir: store.path);
 
-      expect(result, isA<Unreachable>());
-      expect((result as Unreachable).pid, 4242);
+      expect(result, isA<DeadPid>());
+      final dead = result as DeadPid;
+      expect(dead.pid, 4242);
+      expect(dead.record.pid, 4242);
       expect(probed, [4242]);
     });
 
@@ -128,7 +130,7 @@ void main() {
       expect((result as Starting).pid, 4242);
     });
 
-    test('an acquired record with a dead pid is Unreachable', () async {
+    test('an acquired record with a dead pid is DeadPid', () async {
       final store = _tempStore();
       _mintLock(store, pid: 4242, phase: StationLifecyclePhase.acquired);
       final attach = StationAttach(
@@ -138,8 +140,8 @@ void main() {
 
       final result = await attach.status(stateWorkspaceDir: store.path);
 
-      expect(result, isA<Unreachable>());
-      expect((result as Unreachable).pid, 4242);
+      expect(result, isA<DeadPid>());
+      expect((result as DeadPid).pid, 4242);
     });
 
     test('a releasing record with a live pid is Unreachable', () async {
@@ -160,10 +162,10 @@ void main() {
       final result = await attach.status(stateWorkspaceDir: store.path);
 
       expect(result, isA<Unreachable>());
-      expect(
-        (result as Unreachable).record.phase,
-        StationLifecyclePhase.releasing,
-      );
+      final unreachable = result as Unreachable;
+      expect(unreachable.record.phase, StationLifecyclePhase.releasing);
+      expect(unreachable.failure, DoorFailure.releasing);
+      expect(unreachable.hardBound, const Duration(seconds: 15));
     });
 
     test('a legacy no-phase record follows live and missing credentials '
@@ -179,7 +181,10 @@ void main() {
       final result = await attach.status(stateWorkspaceDir: store.path);
 
       expect(result, isA<Unreachable>());
-      expect((result as Unreachable).record.phase, StationLifecyclePhase.live);
+      final unreachable = result as Unreachable;
+      expect(unreachable.record.phase, StationLifecyclePhase.live);
+      expect(unreachable.failure, DoorFailure.notAdvertised);
+      expect(unreachable.hardBound, const Duration(seconds: 15));
     });
 
     test('a live pid, a live control surface, the right bearer → Up '
@@ -212,8 +217,7 @@ void main() {
       );
     });
 
-    test('a live pid whose door answers after the soft threshold → SlowUp '
-        'with monotonic elapsed time', () async {
+    test('AC-5 slow-up unchanged after the soft threshold', () async {
       final store = _tempStore();
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       server.listen((request) async {
@@ -273,8 +277,7 @@ void main() {
       expect((result as Unauthorized).record.pid, 4242);
     });
 
-    test('a live pid but connection-refused (the control surface died '
-        'without releasing the lock) → Unreachable', () async {
+    test('AC-1 live PID refused door is a connection failure', () async {
       final store = _tempStore();
       final control = await StationControl.start(
         port: 0,
@@ -290,11 +293,14 @@ void main() {
       final result = await attach.status(stateWorkspaceDir: store.path);
 
       expect(result, isA<Unreachable>());
-      expect((result as Unreachable).pid, 4242);
+      final unreachable = result as Unreachable;
+      expect(unreachable.pid, 4242);
+      expect(unreachable.record.controlUrl, deadUrl);
+      expect(unreachable.failure, DoorFailure.connectionFailed);
+      expect(unreachable.hardBound, const Duration(seconds: 15));
     });
 
-    test('a live pid but the control surface never answers (hangs) → '
-        'Unreachable once the bounded timeout elapses', () async {
+    test('AC-2 live PID timed-out door preserves the hard bound', () async {
       final store = _tempStore();
       final serverSocket = await ServerSocket.bind(
         InternetAddress.loopbackIPv4,
@@ -323,7 +329,41 @@ void main() {
       );
 
       expect(result, isA<Unreachable>());
-      expect((result as Unreachable).pid, 4242);
+      final unreachable = result as Unreachable;
+      expect(unreachable.pid, 4242);
+      expect(unreachable.failure, DoorFailure.timedOut);
+      expect(unreachable.hardBound, const Duration(milliseconds: 200));
+    });
+
+    test('AC-4 live PID malformed door response is invalid', () async {
+      final store = _tempStore();
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((request) async {
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..headers.contentType = ContentType.json
+          ..write('{not-json');
+        await request.response.close();
+      });
+      addTearDown(() => server.close(force: true));
+      _mintLock(
+        store,
+        pid: 4242,
+        controlUrl: 'http://127.0.0.1:${server.port}',
+        token: 't',
+      );
+      final attach = StationAttach(isPidAlive: (_) => true);
+
+      final result = await attach.status(
+        stateWorkspaceDir: store.path,
+        timeout: const Duration(milliseconds: 500),
+      );
+
+      expect(result, isA<Unreachable>());
+      final unreachable = result as Unreachable;
+      expect(unreachable.pid, 4242);
+      expect(unreachable.failure, DoorFailure.invalidResponse);
+      expect(unreachable.hardBound, const Duration(milliseconds: 500));
     });
   });
 
