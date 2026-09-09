@@ -1,3 +1,7 @@
+## 0.2.0-rc.19
+
+- Fixed: `StationBeadWriter.clearRoundAuthoredSpec` preserves `design` and `acceptance_criteria` on rework unless the bead carries `spec.author == specify`, so hand-written and governor-restored spec text survives a re-key; `writeSpecifyAuthoredSpec(id, design:, acceptanceCriteria:)` is restored as the ownership chokepoint that stamps that marker and refuses foreign prefixes (tg-vb4m, #390). The stamping caller lands in grid_assets (pow-m8v5).
+
 ## 0.2.0-rc.18
 
 - Added: `AgentEnvAllowlist` forwards `SWIFT_INFER_*` (the local swift-infer inference server: endpoint, agent token, model id — a provider-credential prefix beside `OLLAMA_`) and the exact key `LEONARD_E2E_DEVICE` (the wired device a live-device e2e run drives, a machine fact carried by name like the AWS region keys). Every other ambient variable stays behind the boundary; lenny's live-device `e2e` preflight can now see what the resident carries (#391).

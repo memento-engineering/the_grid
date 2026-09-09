@@ -1,3 +1,8 @@
+## 0.3.0-rc.22
+
+- Added: `assembleStationWork` takes an optional `registryBuilderWithSpecWriter` (a two-argument builder receiving the work-note appender and the SPECIFY-authored spec writer) beside the unchanged one-argument `CapabilityRegistryBuilder`; when both are supplied the enhanced builder wins and a direct `registry` stays mutually exclusive with either (tg-vb4m, #390).
+- Changed: floors `grid_runtime` at `^0.2.0-rc.19`, which carries `writeSpecifyAuthoredSpec`.
+
 ## 0.3.0-rc.21
 
 - Fixed: the boot state-store maintenance step requires the OWNED proxy after gc (`bd info --json` plus `proxy.pid`), guards discovery, and treats an unresolvable state endpoint at boot as a terminal boot-class `GridHookError` instead of letting the state writer resolve to the wrong store (tg-ywor, #387; the lunar epoch-54 dead epoch).
