@@ -439,7 +439,7 @@ void main() {
 
   group('registry builder seam', () {
     test(
-      'registry builder seam routes append-notes by owned store and refuses unowned ids',
+      'registry builder seam preserves one-argument registryBuilder compatibility',
       () async {
         _seedStore('${tmp.path}/proj', database: 'pow');
         _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
@@ -457,7 +457,7 @@ void main() {
           dryRun: true,
           stateBdOverride: BdCliService(stateRunner),
           workBdOverrides: {'proj': BdCliService(workRunner)},
-          registryBuilder: (appender, _) {
+          registryBuilder: (appender) {
             appendWorkNote = appender;
             return builtRegistry;
           },
@@ -506,13 +506,16 @@ void main() {
     );
 
     test(
-      'registry builder seam routes specify-authored spec through owned work writer',
+      'registry builder seam prefers spec-writer builder and routes specify-authored spec through owned work writer',
       () async {
         _seedStore('${tmp.path}/proj', database: 'pow');
         _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
         final stateRunner = _RecordingBdRunner();
         final workRunner = _RecordingBdRunner();
         late SpecifyAuthoredSpecWriter writeSpecifyAuthoredSpec;
+        var legacyBuilderCalled = false;
+        var specWriterBuilderCalled = false;
+        final builtRegistry = engine.DefaultCapabilityRegistry();
 
         final work = await assembleStationWork(
           stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
@@ -523,12 +526,21 @@ void main() {
           dryRun: true,
           stateBdOverride: BdCliService(stateRunner),
           workBdOverrides: {'proj': BdCliService(workRunner)},
-          registryBuilder: (_, specWriter) {
-            writeSpecifyAuthoredSpec = specWriter;
+          registryBuilder: (_) {
+            legacyBuilderCalled = true;
             return engine.DefaultCapabilityRegistry();
+          },
+          registryBuilderWithSpecWriter: (_, specWriter) {
+            specWriterBuilderCalled = true;
+            writeSpecifyAuthoredSpec = specWriter;
+            return builtRegistry;
           },
         );
         addTearDown(work.shutdown);
+
+        expect(legacyBuilderCalled, isFalse);
+        expect(specWriterBuilderCalled, isTrue);
+        expect(identical(work.wiring.registry, builtRegistry), isTrue);
 
         await writeSpecifyAuthoredSpec(
           'proj-spec1',
@@ -558,7 +570,7 @@ void main() {
     );
 
     test(
-      'registry builder seam refuses specify-authored spec for unowned ids',
+      'registry builder seam spec-writer builder refuses specify-authored spec for unowned ids',
       () async {
         _seedStore('${tmp.path}/proj', database: 'pow');
         _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
@@ -575,7 +587,7 @@ void main() {
           dryRun: true,
           stateBdOverride: BdCliService(stateRunner),
           workBdOverrides: {'proj': BdCliService(workRunner)},
-          registryBuilder: (_, specWriter) {
+          registryBuilderWithSpecWriter: (_, specWriter) {
             writeSpecifyAuthoredSpec = specWriter;
             return engine.DefaultCapabilityRegistry();
           },
@@ -609,7 +621,7 @@ void main() {
           resolver: const _NullResolver(),
           dryRun: true,
           registry: engine.DefaultCapabilityRegistry(),
-          registryBuilder: (_, __) {
+          registryBuilder: (_) {
             builderCalled = true;
             return engine.DefaultCapabilityRegistry();
           },
