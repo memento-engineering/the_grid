@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0-rc.6
+
+- Added: the committee-report fold records per-rule shadow committee-selection evidence read off `step.transition`, so the shadow route's verdict is auditable rule by rule (tg-ix55, #382).
+
 ## 0.2.0-rc.5
 
 - Breaking: `ShadowCompare.compare` gains a `corroboration` parameter, `ShadowMismatchClassifier` takes a `ShadowMismatchSubject` and answers a `ShadowClassification`, and `TrajectoryLogReader` gains `epochClaims()` (tg-ilug, #342). Migration: every `ShadowCompare` implementer adds `ShadowCorroboration corroboration = const ShadowCorroboration.none()` to `compare`, every injected classifier is re-shaped on the subject, and every `TrajectoryLogReader` implementer adds `epochClaims()`.

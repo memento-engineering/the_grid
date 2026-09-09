@@ -1,3 +1,9 @@
+## 0.5.0-rc.21
+
+- Fixed: `status` filters its mounted count through the engine's dispatchable-work eligibility, so ghosts and blocked beads no longer inflate it (tg-8p9, #386).
+- Added: the cli half of inert cross-link marking (tg-z4zx, #377).
+- Floors `grid_engine` to `^0.3.0-rc.24`.
+
 ## 0.5.0-rc.20
 
 - Breaking: `StateStoreGc` and `maintainStateStore` moved to grid_sdk and are no longer exported here; `UpCommand` no longer runs its own boot maintenance step (tg-bq4i, #374).

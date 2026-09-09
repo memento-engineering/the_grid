@@ -1,3 +1,10 @@
+## 0.3.0-rc.24
+
+- Fixed: the delivery gate is three-way (delivered, commit-only, voided) and fails closed when a root terminal is a sub-circuit step (the shape the delivery decision forbids), so an observe-only or never-delivered round no longer latches `grid.outcome=complete` and locks the bead out of every later live boot (tg-6cbf, #379).
+- Added: a cross-link bead whose target closed is marked INERT with a flare instead of silently lifting its exclusion (tg-z4zx, #377).
+- Test: the drain seam deadline is wall-clock, so the suite no longer flakes under lane load (tg-q44f, #383).
+- Floors `grid_runtime` to `^0.2.0-rc.17`.
+
 ## 0.3.0-rc.23
 
 - Fixed: a mint refused after admission (the fresh-ready-frontier absence, or any refusal that leaves no session) releases its reservation through the token path, and a dependency-blocked bead is quarantined until it is fresh-ready without evicting a live retired-round session from the substation cap; the re-key closes the retired session exactly once (tg-i3bq, #373).
