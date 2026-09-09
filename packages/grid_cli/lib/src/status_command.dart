@@ -87,13 +87,14 @@ class StatusCommand extends Command<int> {
             '$stationName status: station is BOOTING (pid $pid).',
             1,
           ),
-          Unreachable(:final pid, :final record) => _renderRefusal(
-            '$stationName status: station.lock at '
-            '$home/.grid/station.lock names pid $pid but it is unreachable '
-            '(dead or alive-but-not-answering — record: $record). '
-            '(station: down) — a fresh `$stationName up` steals a dead lock '
-            'automatically; if $pid is alive, investigate it directly.',
-            1,
+          DeadPid(:final pid) => _renderDeadPid(
+            pid: pid,
+            home: home,
+            json: args.flag('json'),
+          ),
+          final Unreachable unreachable => _renderUnreachable(
+            unreachable,
+            json: args.flag('json'),
           ),
           Unauthorized(:final record) => _renderRefusal(
             '$stationName status: the station at ${record.controlUrl} rejected '
@@ -108,6 +109,84 @@ class StatusCommand extends Command<int> {
   int _renderRefusal(String message, int code) {
     stderr.writeln(message);
     return code;
+  }
+
+  int _renderDeadPid({
+    required int pid,
+    required String home,
+    required bool json,
+  }) {
+    if (json) {
+      stdout.writeln(
+        jsonEncode(<String, Object?>{
+          'classification': 'pid_dead',
+          'process': <String, Object?>{'pid': pid, 'alive': false},
+        }),
+      );
+      return 1;
+    }
+    return _renderRefusal(
+      '$stationName status: station.lock at $home/.grid/station.lock names '
+      'pid $pid, but the pid probe found no live process. (station: down)',
+      1,
+    );
+  }
+
+  int _renderUnreachable(Unreachable result, {required bool json}) {
+    final statusUrl = switch (result.record.controlUrl) {
+      final String controlUrl => '$controlUrl/status',
+      null => null,
+    };
+    if (json) {
+      stdout.writeln(
+        jsonEncode(<String, Object?>{
+          'classification': 'control_door_unavailable',
+          'process': <String, Object?>{'pid': result.pid, 'alive': true},
+          'controlDoor': <String, Object?>{
+            'url': statusUrl,
+            'failure': switch (result.failure) {
+              DoorFailure.releasing => 'station_releasing',
+              DoorFailure.notAdvertised => 'not_advertised',
+              DoorFailure.connectionFailed => 'connection_failed',
+              DoorFailure.timedOut => 'timed_out',
+              DoorFailure.invalidResponse => 'invalid_response',
+            },
+            'hardBoundMilliseconds': result.hardBound.inMilliseconds,
+          },
+        }),
+      );
+      return 1;
+    }
+
+    final seconds = (result.hardBound.inMilliseconds / 1000).toStringAsFixed(1);
+    final door = statusUrl == null
+        ? 'the control door'
+        : 'the control door at $statusUrl';
+    final detail = switch (result.failure) {
+      DoorFailure.releasing =>
+        'process pid ${result.pid} is alive and releasing; $door was not '
+            'probed. (station: alive; control door: not probed — releasing)',
+      DoorFailure.notAdvertised =>
+        'process pid ${result.pid} is alive, but station.lock advertises no '
+            'usable control door${statusUrl == null ? '' : ' at $statusUrl'}. '
+            '(station: alive; control door: not advertised)',
+      DoorFailure.connectionFailed =>
+        'process pid ${result.pid} is alive, but $door failed to connect '
+            'before the $seconds s hard bound. '
+            '(station: alive; control door: connection failed)',
+      DoorFailure.timedOut =>
+        'process pid ${result.pid} is alive, but $door did not answer within '
+            'the $seconds s hard bound. '
+            '(station: alive; control door: timed out)',
+      DoorFailure.invalidResponse =>
+        'process pid ${result.pid} is alive, but $door did not return a valid '
+            'status response within the $seconds s hard bound. '
+            '(station: alive; control door: invalid response)',
+    };
+    return _renderRefusal(
+      '$stationName status: $detail — check the door, not the process',
+      1,
+    );
   }
 
   int _renderUp(

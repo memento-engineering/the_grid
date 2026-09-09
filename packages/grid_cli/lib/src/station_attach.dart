@@ -129,19 +129,61 @@ final class Starting extends AttachResult {
   final StationLockRecord record;
 }
 
-/// A lock file names [pid], but the station cannot be reached: the pid is
-/// unsignalable, its declared phase is [StationLifecyclePhase.releasing], its
-/// live transport advertisement is unusable, or the advertised control
-/// surface did not answer correctly. [record] is the lock read.
-final class Unreachable extends AttachResult {
-  /// Creates an unreachable result naming the lock's [pid] and its [record].
-  const Unreachable({required this.pid, required this.record});
+/// A lock file names [pid], but the pid probe found no live process.
+/// [record] is the lock read. No HTTP client is constructed for this result.
+final class DeadPid extends AttachResult {
+  /// Creates a dead-pid result naming the probed [pid] and its [record].
+  const DeadPid({required this.pid, required this.record});
 
-  /// The pid the lock names.
+  /// The pid that the lock named and the probe found dead.
+  final int pid;
+
+  /// The lock record read before the pid probe.
+  final StationLockRecord record;
+}
+
+/// Why an established-live station's control door was unavailable.
+enum DoorFailure {
+  /// The station is releasing, so its control door was not probed.
+  releasing,
+
+  /// The live lock did not advertise a usable control URL and token.
+  notAdvertised,
+
+  /// Opening the advertised control-door connection failed.
+  connectionFailed,
+
+  /// The end-to-end status request exceeded its hard time bound.
+  timedOut,
+
+  /// The control door did not return a valid status response.
+  invalidResponse,
+}
+
+/// The pid probe established that [pid] is alive, but its control door is
+/// unavailable for [failure]. [hardBound] is the exact end-to-end request
+/// bound supplied to [StationAttach.status], even when no request was made.
+/// [record] is the lock read.
+final class Unreachable extends AttachResult {
+  /// Creates a live-process control-door failure.
+  const Unreachable({
+    required this.pid,
+    required this.record,
+    required this.failure,
+    required this.hardBound,
+  });
+
+  /// The pid the lock names and the pid probe found alive.
   final int pid;
 
   /// The lock record read.
   final StationLockRecord record;
+
+  /// The reason the control door was unavailable.
+  final DoorFailure failure;
+
+  /// The end-to-end hard bound supplied to [StationAttach.status].
+  final Duration hardBound;
 }
 
 /// The station answered, but rejected the bearer token (401) — a wrong or
@@ -234,15 +276,16 @@ class StationAttach {
   final DateTime Function() _clock;
 
   /// Classifies the station rooted at [stateWorkspaceDir]: no lock (or an
-  /// unreadable one) → [Down]; an unsignalable pid → [Unreachable]; a
+  /// unreadable one) → [Down]; an unsignalable pid → [DeadPid]; a
   /// signalable [StationLifecyclePhase.acquired] record → [Starting]; a
-  /// signalable [StationLifecyclePhase.releasing] record → [Unreachable]; and
-  /// only a signalable [StationLifecyclePhase.live] record attempts
-  /// `GET /status` over the advertised `controlUrl`. The whole connect,
-  /// authenticated response, body read, and decode is bounded by [timeout]. A
-  /// valid 200 completed at or below [slowThreshold] returns [Up], a later
-  /// valid 200 returns [SlowUp], a 401 returns [Unauthorized], and every other
-  /// live-phase transport outcome returns [Unreachable].
+  /// signalable [StationLifecyclePhase.releasing] record → [Unreachable] with
+  /// [DoorFailure.releasing]; and only a signalable
+  /// [StationLifecyclePhase.live] record attempts `GET /status` over the
+  /// advertised `controlUrl`. The whole connect, authenticated response, body
+  /// read, and decode is bounded by [timeout]. A valid 200 completed at or
+  /// below [slowThreshold] returns [Up], a later valid 200 returns [SlowUp], a
+  /// 401 returns [Unauthorized], and every other live-phase transport outcome
+  /// returns [Unreachable] with a specific [DoorFailure].
   Future<AttachResult> status({
     required String stateWorkspaceDir,
     Duration slowThreshold = const Duration(seconds: 3),
@@ -251,13 +294,18 @@ class StationAttach {
     final record = await _readLock(stateWorkspaceDir);
     if (record == null) return const Down();
     if (!_isPidAlive(record.pid)) {
-      return Unreachable(pid: record.pid, record: record);
+      return DeadPid(pid: record.pid, record: record);
     }
     switch (record.phase) {
       case StationLifecyclePhase.acquired:
         return Starting(pid: record.pid, record: record);
       case StationLifecyclePhase.releasing:
-        return Unreachable(pid: record.pid, record: record);
+        return Unreachable(
+          pid: record.pid,
+          record: record,
+          failure: DoorFailure.releasing,
+          hardBound: timeout,
+        );
       case StationLifecyclePhase.live:
         break;
     }
@@ -265,36 +313,82 @@ class StationAttach {
     final controlUrl = record.controlUrl;
     final token = record.token;
     if (controlUrl == null || token == null) {
-      return Unreachable(pid: record.pid, record: record);
+      return Unreachable(
+        pid: record.pid,
+        record: record,
+        failure: DoorFailure.notAdvertised,
+        hardBound: timeout,
+      );
     }
 
     final stopwatch = Stopwatch()..start();
     final client = _httpClientFactory()..connectionTimeout = timeout;
     try {
       return await (() async {
-        final request = await client.getUrl(Uri.parse('$controlUrl/status'));
-        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
-        final response = await request.close();
+        late final HttpClientResponse response;
+        try {
+          final request = await client.getUrl(Uri.parse('$controlUrl/status'));
+          request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+          response = await request.close();
+        } on SocketException {
+          return Unreachable(
+            pid: record.pid,
+            record: record,
+            failure: DoorFailure.connectionFailed,
+            hardBound: timeout,
+          );
+        } on HttpException {
+          return Unreachable(
+            pid: record.pid,
+            record: record,
+            failure: DoorFailure.connectionFailed,
+            hardBound: timeout,
+          );
+        }
 
-        if (response.statusCode == HttpStatus.unauthorized) {
-          await response.drain<void>();
-          return Unauthorized(record);
+        try {
+          if (response.statusCode == HttpStatus.unauthorized) {
+            await response.drain<void>();
+            return Unauthorized(record);
+          }
+          final body = await response.transform(const Utf8Decoder()).join();
+          if (response.statusCode != HttpStatus.ok) {
+            return Unreachable(
+              pid: record.pid,
+              record: record,
+              failure: DoorFailure.invalidResponse,
+              hardBound: timeout,
+            );
+          }
+          final payload = jsonDecode(body) as Map<String, Object?>;
+          final elapsed = stopwatch.elapsed;
+          if (elapsed > slowThreshold) {
+            return SlowUp(payload: payload, record: record, elapsed: elapsed);
+          }
+          return Up(payload: payload, record: record);
+        } on Object {
+          return Unreachable(
+            pid: record.pid,
+            record: record,
+            failure: DoorFailure.invalidResponse,
+            hardBound: timeout,
+          );
         }
-        final body = await response.transform(const Utf8Decoder()).join();
-        if (response.statusCode != HttpStatus.ok) {
-          return Unreachable(pid: record.pid, record: record);
-        }
-        final payload = jsonDecode(body) as Map<String, Object?>;
-        final elapsed = stopwatch.elapsed;
-        if (elapsed > slowThreshold) {
-          return SlowUp(payload: payload, record: record, elapsed: elapsed);
-        }
-        return Up(payload: payload, record: record);
       })().timeout(timeout);
+    } on TimeoutException {
+      return Unreachable(
+        pid: record.pid,
+        record: record,
+        failure: DoorFailure.timedOut,
+        hardBound: timeout,
+      );
     } on Object {
-      // Connection refused, DNS failure, a timeout, or a malformed body — a
-      // live pid that is not answering correctly.
-      return Unreachable(pid: record.pid, record: record);
+      return Unreachable(
+        pid: record.pid,
+        record: record,
+        failure: DoorFailure.invalidResponse,
+        hardBound: timeout,
+      );
     } finally {
       stopwatch.stop();
       client.close(force: true);

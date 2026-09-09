@@ -22,8 +22,8 @@ class _FakeAttach extends StationAttach {
 
 StationLockRecord record({
   StationLifecyclePhase phase = StationLifecyclePhase.live,
-  String controlUrl = 'http://127.0.0.1:42',
-  String token = 'secret',
+  String? controlUrl = 'http://127.0.0.1:42',
+  String? token = 'secret',
 }) => StationLockRecord(
   pid: 42,
   pgid: 42,
@@ -178,46 +178,28 @@ void main() {
     expect(result.stderr, isEmpty);
   });
 
-  test(
-    'a live authenticated door delayed past three seconds renders slow UP',
-    () async {
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      server.listen((request) async {
-        expect(
-          request.headers.value(HttpHeaders.authorizationHeader),
-          'Bearer secret',
-        );
-        await Future<void>.delayed(const Duration(milliseconds: 3200));
-        request.response
-          ..statusCode = HttpStatus.ok
-          ..headers.contentType = ContentType.json
-          ..write(jsonEncode(statusPayload));
-        await request.response.close();
-      });
-      addTearDown(() => server.close(force: true));
-      final liveRecord = record(controlUrl: 'http://127.0.0.1:${server.port}');
-      File(
-        StationLockService.lockPath(temp.path),
-      ).writeAsStringSync(jsonEncode(liveRecord.toJson()));
+  test('AC-5 slow-up unchanged in human and JSON output', () async {
+    final slow = SlowUp(
+      record: record(),
+      payload: statusPayload,
+      elapsed: const Duration(milliseconds: 3200),
+    );
 
-      final result = await runCapturedWithAttach(
-        StationAttach(isPidAlive: (_) => true),
-      );
+    final human = await runCaptured(slow);
+    expect(human.code, 0);
+    expect(
+      const LineSplitter().convert(human.stdout).first,
+      'station: UP — alive but slow (3.2 s)',
+    );
+    expect(human.stdout, isNot(contains('(station: down)')));
+    expect(human.stderr, isEmpty);
 
-      expect(result.code, 0);
-      final firstLine = const LineSplitter().convert(result.stdout).first;
-      final match = RegExp(
-        r'^station: UP — alive but slow \(([0-9]+\.[0-9]) s\)$',
-      ).firstMatch(firstLine);
-      expect(match, isNotNull);
-      expect(double.parse(match!.group(1)!), greaterThanOrEqualTo(3.2));
-      final allOutput = '${result.stdout}${result.stderr}';
-      expect(allOutput, isNot(contains('unreachable')));
-      expect(allOutput, isNot(contains('(station: down)')));
-      expect(result.stderr, isEmpty);
-    },
-    timeout: const Timeout(Duration(seconds: 10)),
-  );
+    final json = await runCaptured(slow, ['--json']);
+    expect(json.code, 0);
+    expect(const LineSplitter().convert(json.stdout), hasLength(1));
+    expect(jsonDecode(json.stdout), statusPayload);
+    expect(json.stderr, isEmpty);
+  });
 
   test('down without a discoverable work workspace succeeds', () async {
     expect(await run(const Down(), ['--workspace', '${temp.path}/absent']), 0);
@@ -240,13 +222,185 @@ void main() {
     },
   );
 
-  test('unreachable remains the down refusal', () async {
-    final result = await runCaptured(Unreachable(pid: 42, record: record()));
+  test('AC-1 live PID refused door renders alive connection failure', () async {
+    final unreachable = Unreachable(
+      pid: 42,
+      record: record(),
+      failure: DoorFailure.connectionFailed,
+      hardBound: const Duration(seconds: 15),
+    );
 
-    expect(result.code, 1);
-    expect(result.stderr, contains('pid 42 but it is unreachable'));
-    expect(result.stderr, contains('(station: down)'));
-    expect(result.stderr, isNot(contains('stale or foreign')));
+    final human = await runCaptured(unreachable);
+    expect(human.code, 1);
+    expect(human.stdout, isEmpty);
+    expect(human.stderr, contains('process pid 42 is alive'));
+    expect(
+      human.stderr,
+      contains('control door at http://127.0.0.1:42/status'),
+    );
+    expect(
+      human.stderr,
+      contains('failed to connect before the 15.0 s hard bound'),
+    );
+    expect(
+      human.stderr,
+      contains('(station: alive; control door: connection failed)'),
+    );
+    expect(
+      human.stderr.trimRight(),
+      endsWith('check the door, not the process'),
+    );
+    expect(human.stderr, isNot(contains('dead')));
+    expect(human.stderr, isNot(contains('(station: down)')));
+
+    final json = await runCaptured(unreachable, ['--json']);
+    expect(json.code, 1);
+    expect(json.stderr, isEmpty);
+    expect(const LineSplitter().convert(json.stdout), hasLength(1));
+    expect(jsonDecode(json.stdout), <String, Object?>{
+      'classification': 'control_door_unavailable',
+      'process': <String, Object?>{'pid': 42, 'alive': true},
+      'controlDoor': <String, Object?>{
+        'url': 'http://127.0.0.1:42/status',
+        'failure': 'connection_failed',
+        'hardBoundMilliseconds': 15000,
+      },
+    });
+  });
+
+  test('AC-2 live PID timed-out door renders its 0.2 s bound', () async {
+    final unreachable = Unreachable(
+      pid: 42,
+      record: record(),
+      failure: DoorFailure.timedOut,
+      hardBound: const Duration(milliseconds: 200),
+    );
+
+    final human = await runCaptured(unreachable);
+    expect(human.code, 1);
+    expect(human.stdout, isEmpty);
+    expect(human.stderr, contains('process pid 42 is alive'));
+    expect(
+      human.stderr,
+      contains('control door at http://127.0.0.1:42/status'),
+    );
+    expect(
+      human.stderr,
+      contains('did not answer within the 0.2 s hard bound'),
+    );
+    expect(human.stderr, contains('(station: alive; control door: timed out)'));
+    expect(human.stderr, isNot(contains('dead')));
+    expect(human.stderr, isNot(contains('(station: down)')));
+
+    final json = await runCaptured(unreachable, ['--json']);
+    expect(json.code, 1);
+    expect(json.stderr, isEmpty);
+    final payload = jsonDecode(json.stdout) as Map<String, Object?>;
+    expect(payload['classification'], 'control_door_unavailable');
+    expect(payload['process'], <String, Object?>{'pid': 42, 'alive': true});
+    expect(payload['controlDoor'], <String, Object?>{
+      'url': 'http://127.0.0.1:42/status',
+      'failure': 'timed_out',
+      'hardBoundMilliseconds': 200,
+    });
+  });
+
+  test('AC-3 dead PID renders the distinct down result', () async {
+    final dead = DeadPid(pid: 42, record: record());
+
+    final human = await runCaptured(dead);
+    expect(human.code, 1);
+    expect(human.stdout, isEmpty);
+    expect(human.stderr, contains('station.lock'));
+    expect(human.stderr, contains('names pid 42'));
+    expect(human.stderr, contains('the pid probe found no live process'));
+    expect(human.stderr, contains('(station: down)'));
+
+    final json = await runCaptured(dead, ['--json']);
+    expect(json.code, 1);
+    expect(json.stderr, isEmpty);
+    expect(const LineSplitter().convert(json.stdout), hasLength(1));
+    expect(jsonDecode(json.stdout), <String, Object?>{
+      'classification': 'pid_dead',
+      'process': <String, Object?>{'pid': 42, 'alive': false},
+    });
+  });
+
+  test(
+    'AC-4 live PID malformed door response renders invalid response',
+    () async {
+      final unreachable = Unreachable(
+        pid: 42,
+        record: record(),
+        failure: DoorFailure.invalidResponse,
+        hardBound: const Duration(seconds: 15),
+      );
+
+      final human = await runCaptured(unreachable);
+      expect(human.code, 1);
+      expect(human.stdout, isEmpty);
+      expect(human.stderr, contains('process pid 42 is alive'));
+      expect(
+        human.stderr,
+        contains(
+          'control door at http://127.0.0.1:42/status did not return a valid '
+          'status response within the 15.0 s hard bound',
+        ),
+      );
+      expect(
+        human.stderr,
+        contains('(station: alive; control door: invalid response)'),
+      );
+      expect(human.stderr, isNot(contains('dead')));
+      expect(human.stderr, isNot(contains('(station: down)')));
+
+      final json = await runCaptured(unreachable, ['--json']);
+      expect(json.code, 1);
+      expect(json.stderr, isEmpty);
+      final payload = jsonDecode(json.stdout) as Map<String, Object?>;
+      expect(payload['classification'], 'control_door_unavailable');
+      expect(payload['process'], <String, Object?>{'pid': 42, 'alive': true});
+      expect(payload['controlDoor'], <String, Object?>{
+        'url': 'http://127.0.0.1:42/status',
+        'failure': 'invalid_response',
+        'hardBoundMilliseconds': 15000,
+      });
+    },
+  );
+
+  test('releasing and unadvertised live doors remain explicit', () async {
+    final releasing = await runCaptured(
+      Unreachable(
+        pid: 42,
+        record: record(phase: StationLifecyclePhase.releasing),
+        failure: DoorFailure.releasing,
+        hardBound: const Duration(seconds: 15),
+      ),
+    );
+    expect(releasing.code, 1);
+    expect(releasing.stderr, contains('process pid 42 is alive and releasing'));
+    expect(releasing.stderr, contains('control door at'));
+    expect(releasing.stderr, contains('was not probed'));
+    expect(releasing.stderr, isNot(contains('dead')));
+    expect(releasing.stderr, isNot(contains('(station: down)')));
+
+    final notAdvertised = await runCaptured(
+      Unreachable(
+        pid: 42,
+        record: record(controlUrl: null, token: null),
+        failure: DoorFailure.notAdvertised,
+        hardBound: const Duration(seconds: 15),
+      ),
+      ['--json'],
+    );
+    expect(notAdvertised.code, 1);
+    expect(notAdvertised.stderr, isEmpty);
+    final payload = jsonDecode(notAdvertised.stdout) as Map<String, Object?>;
+    expect(payload['controlDoor'], <String, Object?>{
+      'url': null,
+      'failure': 'not_advertised',
+      'hardBoundMilliseconds': 15000,
+    });
   });
 
   test(
