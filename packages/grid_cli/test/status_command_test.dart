@@ -132,12 +132,33 @@ void main() {
             'since': '2026-09-07T11:00:00.000Z',
           },
         ],
+        'zeroAdmissionWaiters': <Object?>[
+          <String, Object?>{
+            'bead': 'tg-wait-z',
+            'substation': 'zeta',
+            'since': '2026-09-07T12:00:00.000Z',
+          },
+          <String, Object?>{
+            'bead': 'tg-wait-a',
+            'substation': 'alpha',
+            'since': '2026-09-07T13:00:00.000Z',
+          },
+        ],
       },
     };
 
     final human = await runCaptured(Up(record: record(), payload: payload));
     expect(human.code, 0);
     expect(human.stdout, contains('  budget: 1/4\n'));
+    expect(
+      const LineSplitter()
+          .convert(human.stdout)
+          .where((line) => line.contains('admission: BLOCKED')),
+      [
+        '  admission: BLOCKED — 0 admitted with pending work: '
+            'tg-wait-a, tg-wait-z',
+      ],
+    );
     expect(human.stderr, isEmpty);
 
     final json = await runCaptured(Up(record: record(), payload: payload), [
@@ -145,6 +166,7 @@ void main() {
     ]);
     expect(json.code, 0);
     expect(const LineSplitter().convert(json.stdout), hasLength(1));
+    expect(json.stdout, '${jsonEncode(payload)}\n');
     final decoded = jsonDecode(json.stdout) as Map<String, Object?>;
     expect(decoded, payload);
     final admission = decoded['admission'] as Map<String, Object?>;
@@ -157,6 +179,18 @@ void main() {
       containsPair('clause', 'approval: not approved - run the approve verb'),
     );
     expect(json.stderr, isEmpty);
+
+    final emptyPayload = <String, Object?>{
+      ...payload,
+      'admission': <String, Object?>{
+        ...(payload['admission']! as Map<String, Object?>),
+        'zeroAdmissionWaiters': <Object?>[],
+      },
+    };
+    final empty = await runCaptured(
+      Up(record: record(), payload: emptyPayload),
+    );
+    expect(empty.stdout, isNot(contains('admission: BLOCKED')));
   });
 
   test('a payload without admission preserves the legacy UP output', () async {
@@ -176,6 +210,7 @@ void main() {
       '  ready: 1  ·  mounted: 1  ·  live sessions: 1  ·  last sync: null\n',
     );
     expect(result.stderr, isEmpty);
+    expect(result.stdout, isNot(contains('admission: BLOCKED')));
   });
 
   test('AC-5 slow-up unchanged in human and JSON output', () async {

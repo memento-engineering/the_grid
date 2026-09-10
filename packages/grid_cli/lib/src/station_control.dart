@@ -256,6 +256,15 @@ class StationStatus {
               'since': row.since.toIso8601String(),
             },
         ],
+        if (admission.zeroAdmissionWaiters.isNotEmpty)
+          'zeroAdmissionWaiters': <Object?>[
+            for (final row in admission.zeroAdmissionWaiters)
+              <String, Object?>{
+                'bead': row.bead,
+                'substation': row.substation,
+                'since': row.since.toIso8601String(),
+              },
+          ],
       },
     // First-class, top-level — a watcher reads THIS, never the gate list.
     'wedge': wedge.toJson(),

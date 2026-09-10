@@ -486,6 +486,241 @@ void main() {
   );
 
   test(
+    'zero-admission waiter status is stable, sorted, immutable, and clears',
+    () async {
+      final runner = RecordingBdRunner();
+      var now = DateTime(2026, 9, 7, 10);
+      final authority = StationAdmissionAuthority(
+        writer: StationBeadWriter(
+          bd: BdCliService(runner),
+          reader: runner,
+          ownership: BeadOwnershipPredicate(const {'a', 'b', 'owner'}),
+        ),
+        provider: FakeRuntimeProvider(),
+        stateSubstation: 'owner',
+        maxConcurrentWork: 1,
+        clock: () => now,
+      );
+      addTearDown(authority.dispose);
+      const ownerConfig = SubstationConfig(
+        substationId: 'owner',
+        ownedSubstations: {'owner'},
+        maxConcurrentWork: 1,
+      );
+      const aConfig = SubstationConfig(
+        substationId: 'a',
+        ownedSubstations: {'a'},
+        maxConcurrentWork: 1,
+      );
+      const bConfig = SubstationConfig(
+        substationId: 'b',
+        ownedSubstations: {'b'},
+        maxConcurrentWork: 1,
+      );
+      final owner = _bead('owner-1');
+      final aWaiter = _bead('a-1');
+      final bWaiters = [_bead('b-z'), _bead('b-a')];
+      final snapshot = _snapshot([owner, aWaiter, ...bWaiters]);
+
+      authority.admitPending(snapshot, ownerConfig, const ServiceBundle(), [
+        StationAdmissionCandidate(bead: owner, session: null),
+      ]);
+      await _pump();
+
+      now = DateTime(2026, 9, 7, 11);
+      final blockedB = authority
+          .admitPending(snapshot, bConfig, const ServiceBundle(), [
+            for (final bead in bWaiters)
+              StationAdmissionCandidate(bead: bead, session: null),
+          ]);
+      expect(blockedB.admitted, isEmpty);
+      expect(blockedB.waiting, hasLength(2));
+      final bSince = now.toUtc();
+
+      now = DateTime(2026, 9, 7, 12);
+      authority.admitPending(snapshot, bConfig, const ServiceBundle(), [
+        for (final bead in bWaiters)
+          StationAdmissionCandidate(bead: bead, session: null),
+      ]);
+      authority.admitPending(snapshot, aConfig, const ServiceBundle(), [
+        StationAdmissionCandidate(bead: aWaiter, session: null),
+      ]);
+
+      final waiting = authority.admissionStatus.zeroAdmissionWaiters;
+      expect(waiting, [
+        (bead: 'a-1', substation: 'a', since: now.toUtc()),
+        (bead: 'b-a', substation: 'b', since: bSince),
+        (bead: 'b-z', substation: 'b', since: bSince),
+      ]);
+      expect(waiting.every((row) => row.since.isUtc), isTrue);
+      expect(
+        () => waiting.add((bead: 'nope', substation: 'z', since: now.toUtc())),
+        throwsUnsupportedError,
+      );
+
+      final pausedOwner = SessionProjection(
+        workBeadId: owner.id,
+        sessionId: 'owner-session',
+        pauseState: SessionPauseState.paused,
+      );
+      final pausedSnapshot = _snapshot(
+        [owner, aWaiter, ...bWaiters],
+        sessions: {owner.id: pausedOwner},
+      );
+      authority.admitPending(
+        pausedSnapshot,
+        ownerConfig,
+        const ServiceBundle(),
+        [StationAdmissionCandidate(bead: owner, session: pausedOwner)],
+      );
+      final admittedB = authority
+          .admitPending(pausedSnapshot, bConfig, const ServiceBundle(), [
+            for (final bead in bWaiters)
+              StationAdmissionCandidate(bead: bead, session: null),
+          ]);
+      expect(admittedB.admitted, hasLength(1));
+      expect(authority.admissionStatus.zeroAdmissionWaiters, [
+        (bead: 'a-1', substation: 'a', since: now.toUtc()),
+      ]);
+
+      authority.admitPending(
+        pausedSnapshot,
+        aConfig,
+        const ServiceBundle(),
+        const [],
+      );
+      expect(authority.admissionStatus.zeroAdmissionWaiters, isEmpty);
+    },
+  );
+
+  test(
+    'capacity recheck coalesces reservation releases and ignores no-ops',
+    () async {
+      final station = _stationOver(RecordingBdRunner(), maxConcurrentWork: 2);
+      addTearDown(station.dispose);
+      const ownerConfig = SubstationConfig(
+        substationId: 'owner',
+        ownedSubstations: {'owner'},
+        maxConcurrentWork: 2,
+      );
+      const waiterConfig = SubstationConfig(
+        substationId: 'waiter',
+        ownedSubstations: {'waiter'},
+        maxConcurrentWork: 2,
+      );
+      final owners = [_bead('owner-1'), _bead('owner-2')];
+      final waiter = _bead('waiter-1');
+      final snapshot = _snapshot([...owners, waiter]);
+      final held = station.admission
+          .admitPending(snapshot, ownerConfig, const ServiceBundle(), [
+            for (final bead in owners)
+              StationAdmissionCandidate(bead: bead, session: null),
+          ]);
+      expect(held.admitted, hasLength(2));
+      await _pump();
+
+      final blocked = station.admission.admitPending(
+        snapshot,
+        waiterConfig,
+        const ServiceBundle(),
+        [StationAdmissionCandidate(bead: waiter, session: null)],
+      );
+      expect(blocked.admitted, isEmpty);
+      expect(blocked.waiting.single.bead.id, waiter.id);
+
+      var notifications = 0;
+      station.admission.addInvalidationListener(() => notifications += 1);
+      final pausedSessions = {
+        for (final owner in owners)
+          owner.id: SessionProjection(
+            workBeadId: owner.id,
+            sessionId: '${owner.id}-session',
+            pauseState: SessionPauseState.paused,
+          ),
+      };
+      final pausedSnapshot = _snapshot([
+        ...owners,
+        waiter,
+      ], sessions: pausedSessions);
+      final pausedCandidates = [
+        for (final owner in owners)
+          StationAdmissionCandidate(
+            bead: owner,
+            session: pausedSessions[owner.id],
+          ),
+      ];
+
+      station.admission.admitPending(
+        pausedSnapshot,
+        ownerConfig,
+        const ServiceBundle(),
+        pausedCandidates,
+      );
+      await _pump();
+      expect(notifications, 1, reason: 'same-turn releases share one recheck');
+
+      station.admission.admitPending(
+        pausedSnapshot,
+        ownerConfig,
+        const ServiceBundle(),
+        pausedCandidates,
+      );
+      await _pump();
+      expect(notifications, 1, reason: 'a no-op release schedules no recheck');
+    },
+  );
+
+  test(
+    'disposing before a queued capacity recheck suppresses its callback',
+    () async {
+      final station = _stationOver(RecordingBdRunner(), maxConcurrentWork: 1);
+      const ownerConfig = SubstationConfig(
+        substationId: 'owner',
+        ownedSubstations: {'owner'},
+        maxConcurrentWork: 1,
+      );
+      const waiterConfig = SubstationConfig(
+        substationId: 'waiter',
+        ownedSubstations: {'waiter'},
+        maxConcurrentWork: 1,
+      );
+      final owner = _bead('owner-1');
+      final waiter = _bead('waiter-1');
+      final snapshot = _snapshot([owner, waiter]);
+      station.admission.admitPending(
+        snapshot,
+        ownerConfig,
+        const ServiceBundle(),
+        [StationAdmissionCandidate(bead: owner, session: null)],
+      );
+      await _pump();
+      station.admission.admitPending(
+        snapshot,
+        waiterConfig,
+        const ServiceBundle(),
+        [StationAdmissionCandidate(bead: waiter, session: null)],
+      );
+
+      var notifications = 0;
+      station.admission.addInvalidationListener(() => notifications += 1);
+      final pausedOwner = SessionProjection(
+        workBeadId: owner.id,
+        sessionId: 'owner-session',
+        pauseState: SessionPauseState.paused,
+      );
+      station.admission.admitPending(
+        _snapshot([owner, waiter], sessions: {owner.id: pausedOwner}),
+        ownerConfig,
+        const ServiceBundle(),
+        [StationAdmissionCandidate(bead: owner, session: pausedOwner)],
+      );
+      station.dispose();
+      await _pump();
+      expect(notifications, 0);
+    },
+  );
+
+  test(
     'priority then bead id reserves synchronously under both ceilings',
     () async {
       final fakes = buildFakes();
