@@ -90,6 +90,18 @@ void main() {
                 since: DateTime.utc(2026, 9, 7, 11),
               ),
             ],
+            zeroAdmissionWaiters: [
+              (
+                bead: 'mars-ready',
+                substation: 'mars',
+                since: DateTime.utc(2026, 9, 7, 12),
+              ),
+              (
+                bead: 'venus-ready',
+                substation: 'venus',
+                since: DateTime.utc(2026, 9, 7, 13),
+              ),
+            ],
           ),
         ),
         commandHandler: _FakeCommandHandler(),
@@ -141,6 +153,18 @@ void main() {
             'bead': 'tg-refused',
             'clause': 'approval: not approved - run the approve verb',
             'since': '2026-09-07T11:00:00.000Z',
+          },
+        ],
+        'zeroAdmissionWaiters': [
+          {
+            'bead': 'mars-ready',
+            'substation': 'mars',
+            'since': '2026-09-07T12:00:00.000Z',
+          },
+          {
+            'bead': 'venus-ready',
+            'substation': 'venus',
+            'since': '2026-09-07T13:00:00.000Z',
           },
         ],
       });

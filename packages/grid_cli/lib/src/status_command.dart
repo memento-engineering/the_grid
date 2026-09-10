@@ -230,6 +230,21 @@ class StatusCommand extends Command<int> {
       if (maxAgents is int && reservations is List<Object?>) {
         stdout.writeln('  budget: ${reservations.length}/$maxAgents');
       }
+      final zeroAdmissionWaiters = admission['zeroAdmissionWaiters'];
+      if (zeroAdmissionWaiters is List<Object?> &&
+          zeroAdmissionWaiters.isNotEmpty) {
+        final beadIds = <String>[
+          for (final row in zeroAdmissionWaiters)
+            if (row is Map<String, Object?> && row['bead'] is String)
+              row['bead'] as String,
+        ]..sort();
+        if (beadIds.isNotEmpty) {
+          stdout.writeln(
+            '  admission: BLOCKED — 0 admitted with pending work: '
+            '${beadIds.join(', ')}',
+          );
+        }
+      }
     }
     return 0;
   }
