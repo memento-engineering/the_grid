@@ -779,6 +779,11 @@ final class StationAdmissionAuthority {
         snapshot.frontierExclusionsByBeadId,
         snapshot.sessionsByWorkBead,
       ),
+      sameStoreDependencyExclusionClause(
+        snapshot.graph,
+        BeadOwnershipPredicate(config.ownedSubstations),
+        snapshot.sessionsByWorkBead,
+      ),
       mountAttemptClause(snapshot.mountAttemptsByWorkBead),
     ], services.mountEligibility);
     try {

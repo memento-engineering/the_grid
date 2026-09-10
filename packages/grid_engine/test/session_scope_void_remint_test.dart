@@ -76,16 +76,32 @@ Future<void> _pumpUntil(
 Bead _task(String id) =>
     Bead(id: id, issueType: IssueType.task, status: BeadStatus.open);
 
-JoinedSnapshot _joined(Map<String, SessionProjection> sessions) =>
-    JoinedSnapshot(
-      graph: GraphSnapshot.fromParts(
-        beads: [_task('tg-1')],
-        dependencies: const [],
-        readyIds: const {'tg-1'},
-        capturedAt: DateTime(2026),
-      ),
-      sessionsByWorkBead: sessions,
-    );
+JoinedSnapshot _joined(
+  Map<String, SessionProjection> sessions, {
+  Bead? workBead,
+  List<Bead> additionalBeads = const [],
+  List<BeadDependency> dependencies = const [],
+  Set<String> readyIds = const {'tg-1'},
+}) => JoinedSnapshot(
+  graph: GraphSnapshot.fromParts(
+    beads: [workBead ?? _task('tg-1'), ...additionalBeads],
+    dependencies: dependencies,
+    readyIds: readyIds,
+    capturedAt: DateTime(2026),
+  ),
+  sessionsByWorkBead: sessions,
+);
+
+List<WorkBead> _workBeads(Branch root) {
+  final found = <WorkBead>[];
+  void walk(Branch branch) {
+    if (branch.seed case final WorkBead work) found.add(work);
+    branch.visitChildren(walk);
+  }
+
+  walk(root);
+  return found;
+}
 
 /// The DEAD KEY: closed, `agent` complete, `verify` still `running` with a
 /// process fence on record — the I-10 shape (an operator-closed orphan).
@@ -163,6 +179,92 @@ List<Map<String, dynamic>> _updatesFor(RecordingBdRunner runner, String id) {
 
 void main() {
   group('tg-4rw / I-10 — a dead session key mints fresh instead of wedging', () {
+    test(
+      'an open same-store blocker added after eligibility refuses remint until close restores it',
+      () async {
+        final approved = Bead(
+          id: 'tg-1',
+          issueType: IssueType.task,
+          status: BeadStatus.open,
+          labels: const ['grid.approved'],
+          metadata: const {
+            'grid.approved_at': '2026-09-09T22:00:00Z',
+            'grid.approved_by': 'operator',
+            'grid.approved_rev': '0123456789abcdef',
+          },
+        );
+        const openBlocker = Bead(
+          id: 'tg-blocker',
+          issueType: IssueType.task,
+          status: BeadStatus.open,
+        );
+        const closedBlocker = Bead(
+          id: 'tg-blocker',
+          issueType: IssueType.task,
+          status: BeadStatus.closed,
+        );
+        const edge = BeadDependency(issueId: 'tg-1', dependsOnId: 'tg-blocker');
+        const clause =
+            'frontier dependency: bead tg-1 is blocked by open dependency '
+            '"tg-blocker"';
+        final f = buildFakes();
+        final transport = _RecordingTransport();
+        final reg = RecordingCapabilityRegistry(circuits: const {});
+        final joined = JoinedSnapshotNotifier(
+          _joined(const {'tg-1': _deadKey}, workBead: approved),
+        );
+        final m = _mount(
+          joined: joined,
+          ctx: f.ctx,
+          registry: reg,
+          transport: transport,
+        );
+        addTearDown(m.owner.dispose);
+
+        expect(_workBeads(m.root), hasLength(1));
+        joined.push(
+          _joined(
+            const {'tg-1': _deadKey},
+            workBead: approved,
+            additionalBeads: const [openBlocker],
+            dependencies: const [edge],
+            readyIds: const {},
+          ),
+        );
+        m.owner.flush();
+        await _pump();
+        m.owner.flush();
+
+        expect(_workBeads(m.root), isEmpty);
+        expect(f.runner.workCreates, isEmpty);
+        final refused = transport.named('work.mountEligibilityRefused');
+        expect(refused, hasLength(1));
+        expect(refused.single.data, {'beadId': 'tg-1', 'clause': clause});
+
+        joined.push(
+          _joined(
+            const {'tg-1': _deadKey},
+            workBead: approved,
+            additionalBeads: const [closedBlocker],
+            dependencies: const [edge],
+          ),
+        );
+        m.owner.flush();
+        await _pumpUntil(
+          m.owner,
+          () =>
+              f.runner.workCreates.length >= 2 &&
+              transport.named('work.mountEligibilityRestored').isNotEmpty,
+        );
+
+        expect(f.runner.workCreates, hasLength(2));
+        expect(f.runner.graphApplyCalls, hasLength(1));
+        final restored = transport.named('work.mountEligibilityRestored');
+        expect(restored, hasLength(1));
+        expect(restored.single.data, {'beadId': 'tg-1', 'clause': clause});
+      },
+    );
+
     test('a CLOSED session with a stale running cursor: the bead MOUNTS, the '
         'dead key is RETIRED, exactly ONE fresh session is minted, and the '
         'decision is LOUD once', () async {

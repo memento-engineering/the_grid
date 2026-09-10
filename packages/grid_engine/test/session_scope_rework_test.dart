@@ -911,18 +911,23 @@ void main() {
         m.owner.flush();
         await _pumpUntil(
           m.owner,
-          () => transport.named('session.mintAbandoned').isNotEmpty,
+          () => transport
+              .named('work.mountEligibilityRefused')
+              .any((flare) => flare.data['beadId'] == 'tg-1'),
         );
 
         expect(f.runner.workCreates, isEmpty);
-        const refusalReason =
-            'work bead is absent from the fresh ready frontier';
-        final refused = transport.named('session.mintRefused');
+        const dependencyClause =
+            'frontier dependency: bead tg-1 is blocked by open dependency '
+            '"tg-blocker"';
+        final refused = transport
+            .named('work.mountEligibilityRefused')
+            .where((flare) => flare.data['beadId'] == 'tg-1')
+            .toList();
         expect(refused, hasLength(1));
-        expect(refused.single.data['reason'], refusalReason);
-        final abandoned = transport.named('session.mintAbandoned');
-        expect(abandoned, hasLength(1));
-        expect(abandoned.single.data['reason'], refusalReason);
+        expect(refused.single.data['clause'], dependencyClause);
+        expect(transport.named('session.mintRefused'), isEmpty);
+        expect(transport.named('session.mintAbandoned'), isEmpty);
         expect(
           f.ctx.admission.admissionStatus.reservations.where(
             (reservation) => reservation.bead == 'tg-1',
@@ -938,6 +943,9 @@ void main() {
             ],
             ready: {'tg-1'},
             capturedAt: afterDecision.add(const Duration(seconds: 1)),
+            dependencies: const [
+              BeadDependency(issueId: 'tg-1', dependsOnId: 'tg-blocker'),
+            ],
             sessions: const {
               'tg-1#r1': SessionProjection(
                 workBeadId: 'tg-1#r1',
@@ -968,6 +976,12 @@ void main() {
           ),
           hasLength(1),
         );
+        final restored = transport
+            .named('work.mountEligibilityRestored')
+            .where((flare) => flare.data['beadId'] == 'tg-1')
+            .toList();
+        expect(restored, hasLength(1));
+        expect(restored.single.data['clause'], dependencyClause);
         final successorReservation = f
             .ctx
             .admission
@@ -975,8 +989,11 @@ void main() {
             .reservations
             .singleWhere((reservation) => reservation.bead == 'tg-1');
         expect(successorReservation.sessionId, 'tgdog-round2');
-        expect(transport.named('session.mintRefused'), hasLength(1));
-        expect(transport.named('session.mintAbandoned'), hasLength(1));
+        expect(transport.named('session.mintRefused'), isEmpty);
+        final abandoned = transport.named('session.mintAbandoned');
+        expect(abandoned, hasLength(1));
+        expect(abandoned.single.data['stage'], 'fresh-snapshot');
+        expect(abandoned.single.data['reason'], 'cancelled');
       },
     );
 

@@ -2,6 +2,7 @@ library;
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
+import 'package:grid_runtime/grid_runtime.dart' show BeadOwnershipPredicate;
 
 import 'driveable_work.dart';
 import 'session_projection.dart';
@@ -69,9 +70,62 @@ MountEligibilityPredicate crossLinkExclusionClause(
   if (clause == null) {
     return const MountEligibilityDecision.eligible();
   }
-  final session = sessionsByWorkBead[bead.id];
-  if (session != null && !session.isTerminal) {
+  if (_hasLivePublishedSession(bead.id, sessionsByWorkBead)) {
     return const MountEligibilityDecision.eligible();
   }
   return MountEligibilityDecision.refused(clause: clause);
 };
+
+/// Refuses a fresh bead blocked by an open dependency in its owning store.
+///
+/// [GraphSnapshot.readyIds] is the originating store's authoritative `bd ready`
+/// result, so membership wins over locally projected dependency rows. When the
+/// bead is absent from that set, blocking edges whose observed endpoints
+/// resolve to the same non-null owner reproduce that store's blocked semantics.
+/// A bead carrying a live published session remains eligible so adding an edge
+/// never evicts work in flight.
+MountEligibilityPredicate sameStoreDependencyExclusionClause(
+  GraphSnapshot graph,
+  BeadOwnershipPredicate ownership,
+  Map<String, SessionProjection> sessionsByWorkBead,
+) => (bead) {
+  if (graph.readyIds.contains(bead.id)) {
+    return const MountEligibilityDecision.eligible();
+  }
+
+  final sourceOwner = ownership.substationOf(bead);
+  final blockerIds = <String>{};
+  for (final dependency in graph.dependencies) {
+    if (dependency.issueId != bead.id ||
+        !dependency.type.isBlockingEdge ||
+        sourceOwner == null) {
+      continue;
+    }
+    final target = graph.beadsById[dependency.dependsOnId];
+    if (target == null ||
+        target.isClosed ||
+        ownership.substationOf(target) != sourceOwner) {
+      continue;
+    }
+    blockerIds.add(target.id);
+  }
+  if (blockerIds.isEmpty ||
+      _hasLivePublishedSession(bead.id, sessionsByWorkBead)) {
+    return const MountEligibilityDecision.eligible();
+  }
+
+  final blockers = blockerIds.toList()..sort();
+  return MountEligibilityDecision.refused(
+    clause:
+        'frontier dependency: bead ${bead.id} is blocked by open dependency '
+        '"${blockers.first}"',
+  );
+};
+
+bool _hasLivePublishedSession(
+  String beadId,
+  Map<String, SessionProjection> sessionsByWorkBead,
+) {
+  final session = sessionsByWorkBead[beadId];
+  return session != null && !session.isTerminal;
+}

@@ -236,7 +236,7 @@ class _WorkListState extends State<WorkList>
     }
 
     final batch = stationServices == null
-        ? _admitOffline(services, candidates)
+        ? _admitOffline(services, ownership, candidates)
         : stationServices.admission.admitPending(
             _snapshot,
             seed.substationConfig,
@@ -316,6 +316,7 @@ class _WorkListState extends State<WorkList>
   /// authority-only reservation and durable mount-attempt write.
   StationAdmissionBatch _admitOffline(
     ServiceBundle services,
+    BeadOwnershipPredicate ownership,
     List<StationAdmissionCandidate> candidates,
   ) {
     final mountEligibility = composeMountEligibility([
@@ -326,6 +327,11 @@ class _WorkListState extends State<WorkList>
       driveListClause(seed.substationConfig.driveList),
       crossLinkExclusionClause(
         _snapshot.frontierExclusionsByBeadId,
+        _snapshot.sessionsByWorkBead,
+      ),
+      sameStoreDependencyExclusionClause(
+        _snapshot.graph,
+        ownership,
         _snapshot.sessionsByWorkBead,
       ),
       mountAttemptClause(_snapshot.mountAttemptsByWorkBead),
