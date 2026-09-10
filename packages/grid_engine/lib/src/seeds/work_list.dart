@@ -52,6 +52,8 @@ class WorkList extends StatefulSeed with GridDiagnosticable {
   }
 }
 
+enum _WorkRefusalReport { terminalSkip, paused }
+
 class _WorkListState extends State<WorkList>
     with Diagnosticable, GridDiagnosticable {
   RemoveListener? _removeSnapshotListener;
@@ -63,11 +65,7 @@ class _WorkListState extends State<WorkList>
   late JoinedSnapshot _snapshot;
 
   final Map<String, WorkBead> _mountedWorkBeadsById = <String, WorkBead>{};
-  final Set<String> _terminalSkipReported = <String>{};
-
-  /// Bead ids whose current park has already been reported. A later mount
-  /// clears the latch so pausing the same session again remains observable.
-  final Set<String> _pausedReported = <String>{};
+  Map<String, _WorkRefusalReport> _lastReportableRefusalByBeadId = const {};
 
   StationTrajectoryRecorder _recorder =
       TrajectoryRecorderScope.disabled.recorder;
@@ -91,7 +89,6 @@ class _WorkListState extends State<WorkList>
   WorkBead _workBeadFor(StationAdmissionReservation reservation) {
     final candidate = reservation.candidate;
     final bead = candidate.bead;
-    _pausedReported.remove(bead.id);
     final cached = _mountedWorkBeadsById[bead.id];
     final carriedReservation = reservation.reservationToken == null
         ? cached?.admissionReservation ?? reservation
@@ -246,24 +243,39 @@ class _WorkListState extends State<WorkList>
     if (stationServices != null) {
       _projectTerminalAnswers(stationServices, services, candidates, batch);
     }
+    final currentReportableRefusalByBeadId = <String, _WorkRefusalReport>{};
     for (final refusal in batch.refused) {
-      if (refusal.clause == 'done' || refusal.clause == 'held') {
-        _reportTerminalSkip(
-          services,
-          refusal.candidate.bead.id,
-          refusal.candidate.session?.sessionId ?? '',
-          refusal.clause,
-          refusal.detail,
-        );
-      } else if (refusal.clause == 'paused') {
-        _reportPaused(
-          services,
-          refusal.candidate.bead.id,
-          refusal.candidate.session?.sessionId ?? '',
-          refusal.detail,
-        );
+      final report = switch (refusal.clause) {
+        'done' || 'held' => _WorkRefusalReport.terminalSkip,
+        'paused' => _WorkRefusalReport.paused,
+        _ => null,
+      };
+      if (report == null) continue;
+      final beadId = refusal.candidate.bead.id;
+      if (currentReportableRefusalByBeadId.containsKey(beadId)) continue;
+      currentReportableRefusalByBeadId[beadId] = report;
+      if (_lastReportableRefusalByBeadId[beadId] == report) continue;
+      switch (report) {
+        case _WorkRefusalReport.terminalSkip:
+          _reportTerminalSkip(
+            services,
+            beadId,
+            refusal.candidate.session?.sessionId ?? '',
+            refusal.clause,
+            refusal.detail,
+          );
+        case _WorkRefusalReport.paused:
+          _reportPaused(
+            services,
+            beadId,
+            refusal.candidate.session?.sessionId ?? '',
+            refusal.detail,
+          );
       }
     }
+    _lastReportableRefusalByBeadId = Map.unmodifiable(
+      currentReportableRefusalByBeadId,
+    );
 
     // Keep already-rendered keyed siblings ahead of newly admitted branches.
     // The authority's priority/id ordering governs pending reservations; this
@@ -601,7 +613,6 @@ class _WorkListState extends State<WorkList>
     String disposition,
     String reason,
   ) {
-    if (!_terminalSkipReported.add(beadId)) return;
     _flare(services, 'work.terminalSkip', {
       'beadId': beadId,
       'sessionId': sessionId,
@@ -616,7 +627,6 @@ class _WorkListState extends State<WorkList>
     String sessionId,
     String reason,
   ) {
-    if (!_pausedReported.add(beadId)) return;
     _flare(services, 'work.paused', {
       'beadId': beadId,
       'sessionId': sessionId,

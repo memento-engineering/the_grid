@@ -126,6 +126,136 @@ StationServices _stationServices({required int maxConcurrentWork}) =>
     );
 
 void main() {
+  test(
+    'terminal skip reports once per observation and again after an intervening mount',
+    () {
+      final recorder = _Recorder();
+      final transport = _RecordingTransport();
+      final bead = _bead('tg-1');
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [bead],
+          ready: {'tg-1'},
+          sessions: {
+            'tg-1': _session(
+              'tg-1',
+              sessionId: 'tgdog-done-1',
+              isTerminal: true,
+              completed: true,
+            ),
+          },
+        ),
+      );
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      owner.mountRoot(
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+              ),
+            ),
+            services: ServiceBundle(transport: transport),
+          ),
+        ),
+      );
+
+      JoinedSnapshot done(String sessionId) => _joined(
+        beads: [bead],
+        ready: {'tg-1'},
+        sessions: {
+          'tg-1': _session(
+            'tg-1',
+            sessionId: sessionId,
+            isTerminal: true,
+            completed: true,
+          ),
+        },
+      );
+      joined.push(done('tgdog-done-1'));
+      owner.flush();
+      joined.push(
+        _joined(
+          beads: [bead],
+          ready: {'tg-1'},
+          sessions: {'tg-1': _session('tg-1', sessionId: 'tgdog-live')},
+        ),
+      );
+      owner.flush();
+      expect(recorder.handedSessionIds, ['tgdog-live']);
+      joined.push(done('tgdog-done-2'));
+      owner.flush();
+
+      final skipped = transport.flares.where(
+        (flare) => flare.name == 'work.terminalSkip',
+      );
+      expect(skipped, hasLength(2));
+      for (final flare in skipped) {
+        expect(
+          flare.data.keys,
+          unorderedEquals(['beadId', 'sessionId', 'disposition', 'reason']),
+        );
+      }
+    },
+  );
+
+  test('pause reports once per park and again after an intervening mount', () {
+    final recorder = _Recorder();
+    final transport = _RecordingTransport();
+    final bead = _bead('tg-1');
+    SessionProjection session(SessionPauseState pauseState) =>
+        _session('tg-1', sessionId: 'tgdog-s1', pauseState: pauseState);
+    JoinedSnapshot snapshot(SessionPauseState pauseState) => _joined(
+      beads: [bead],
+      ready: {'tg-1'},
+      sessions: {'tg-1': session(pauseState)},
+    );
+    final joined = JoinedSnapshotNotifier(snapshot(SessionPauseState.none));
+    final owner = TreeOwner();
+    addTearDown(owner.dispose);
+    owner.mountRoot(
+      ProviderScope(
+        child: _root(
+          joined: joined,
+          resolver: _FakeSessionResolver(recorder),
+          substationConfig: SubstationConfigNotifier(
+            const SubstationConfig(
+              substationId: 'tg',
+              ownedSubstations: {'tg'},
+            ),
+          ),
+          services: ServiceBundle(transport: transport),
+        ),
+      ),
+    );
+    expect(recorder.handedSessionIds, ['tgdog-s1']);
+
+    joined.push(snapshot(SessionPauseState.paused));
+    owner.flush();
+    joined.push(snapshot(SessionPauseState.paused));
+    owner.flush();
+    joined.push(snapshot(SessionPauseState.resumed));
+    owner.flush();
+    expect(recorder.handedSessionIds, ['tgdog-s1', 'tgdog-s1']);
+    joined.push(snapshot(SessionPauseState.paused));
+    owner.flush();
+
+    final paused = transport.flares.where(
+      (flare) => flare.name == 'work.paused',
+    );
+    expect(paused, hasLength(2));
+    for (final flare in paused) {
+      expect(
+        flare.data.keys,
+        unorderedEquals(['beadId', 'sessionId', 'reason']),
+      );
+    }
+  });
+
   group('pause and resume at the mount boundary', () {
     test('pause unmounts the branch and frees its slot', () {
       final recorder = _Recorder();
