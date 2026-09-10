@@ -30,8 +30,12 @@ final class StationAdmissionStatus {
     required List<({String bead, String? sessionId, DateTime since})>
     reservations,
     required List<({String bead, String clause, DateTime since})> refusals,
+    List<({String bead, String substation, DateTime since})>
+        zeroAdmissionWaiters =
+        const [],
   }) : reservations = List.unmodifiable(reservations),
-       refusals = List.unmodifiable(refusals);
+       refusals = List.unmodifiable(refusals),
+       zeroAdmissionWaiters = List.unmodifiable(zeroAdmissionWaiters);
 
   /// The station-wide concurrency ceiling.
   final int maxAgents;
@@ -41,6 +45,10 @@ final class StationAdmissionStatus {
 
   /// Every currently active mount-eligibility refusal across all scopes.
   final List<({String bead, String clause, DateTime since})> refusals;
+
+  /// Pending work in every scope whose latest admission pass admitted zero.
+  final List<({String bead, String substation, DateTime since})>
+  zeroAdmissionWaiters;
 }
 
 /// A work bead and the session projection that must ride with its mount.
@@ -193,6 +201,7 @@ final class _AdmissionScopeState {
   final Set<String> _rivalRetiresRequired = <String>{};
   final Set<String> _rivalCleanupsInFlight = <String>{};
   final Set<String> _gateSweepsScheduled = <String>{};
+  final Map<String, DateTime> _zeroAdmissionSinceByBead = <String, DateTime>{};
   String? _capacityWaitingSignature;
 }
 
@@ -243,6 +252,7 @@ final class StationAdmissionAuthority {
       <String, Future<void>>{};
   final Set<String> _retryBlocked = <String>{};
   final Set<String> _blockedUntilFreshReady = <String>{};
+  bool _capacityRecheckScheduled = false;
   bool _disposed = false;
 
   /// Copies the current admission budget and refusal state for status views.
@@ -271,10 +281,24 @@ final class StationAdmissionAuthority {
           final byBead = a.bead.compareTo(b.bead);
           return byBead != 0 ? byBead : a.clause.compareTo(b.clause);
         });
+    final zeroAdmissionWaiters =
+        <({String bead, String substation, DateTime since})>[
+          for (final scope in _scopes.entries)
+            for (final entry in scope.value._zeroAdmissionSinceByBead.entries)
+              (
+                bead: entry.key,
+                substation: scope.key.substationId,
+                since: entry.value,
+              ),
+        ]..sort((a, b) {
+          final bySubstation = a.substation.compareTo(b.substation);
+          return bySubstation != 0 ? bySubstation : a.bead.compareTo(b.bead);
+        });
     return StationAdmissionStatus(
       maxAgents: _maxConcurrentWork,
       reservations: reservations,
       refusals: refusals,
+      zeroAdmissionWaiters: zeroAdmissionWaiters,
     );
   }
 
@@ -756,6 +780,20 @@ final class StationAdmissionAuthority {
     scope._capacityWaitingSignature = capacityWaiting.isEmpty
         ? null
         : capacityWaitingSignature;
+    if (admitted.isEmpty && waiting.isNotEmpty) {
+      final waitingIds = {for (final candidate in waiting) candidate.bead.id};
+      scope._zeroAdmissionSinceByBead.removeWhere(
+        (beadId, _) => !waitingIds.contains(beadId),
+      );
+      for (final beadId in waitingIds) {
+        scope._zeroAdmissionSinceByBead.putIfAbsent(
+          beadId,
+          () => _clock().toUtc(),
+        );
+      }
+    } else {
+      scope._zeroAdmissionSinceByBead.clear();
+    }
     return StationAdmissionBatch(
       admitted: admitted,
       waiting: waiting,
@@ -1522,13 +1560,20 @@ final class StationAdmissionAuthority {
         reservation.scopeKey != onlyScope) {
       return;
     }
-    if (reservation != null) _reservations.remove(workBeadId);
+    final releasedReservation = reservation != null;
+    if (releasedReservation) _reservations.remove(workBeadId);
     if (onlyScope != null) {
       _scopes[onlyScope]?._mountedIds.remove(workBeadId);
     } else {
       for (final scope in _scopes.values) {
         scope._mountedIds.remove(workBeadId);
       }
+    }
+    if (releasedReservation &&
+        _scopes.values.any(
+          (scope) => scope._zeroAdmissionSinceByBead.isNotEmpty,
+        )) {
+      _scheduleCapacityRecheck();
     }
   }
 
@@ -1550,8 +1595,19 @@ final class StationAdmissionAuthority {
     });
   }
 
+  void _scheduleCapacityRecheck() {
+    if (_disposed || _capacityRecheckScheduled) return;
+    _capacityRecheckScheduled = true;
+    scheduleMicrotask(() {
+      if (_disposed || !_capacityRecheckScheduled) return;
+      _capacityRecheckScheduled = false;
+      _notifyListeners();
+    });
+  }
+
   void _notifyListeners() {
     if (_disposed) return;
+    _capacityRecheckScheduled = false;
     for (final listener in _listeners.values.toList(growable: false)) {
       try {
         listener();
@@ -1595,6 +1651,7 @@ final class StationAdmissionAuthority {
     _retryTimers.clear();
     _retryBlocked.clear();
     _blockedUntilFreshReady.clear();
+    _capacityRecheckScheduled = false;
     _mountAttemptWrites.clear();
     _lastScopeByBead.clear();
     _scopeBySessionId.clear();

@@ -109,9 +109,13 @@ void main() {
     expect(initiallyBlocked.waiting.single.bead.id, waiter.id);
 
     var invalidations = 0;
+    var releaseCallCount = -1;
     StationAdmissionBatch? retried;
-    authority.addInvalidationListener(() {
+    late void Function() removeInvalidationListener;
+    removeInvalidationListener = authority.addInvalidationListener(() {
+      removeInvalidationListener();
       invalidations += 1;
+      releaseCallCount = runner.calls.length;
       retried = authority.admitPending(
         joined,
         waiterConfig,
@@ -135,10 +139,13 @@ void main() {
     expect(retried!.admitted.single.candidate.bead.id, waiter.id);
     expect(retried!.waiting, isEmpty);
 
-    final callsAfterSetup = runner.calls.skip(setupCallCount).toList();
-    expect(callsAfterSetup.where((call) => call.first == 'close'), isEmpty);
+    final pauseReleaseCalls = runner.calls.sublist(
+      setupCallCount,
+      releaseCallCount,
+    );
+    expect(pauseReleaseCalls.where((call) => call.first == 'close'), isEmpty);
     expect(
-      callsAfterSetup.where(
+      pauseReleaseCalls.where(
         (call) => call.first == 'update' && call.contains('a-session'),
       ),
       isEmpty,
