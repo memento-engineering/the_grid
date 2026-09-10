@@ -714,6 +714,145 @@ void main() {
     expect(liveTransport.flares, isEmpty);
   });
 
+  test(
+    'sameStoreDependencyExclusionClause follows bd ready same-store semantics',
+    () {
+      const source = Bead(
+        id: 'tg-1',
+        issueType: IssueType.task,
+        status: BeadStatus.open,
+      );
+      const lowBlocker = Bead(
+        id: 'tg-a',
+        issueType: IssueType.task,
+        status: BeadStatus.open,
+      );
+      const highBlocker = Bead(
+        id: 'tg-z',
+        issueType: IssueType.task,
+        status: BeadStatus.open,
+      );
+      const closedBlocker = Bead(
+        id: 'tg-closed',
+        issueType: IssueType.task,
+        status: BeadStatus.closed,
+      );
+      const foreignBlocker = Bead(
+        id: 'pow-1',
+        issueType: IssueType.task,
+        status: BeadStatus.open,
+      );
+      final ownership = BeadOwnershipPredicate(const {'tg'});
+
+      GraphSnapshot graph(
+        List<BeadDependency> dependencies, {
+        Set<String> readyIds = const {},
+      }) => GraphSnapshot.fromParts(
+        beads: const [
+          source,
+          lowBlocker,
+          highBlocker,
+          closedBlocker,
+          foreignBlocker,
+        ],
+        dependencies: dependencies,
+        readyIds: readyIds,
+        capturedAt: DateTime(2026),
+      );
+
+      MountEligibilityDecision evaluate(
+        List<BeadDependency> dependencies, {
+        Set<String> readyIds = const {},
+        Map<String, SessionProjection> sessions = const {},
+      }) => sameStoreDependencyExclusionClause(
+        graph(dependencies, readyIds: readyIds),
+        ownership,
+        sessions,
+      )(source);
+
+      expect(
+        evaluate(const [BeadDependency(issueId: 'tg-1', dependsOnId: 'tg-z')]),
+        const MountEligibilityDecision.refused(
+          clause:
+              'frontier dependency: bead tg-1 is blocked by open dependency '
+              '"tg-z"',
+        ),
+      );
+      expect(
+        evaluate(const [
+          BeadDependency(issueId: 'tg-1', dependsOnId: 'tg-closed'),
+        ]),
+        const MountEligibilityDecision.eligible(),
+      );
+      expect(
+        evaluate(const [
+          BeadDependency(
+            issueId: 'tg-1',
+            dependsOnId: 'tg-a',
+            type: DependencyType.related,
+          ),
+        ]),
+        const MountEligibilityDecision.eligible(),
+      );
+      expect(
+        evaluate(
+          const [BeadDependency(issueId: 'tg-1', dependsOnId: 'tg-a')],
+          readyIds: const {'tg-1'},
+        ),
+        const MountEligibilityDecision.eligible(),
+      );
+      expect(
+        evaluate(const [BeadDependency(issueId: 'tg-1', dependsOnId: 'pow-1')]),
+        const MountEligibilityDecision.eligible(),
+      );
+      expect(
+        evaluate(const [
+          BeadDependency(issueId: 'tg-1', dependsOnId: 'tg-z'),
+          BeadDependency(issueId: 'tg-1', dependsOnId: 'tg-a'),
+          BeadDependency(
+            issueId: 'tg-1',
+            dependsOnId: 'tg-a',
+            type: DependencyType.waitsFor,
+          ),
+        ]),
+        const MountEligibilityDecision.refused(
+          clause:
+              'frontier dependency: bead tg-1 is blocked by open dependency '
+              '"tg-a"',
+        ),
+      );
+      expect(
+        evaluate(
+          const [BeadDependency(issueId: 'tg-1', dependsOnId: 'tg-a')],
+          sessions: const {
+            'tg-1': SessionProjection(
+              workBeadId: 'tg-1',
+              sessionId: 'tgdog-live',
+            ),
+          },
+        ),
+        const MountEligibilityDecision.eligible(),
+      );
+      expect(
+        evaluate(
+          const [BeadDependency(issueId: 'tg-1', dependsOnId: 'tg-a')],
+          sessions: const {
+            'tg-1': SessionProjection(
+              workBeadId: 'tg-1',
+              sessionId: 'tgdog-terminal',
+              isTerminal: true,
+            ),
+          },
+        ),
+        const MountEligibilityDecision.refused(
+          clause:
+              'frontier dependency: bead tg-1 is blocked by open dependency '
+              '"tg-a"',
+        ),
+      );
+    },
+  );
+
   test('null predicate preserves mounting', () async {
     final harness = _mountHarness(mountEligibility: null);
     await _settleAdmissions(harness);
