@@ -1,3 +1,12 @@
+## 0.5.0-rc.22
+
+- Added: `read` — bounded source excerpts by symbol or span. Resolves a Dart
+  declaration to its brace-balanced extent rather than taking a guessed line
+  range, shares one byte budget across every file in the invocation (max-min
+  fair, so a small file is never starved by a large one), names what a cap
+  withheld and the `--span` that widens it, and suppresses a repeat only when a
+  content fingerprint proves the answer unchanged (tg-qpro, #406).
+
 ## 0.5.0-rc.21
 
 - Fixed: `status` filters its mounted count through the engine's dispatchable-work eligibility, so ghosts and blocked beads no longer inflate it (tg-8p9, #386).
