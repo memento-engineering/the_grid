@@ -84,6 +84,42 @@ GraphSnapshot _state(List<Bead> beads) => GraphSnapshot.fromParts(
   capturedAt: DateTime.fromMillisecondsSinceEpoch(0),
 );
 
+SessionProjection _freshProjection(String sessionId) => SessionProjection(
+  workBeadId: 'tg-1',
+  sessionId: sessionId,
+  isMolecule: true,
+  moleculeBeads: _freshSteps(sessionId),
+);
+
+Bead _freshSession(String sessionId) => Bead(
+  id: sessionId,
+  issueType: GridIssueTypes.session,
+  status: BeadStatus.open,
+  metadata: {
+    'rig': stateSubstation,
+    SessionBeadKeys.workBead: 'tg-1',
+    SessionBeadKeys.model: kSessionModelMolecule,
+  },
+);
+
+List<Bead> _freshSteps(String sessionId) => [
+  for (final step in const ['agent', 'land'])
+    Bead(
+      id: '$sessionId-$step',
+      issueType: GridIssueTypes.step,
+      status: BeadStatus.open,
+      metadata: {
+        'rig': stateSubstation,
+        MoleculeStepKeys.stepId: step,
+        MoleculeStepKeys.capability: step,
+        MoleculeStepKeys.kind: StepKind.job.name,
+        MoleculeStepKeys.path: 'tg-1/$step',
+        MoleculeStepKeys.session: sessionId,
+        MoleculeStepKeys.state: StepState.pending.name,
+      },
+    ),
+];
+
 /// An [ExplorationTransport] that records every LOUD flare — the emit-only sink
 /// the mint-failed / mint-exhausted signals fire through.
 class _RecordingTransport implements ExplorationTransport {
@@ -439,15 +475,22 @@ final class _MutableReservationHost extends StatefulSeed {
 final class _MutableReservationHostState
     extends State<_MutableReservationHost> {
   late StationAdmissionReservation _reservation;
+  SessionProjection? _projection;
 
   @override
   void initState() {
     _reservation = seed.initialReservation;
+    _projection = _reservation.candidate.session;
     seed.onState(this);
   }
 
-  void provide(StationAdmissionReservation reservation) =>
-      setState(() => _reservation = reservation);
+  void provide(StationAdmissionReservation reservation) => setState(() {
+    _reservation = reservation;
+    _projection = reservation.candidate.session;
+  });
+
+  void project(SessionProjection projection) =>
+      setState(() => _projection = projection);
 
   void refreshReservationDependency() {
     final reservation = _reservation;
@@ -477,7 +520,7 @@ final class _MutableReservationHostState
             child: SessionScope(
               bead: bead('tg-1'),
               circuit: _code,
-              existingSession: _reservation.candidate.session,
+              existingSession: _projection,
             ),
           ),
         ),
@@ -1293,6 +1336,13 @@ void main() {
         await Future<void>.delayed(
           Backoff.standard.delayFor(1) + const Duration(milliseconds: 50),
         );
+        await _pumpUntil(
+          m.owner,
+          () => runner.calls.any((call) => call.contains('--graph')),
+        );
+        expect(reg.events, isEmpty, reason: 'the joined pour still lags');
+        reservationHost.project(_freshProjection('tgdog-sess2'));
+        m.owner.flush();
         await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
         final sessionCreates = runner.workCreates.where((call) {
           final typeIndex = call.indexOf('--type');
@@ -1488,7 +1538,15 @@ void main() {
       expect(transport.named('session.mintFailed').single.data['attempt'], '1');
       expect(_mintFailedPropertyOf(m.root).value, isTrue);
       expect(_moleculePourVoidsPropertyOf(m.root).value, 1);
-      await _pumpUntil(m.owner, () => reg.events.isNotEmpty, maxRounds: 2500);
+      await _pumpUntil(
+        m.owner,
+        () => runner.calls.any((call) => call.contains('--graph')),
+        maxRounds: 2500,
+      );
+      expect(reg.events, isEmpty, reason: 'the joined pour still lags');
+      reservationHost.project(_freshProjection('tgdog-sess4'));
+      m.owner.flush();
+      await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
       final mintFailures = transport.named('session.mintFailed').toList();
       expect(mintFailures, hasLength(2));
       expect(mintFailures.map((flare) => flare.data['attempt']), ['1', '3']);
@@ -1509,9 +1567,10 @@ void main() {
         final ctx = _ctxOver(runner, reader: _ThrowOnceGateReader(gateTimeout));
         final transport = _RecordingTransport();
         final reg = RecordingCapabilityRegistry(circuits: const {});
+        final stateSource = FakeSnapshotSource(_state(const []));
         final bridge = StationJoinBridge(
           work: FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'})),
-          state: FakeSnapshotSource(_state(const [])),
+          state: stateSource,
         )..start();
         addTearDown(bridge.dispose);
 
@@ -1527,12 +1586,16 @@ void main() {
         await _pumpUntil(
           m.owner,
           () =>
-              reg.events.isNotEmpty &&
               runner.calls
-                      .where((c) => c.length > 1 && c[1] == '--graph')
-                      .length >=
-                  2,
+                  .where((c) => c.length > 1 && c[1] == '--graph')
+                  .length >=
+              2,
         );
+        expect(reg.events, isEmpty, reason: 'the joined pour still lags');
+        stateSource.push(
+          _state([_freshSession('tgdog-sess1'), ..._freshSteps('tgdog-sess1')]),
+        );
+        await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
 
         final pourFailures = transport
             .named('session.moleculePourFailed')
@@ -1622,9 +1685,10 @@ void main() {
         final ctx = _ctxOver(runner);
         final transport = _RecordingTransport();
         final reg = RecordingCapabilityRegistry(circuits: const {});
+        final stateSource = FakeSnapshotSource(_state(const []));
         final bridge = StationJoinBridge(
           work: FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'})),
-          state: FakeSnapshotSource(_state(const [])),
+          state: stateSource,
         )..start();
         addTearDown(bridge.dispose);
 
@@ -1637,10 +1701,12 @@ void main() {
         addTearDown(m.owner.dispose);
         await _pump();
         m.owner.flush();
-        await _pumpUntil(
-          m.owner,
-          () => reg.events.isNotEmpty && runner.workCreates.length >= 3,
+        await _pumpUntil(m.owner, () => runner.workCreates.length >= 3);
+        expect(reg.events, isEmpty, reason: 'the joined pour still lags');
+        stateSource.push(
+          _state([_freshSession('tgdog-sess1'), ..._freshSteps('tgdog-sess1')]),
         );
+        await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
 
         // RETRIED: attempt #1's `createSession` dropped, attempt #2's
         // succeeded — never latched off. `callsFor('create')` also carries

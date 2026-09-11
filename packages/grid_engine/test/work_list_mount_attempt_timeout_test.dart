@@ -58,7 +58,9 @@ final class _Transport implements ExplorationTransport {
   }
 }
 
-JoinedSnapshot _snapshot() => JoinedSnapshot(
+JoinedSnapshot _snapshot({
+  Map<String, SessionProjection> sessions = const {},
+}) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
     beads: const [
       Bead(id: 'tg-1', issueType: IssueType.task, status: BeadStatus.open),
@@ -67,7 +69,29 @@ JoinedSnapshot _snapshot() => JoinedSnapshot(
     readyIds: const {'tg-1'},
     capturedAt: DateTime(2026, 9, 4),
   ),
-  sessionsByWorkBead: const {},
+  sessionsByWorkBead: sessions,
+);
+
+SessionProjection _freshMolecule(String sessionId) => SessionProjection(
+  workBeadId: 'tg-1',
+  sessionId: sessionId,
+  isMolecule: true,
+  moleculeBeads: [
+    for (final step in const ['agent', 'land'])
+      Bead(
+        id: '$sessionId-$step',
+        issueType: GridIssueTypes.step,
+        metadata: {
+          'rig': stateSubstation,
+          MoleculeStepKeys.stepId: step,
+          MoleculeStepKeys.capability: step,
+          MoleculeStepKeys.kind: StepKind.job.name,
+          MoleculeStepKeys.path: 'tg-1/$step',
+          MoleculeStepKeys.session: sessionId,
+          MoleculeStepKeys.state: StepState.pending.name,
+        },
+      ),
+  ],
 );
 
 Future<void> _pumpUntil(
@@ -171,6 +195,12 @@ void main() {
       await Future<void>.delayed(
         Backoff.standard.delayFor(1) + const Duration(milliseconds: 50),
       );
+      await _pumpUntil(owner, () => runner.graphApplyCalls.isNotEmpty);
+      expect(registry.events, isEmpty, reason: 'the joined pour still lags');
+      joined.push(
+        _snapshot(sessions: {'tg-1': _freshMolecule('tgdog-created')}),
+      );
+      owner.flush();
       await _pumpUntil(owner, () => registry.events.isNotEmpty);
 
       expect(

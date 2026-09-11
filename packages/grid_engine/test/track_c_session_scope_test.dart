@@ -121,6 +121,25 @@ Bead _stepBead(
   },
 );
 
+SessionProjection _freshProjection({
+  required String workBeadId,
+  required String sessionId,
+  required List<String> steps,
+}) => SessionProjection(
+  workBeadId: workBeadId,
+  sessionId: sessionId,
+  isMolecule: true,
+  moleculeBeads: [
+    for (final step in steps)
+      _stepBead(
+        '$sessionId-$step',
+        sessionId: sessionId,
+        path: '$workBeadId/$step',
+        state: StepState.pending,
+      ),
+  ],
+);
+
 List<Map<String, dynamic>> _updatesFor(RecordingBdRunner runner, String id) {
   final updates = runner.workUpdates;
   return [
@@ -207,10 +226,23 @@ void main() {
 
         // Resolving: no leaf yet (the session mint is async).
         expect(reg.events, isEmpty);
-        await _pumpUntil(
-          m.owner,
-          () => reg.events.isNotEmpty && f.runner.workCreates.length >= 2,
+        await _pumpUntil(m.owner, () => f.runner.workCreates.length >= 2);
+        expect(reg.events, isEmpty, reason: 'the joined pour still lags');
+        joined.push(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {
+              'tg-1': _freshProjection(
+                workBeadId: 'tg-1',
+                sessionId: 'tgdog-sess1',
+                steps: const ['agent', 'verify', 'land'],
+              ),
+            },
+          ),
         );
+        m.owner.flush();
+        await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
 
         // Exactly ONE createSession (minted above the fan-out) plus its
         // molecule pour (tg-eli phase 2: every fresh mint pours a molecule
@@ -241,10 +273,23 @@ void main() {
           rootCircuit: (_) => _burn,
         );
         addTearDown(m.owner.dispose);
-        await _pumpUntil(
-          m.owner,
-          () => reg.events.length >= 2 && f.runner.workCreates.length >= 2,
+        await _pumpUntil(m.owner, () => f.runner.workCreates.length >= 2);
+        expect(reg.events, isEmpty, reason: 'the joined pour still lags');
+        joined.push(
+          _joined(
+            beads: [_task('tg-burn')],
+            ready: {'tg-burn'},
+            sessions: {
+              'tg-burn': _freshProjection(
+                workBeadId: 'tg-burn',
+                sessionId: 'tgdog-sess1',
+                steps: const ['a', 'b', 'report'],
+              ),
+            },
+          ),
         );
+        m.owner.flush();
+        await _pumpUntil(m.owner, () => reg.events.length >= 2);
 
         // ONE mint (+ its molecule pour, tg-eli phase 2), both dep-free leaves
         // mounted under the SAME session id, with DISJOINT paths (disjoint

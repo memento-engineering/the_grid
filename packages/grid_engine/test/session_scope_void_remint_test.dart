@@ -120,6 +120,38 @@ const _deadKey = SessionProjection(
   },
 );
 
+SessionProjection _moleculeProjection({
+  required String sessionId,
+  Map<String, StepState> states = const {
+    'agent': StepState.pending,
+    'verify': StepState.pending,
+    'land': StepState.pending,
+  },
+}) => SessionProjection(
+  workBeadId: 'tg-1',
+  sessionId: sessionId,
+  isMolecule: true,
+  moleculeBeads: [
+    for (final entry in states.entries)
+      Bead(
+        id: '$sessionId-${entry.key}',
+        issueType: GridIssueTypes.step,
+        status: entry.value == StepState.complete
+            ? BeadStatus.closed
+            : BeadStatus.open,
+        metadata: {
+          'rig': stateSubstation,
+          MoleculeStepKeys.stepId: entry.key,
+          MoleculeStepKeys.capability: entry.key,
+          MoleculeStepKeys.kind: StepKind.job.name,
+          MoleculeStepKeys.path: 'tg-1/${entry.key}',
+          MoleculeStepKeys.session: sessionId,
+          MoleculeStepKeys.state: entry.value.name,
+        },
+      ),
+  ],
+);
+
 ({TreeOwner owner, Branch root}) _mount({
   required JoinedSnapshotNotifier joined,
   required StationServices ctx,
@@ -271,8 +303,9 @@ void main() {
       final f = buildFakes();
       final transport = _RecordingTransport();
       final reg = RecordingCapabilityRegistry(circuits: const {});
+      final joined = JoinedSnapshotNotifier(_joined(const {'tg-1': _deadKey}));
       final m = _mount(
-        joined: JoinedSnapshotNotifier(_joined(const {'tg-1': _deadKey})),
+        joined: joined,
         ctx: f.ctx,
         registry: reg,
         transport: transport,
@@ -280,10 +313,13 @@ void main() {
       addTearDown(m.owner.dispose);
       await _pump();
       m.owner.flush();
-      await _pumpUntil(
-        m.owner,
-        () => reg.events.isNotEmpty && f.runner.workCreates.length >= 2,
+      await _pumpUntil(m.owner, () => f.runner.workCreates.length >= 2);
+      expect(reg.events, isEmpty, reason: 'the joined pour still lags');
+      joined.push(
+        _joined({'tg-1': _moleculeProjection(sessionId: 'tgdog-sess1')}),
       );
+      m.owner.flush();
+      await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
 
       // MINT: exactly one fresh session, plus its molecule pour (tg-eli
       // phase 2: every fresh mint pours a molecule graph) — the pre-fix
@@ -334,10 +370,7 @@ void main() {
       addTearDown(m.owner.dispose);
       await _pump();
       m.owner.flush();
-      await _pumpUntil(
-        m.owner,
-        () => reg.events.isNotEmpty && f.runner.workCreates.length >= 2,
-      );
+      await _pumpUntil(m.owner, () => f.runner.workCreates.length >= 2);
       final creates = f.runner.workCreates;
       expect(creates, hasLength(2));
       expect(
@@ -359,26 +392,26 @@ void main() {
       expect(
         reg.events,
         isEmpty,
-        reason: 'the agent leaf stays mounted in place',
+        reason: 'the inflater stays detached until the fresh join lands',
       );
 
       // The join catches up: the dead key is gone (re-keyed) and the fresh
       // session projects its own cursor — `agent` done, so `verify` inflates.
       joined.push(
-        _joined(const {
-          'tg-1': SessionProjection(
-            workBeadId: 'tg-1',
+        _joined({
+          'tg-1': _moleculeProjection(
             sessionId: 'tgdog-sess1',
-            cursor: {'tg-1/agent': NodeCursor(state: StepState.complete)},
+            states: const {
+              'agent': StepState.complete,
+              'verify': StepState.pending,
+              'land': StepState.pending,
+            },
           ),
         }),
       );
       m.owner.flush();
       await _pump();
-      expect(reg.events, [
-        'START verify(tgdog-sess1/tg-1/verify)',
-        'STOP agent(tgdog-sess1/tg-1/agent)',
-      ]);
+      expect(reg.events, ['START verify(tgdog-sess1/tg-1/verify)']);
       expect(f.runner.workCreates, hasLength(2));
     });
 

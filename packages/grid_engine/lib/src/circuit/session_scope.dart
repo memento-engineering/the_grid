@@ -2094,6 +2094,17 @@ class SessionScopeState extends State<SessionScope>
     // cursor/results — the frontier would mount from `pending`, and every
     // host persist under it refuses LOUD (no `InheritedCircuit` mounts).
     final isMolecule = joined?.isMolecule ?? false;
+    final scopeKnowsMolecule =
+        _isMolecule || (seed.existingSession?.isMolecule ?? false);
+    if (scopeKnowsMolecule && !isMolecule) {
+      // The store token and per-bead change columns can publish this scope's
+      // session before the joined light-DAG projection carries its poured
+      // graph (`the_grid#light-dag-deferred-bodies-and-two-tier-change-signals`
+      // Decision 2). Only that projection can provide the complete
+      // nodePath-to-bead mapping. Until it lands, keep the inflater detached so
+      // the historical-flat residual cannot mount a molecule frontier.
+      return const Idle();
+    }
     final CircuitCursor cursor;
     final Map<String, Map<String, String>> results;
     var beadIdByNodePath = const <String, String>{};
