@@ -170,6 +170,35 @@ Bead _closedRound1Session(String id, {required String workBead}) => Bead(
   },
 );
 
+Bead _freshSession(String id, {required String workBead}) => Bead(
+  id: id,
+  issueType: GridIssueTypes.session,
+  status: BeadStatus.open,
+  metadata: {
+    'rig': stateSubstation,
+    SessionBeadKeys.workBead: workBead,
+    SessionBeadKeys.model: kSessionModelMolecule,
+  },
+);
+
+List<Bead> _freshSteps(String sessionId) => [
+  for (final step in const ['agent', 'verify', 'land'])
+    Bead(
+      id: '$sessionId-$step',
+      issueType: GridIssueTypes.step,
+      status: BeadStatus.open,
+      metadata: {
+        'rig': stateSubstation,
+        MoleculeStepKeys.stepId: step,
+        MoleculeStepKeys.capability: step,
+        MoleculeStepKeys.kind: StepKind.job.name,
+        MoleculeStepKeys.path: 'tg-1/$step',
+        MoleculeStepKeys.session: sessionId,
+        MoleculeStepKeys.state: StepState.pending.name,
+      },
+    ),
+];
+
 /// Round 1's per-node `type=step` beads, owned by [sessionId]: `agent`/
 /// `verify` complete, `route` GATED (a committee park) — the stale gate
 /// cursor `grid rework` leaves standing across the re-key (it re-keys the
@@ -488,11 +517,24 @@ void main() {
               .millisecondsSinceEpoch,
         ),
       );
+      await _pumpUntil(m.owner, () => f.runner.workCreates.length >= 2);
+      expect(
+        reg.events,
+        isNot(contains('START agent(tgdog-round2/tg-1/agent)')),
+        reason: 'the joined pour still lags',
+      );
+      stateSrc.push(
+        _state([
+          _round1Session('tgdog-round1', workBead: 'tg-1#r1'),
+          ..._round1Steps('tgdog-round1'),
+          _openGate('gate-1', sessionId: 'tgdog-round1'),
+          _freshSession('tgdog-round2', workBead: 'tg-1'),
+          ..._freshSteps('tgdog-round2'),
+        ], tick: 2),
+      );
       await _pumpUntil(
         m.owner,
-        () =>
-            reg.events.contains('START agent(tgdog-round2/tg-1/agent)') &&
-            f.runner.workCreates.length >= 2,
+        () => reg.events.contains('START agent(tgdog-round2/tg-1/agent)'),
       );
 
       // The retired round-1 session is closed (D-2 fold).
@@ -569,11 +611,22 @@ void main() {
         // NO work push. Pre-fix this hung forever in
         // _awaitFreshReadySnapshot (capturedAt < decisionAt, return),
         // parking every post-rework mint on a quiet board.
+        await _pumpUntil(m.owner, () => f.runner.workCreates.length >= 2);
+        expect(
+          reg.events,
+          isNot(contains('START agent(tgdog-round2/tg-1/agent)')),
+          reason: 'the joined pour still lags',
+        );
+        stateSrc.push(
+          _state([
+            _closedRound1Session('tgdog-round1', workBead: 'tg-1#r1'),
+            _freshSession('tgdog-round2', workBead: 'tg-1'),
+            ..._freshSteps('tgdog-round2'),
+          ], tick: 2),
+        );
         await _pumpUntil(
           m.owner,
-          () =>
-              reg.events.contains('START agent(tgdog-round2/tg-1/agent)') &&
-              f.runner.workCreates.length >= 2,
+          () => reg.events.contains('START agent(tgdog-round2/tg-1/agent)'),
         );
 
         expect(
@@ -658,11 +711,22 @@ void main() {
               .millisecondsSinceEpoch,
         ),
       );
+      await _pumpUntil(m.owner, () => f.runner.workCreates.length >= 2);
+      expect(
+        reg.events,
+        isNot(contains('START agent(tgdog-round2/tg-1/agent)')),
+        reason: 'the joined pour still lags',
+      );
+      stateSrc.push(
+        _state([
+          _closedRound1Session('tgdog-round1', workBead: 'tg-1#r1'),
+          _freshSession('tgdog-round2', workBead: 'tg-1'),
+          ..._freshSteps('tgdog-round2'),
+        ], tick: 2),
+      );
       await _pumpUntil(
         m.owner,
-        () =>
-            reg.events.contains('START agent(tgdog-round2/tg-1/agent)') &&
-            f.runner.workCreates.length >= 2,
+        () => reg.events.contains('START agent(tgdog-round2/tg-1/agent)'),
       );
 
       final closes = f.runner.callsFor('close');

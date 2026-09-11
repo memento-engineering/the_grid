@@ -23,7 +23,7 @@ SessionProjection _projection({required bool hasStep}) => SessionProjection(
   moleculeBeads: hasStep
       ? [
           Bead(
-            id: 'step-agent',
+            id: 'tgdog-step-agent',
             issueType: GridIssueTypes.step,
             status: BeadStatus.open,
             metadata: const {
@@ -120,6 +120,7 @@ final class _ProjectionHostState extends State<_ProjectionHost> {
   required StationServices services,
   required RecordingExplorationTransport transport,
   StationAdmissionReservation? reservation,
+  CapabilityRegistry? registry,
 }) {
   late _ProjectionHostState state;
   final owner = TreeOwner();
@@ -128,7 +129,7 @@ final class _ProjectionHostState extends State<_ProjectionHost> {
       child: _ProjectionHost(
         initial: projection,
         services: services,
-        registry: RecordingCapabilityRegistry(circuits: const {}),
+        registry: registry ?? RecordingCapabilityRegistry(circuits: const {}),
         transport: transport,
         reservation: reservation,
         onState: (value) => state = value,
@@ -136,6 +137,17 @@ final class _ProjectionHostState extends State<_ProjectionHost> {
     ),
   );
   return (owner: owner, root: root, state: state);
+}
+
+List<Branch> _branches(Branch root) {
+  final branches = <Branch>[];
+  void collect(Branch branch) {
+    branches.add(branch);
+    branch.visitChildren(collect);
+  }
+
+  collect(root);
+  return branches;
 }
 
 Future<void> _pumpUntil(
@@ -193,6 +205,80 @@ void _expectStallFlare(
 }
 
 void main() {
+  test(
+    'fresh poured molecule idles across one lagging projection tick',
+    () async {
+      final fakes = buildFakes(createdId: _sessionId);
+      addTearDown(fakes.ctx.dispose);
+      addTearDown(fakes.provider.close);
+      final transport = RecordingExplorationTransport();
+      final snapshot = _freshSnapshot();
+      final admission = fakes.ctx.admission.admitPending(
+        snapshot,
+        const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'}),
+        ServiceBundle(transport: transport),
+        [StationAdmissionCandidate(bead: bead('tg-1'), session: null)],
+      );
+      expect(admission.admitted, hasLength(1));
+      final mounted = _mount(
+        projection: null,
+        services: fakes.ctx,
+        transport: transport,
+        reservation: admission.admitted.single,
+        registry: DefaultCapabilityRegistry(
+          capabilities: {'agent': const FixedRouteCapability(Advance())},
+        ),
+      );
+      addTearDown(mounted.owner.dispose);
+
+      bool isGraphCreate(List<String> call) =>
+          call.length > 1 && call[1] == '--graph';
+      await _pumpUntil(mounted.owner, () {
+        final creates = fakes.runner.workCreates;
+        return creates.where((call) => !isGraphCreate(call)).length == 1 &&
+            creates.where(isGraphCreate).length == 1;
+      });
+      final creates = fakes.runner.workCreates;
+      expect(creates.where((call) => !isGraphCreate(call)), hasLength(1));
+      expect(creates.where(isGraphCreate), hasLength(1));
+
+      // Let the successful pour settle into SessionScope's local lifecycle, then
+      // explicitly render the one tick whose joined projection still lags it.
+      await Future<void>.delayed(Duration.zero);
+      mounted.state.rebuild();
+      mounted.owner.flush();
+
+      expect(
+        _branches(mounted.root).where((branch) => branch.seed is CircuitScope),
+        isEmpty,
+      );
+      expect(transport.named('step.complete'), isEmpty);
+      expect(transport.named('step.allocationFailed'), isEmpty);
+      expect(transport.named('step.persistFailed'), isEmpty);
+
+      mounted.state.update(_projection(hasStep: true));
+      mounted.owner.flush();
+      await _pumpUntil(
+        mounted.owner,
+        () => transport.named('step.complete').isNotEmpty,
+      );
+
+      expect(
+        _branches(mounted.root).where((branch) => branch.seed is CircuitScope),
+        isNotEmpty,
+      );
+      final firstComplete = transport.flares.indexWhere(
+        (flare) => flare.name == 'step.complete',
+      );
+      expect(firstComplete, greaterThanOrEqualTo(0));
+      final flarePrefix = transport.flares
+          .take(firstComplete + 1)
+          .map((flare) => flare.name);
+      expect(flarePrefix, isNot(contains('step.allocationFailed')));
+      expect(flarePrefix, isNot(contains('step.persistFailed')));
+    },
+  );
+
   test('a continuously empty molecule projection flares once', () async {
     final originalWindow = SessionScopeState.moleculePourStallWindow;
     const window = Duration(milliseconds: 20);

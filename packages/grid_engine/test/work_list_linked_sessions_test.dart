@@ -98,6 +98,28 @@ SessionProjection _dead(String id, {DateTime? closedAt}) => SessionProjection(
   closedAt: closedAt,
 );
 
+SessionProjection _freshMolecule(String sessionId) => SessionProjection(
+  workBeadId: 'tg-1',
+  sessionId: sessionId,
+  isMolecule: true,
+  moleculeBeads: [
+    for (final step in const ['agent', 'verify', 'land'])
+      Bead(
+        id: '$sessionId-$step',
+        issueType: GridIssueTypes.step,
+        metadata: {
+          'rig': stateSubstation,
+          MoleculeStepKeys.stepId: step,
+          MoleculeStepKeys.capability: step,
+          MoleculeStepKeys.kind: StepKind.job.name,
+          MoleculeStepKeys.path: 'tg-1/$step',
+          MoleculeStepKeys.session: sessionId,
+          MoleculeStepKeys.state: StepState.pending.name,
+        },
+      ),
+  ],
+);
+
 ({TreeOwner owner, Branch root}) _mount({
   required JoinedSnapshotNotifier joined,
   required StationServices ctx,
@@ -230,18 +252,22 @@ void main() {
       final f = buildFakes();
       final transport = _RecordingTransport();
       final reg = RecordingCapabilityRegistry(circuits: const {});
+      final joined = JoinedSnapshotNotifier(
+        _joined({'tg-1': _dead('tgdog-dead')}),
+      );
       final mounted = _mount(
-        joined: JoinedSnapshotNotifier(_joined({'tg-1': _dead('tgdog-dead')})),
+        joined: joined,
         ctx: f.ctx,
         registry: reg,
         transport: transport,
       );
       addTearDown(mounted.owner.dispose);
 
-      await _pumpUntil(
-        mounted.owner,
-        () => reg.events.isNotEmpty && f.runner.workCreates.length >= 2,
-      );
+      await _pumpUntil(mounted.owner, () => f.runner.workCreates.length >= 2);
+      expect(reg.events, isEmpty, reason: 'the joined pour still lags');
+      joined.push(_joined({'tg-1': _freshMolecule('tgdog-sess1')}));
+      mounted.owner.flush();
+      await _pumpUntil(mounted.owner, () => reg.events.isNotEmpty);
 
       expect(f.runner.workCreates, hasLength(2));
       expect(

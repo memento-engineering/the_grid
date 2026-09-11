@@ -208,6 +208,31 @@ JoinedSnapshot _joined({
 Bead _task(String id, {BeadStatus status = BeadStatus.open}) =>
     Bead(id: id, issueType: IssueType.task, status: status);
 
+SessionProjection _freshProjection({
+  required String workBeadId,
+  required String sessionId,
+}) => SessionProjection(
+  workBeadId: workBeadId,
+  sessionId: sessionId,
+  isMolecule: true,
+  moleculeBeads: [
+    for (final step in const ['agent', 'verify', 'land'])
+      Bead(
+        id: '$sessionId-$step',
+        issueType: GridIssueTypes.step,
+        metadata: {
+          'rig': stateSubstation,
+          MoleculeStepKeys.stepId: step,
+          MoleculeStepKeys.capability: step,
+          MoleculeStepKeys.kind: StepKind.job.name,
+          MoleculeStepKeys.path: '$workBeadId/$step',
+          MoleculeStepKeys.session: sessionId,
+          MoleculeStepKeys.state: StepState.pending.name,
+        },
+      ),
+  ],
+);
+
 const _tgConfig = SubstationConfig(
   substationId: 'tg',
   ownedSubstations: {'tg'},
@@ -332,20 +357,40 @@ void main() {
         expect(runner.workCreates, isEmpty);
 
         final rivalRegistry = RecordingCapabilityRegistry(circuits: const {});
-        final rivalTree = _mountFull(
-          joined: JoinedSnapshotNotifier(
-            _joined(
-              beads: [_task('tg-2')],
-              ready: {'tg-2'},
-              capturedAt: DateTime.now().add(const Duration(seconds: 1)),
-            ),
+        final rivalJoined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_task('tg-2')],
+            ready: {'tg-2'},
+            capturedAt: DateTime.now().add(const Duration(seconds: 1)),
           ),
+        );
+        final rivalTree = _mountFull(
+          joined: rivalJoined,
           ctx: station,
           registry: rivalRegistry,
           rootCircuit: (_) => _code,
           config: config,
         );
         addTearDown(rivalTree.owner.dispose);
+        await _pumpUntil(
+          rivalTree.owner,
+          () => runner.graphApplyCalls.isNotEmpty,
+        );
+        expect(rivalRegistry.events, isEmpty, reason: 'the joined pour lags');
+        rivalJoined.push(
+          _joined(
+            beads: [_task('tg-2')],
+            ready: {'tg-2'},
+            capturedAt: DateTime.now().add(const Duration(seconds: 2)),
+            sessions: {
+              'tg-2': _freshProjection(
+                workBeadId: 'tg-2',
+                sessionId: 'tgdog-sess1',
+              ),
+            },
+          ),
+        );
+        rivalTree.owner.flush();
         await _pumpUntil(
           rivalTree.owner,
           () => rivalRegistry.events.isNotEmpty,
@@ -722,20 +767,44 @@ void main() {
           final replacementRegistry = RecordingCapabilityRegistry(
             circuits: const {},
           );
-          final replacementTree = _mountFull(
-            joined: JoinedSnapshotNotifier(
-              _joined(
-                beads: [_task('tg-1')],
-                ready: {'tg-1'},
-                capturedAt: DateTime.now().add(const Duration(days: 2)),
-              ),
+          final replacementJoined = JoinedSnapshotNotifier(
+            _joined(
+              beads: [_task('tg-1')],
+              ready: {'tg-1'},
+              capturedAt: DateTime.now().add(const Duration(days: 2)),
             ),
+          );
+          final replacementTree = _mountFull(
+            joined: replacementJoined,
             ctx: station,
             registry: replacementRegistry,
             rootCircuit: (_) => _code,
           );
           addTearDown(replacementTree.owner.dispose);
           expect(station.admission, same(authority));
+          await _pumpUntil(
+            replacementTree.owner,
+            () => runner.graphApplyCalls.isNotEmpty,
+          );
+          expect(
+            replacementRegistry.events,
+            isEmpty,
+            reason: 'the joined pour still lags',
+          );
+          replacementJoined.push(
+            _joined(
+              beads: [_task('tg-1')],
+              ready: {'tg-1'},
+              capturedAt: DateTime.now().add(const Duration(days: 3)),
+              sessions: {
+                'tg-1': _freshProjection(
+                  workBeadId: 'tg-1',
+                  sessionId: 'tgdog-round3',
+                ),
+              },
+            ),
+          );
+          replacementTree.owner.flush();
           await _pumpUntil(
             replacementTree.owner,
             () => replacementRegistry.events.isNotEmpty,
@@ -813,11 +882,34 @@ void main() {
           },
         ),
       );
+      await _pumpUntil(m.owner, () => f.runner.workCreates.length >= 2);
+      expect(
+        reg.events,
+        isNot(contains('START agent(tgdog-round2/tg-1/agent)')),
+        reason: 'the joined pour still lags',
+      );
+      joined.push(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          capturedAt: afterDecision,
+          sessions: {
+            'tg-1#r1': const SessionProjection(
+              workBeadId: 'tg-1#r1',
+              sessionId: 'tgdog-round1',
+              cursor: {'tg-1/route': NodeCursor(state: StepState.gated)},
+            ),
+            'tg-1': _freshProjection(
+              workBeadId: 'tg-1',
+              sessionId: 'tgdog-round2',
+            ),
+          },
+        ),
+      );
+      m.owner.flush();
       await _pumpUntil(
         m.owner,
-        () =>
-            reg.events.contains('START agent(tgdog-round2/tg-1/agent)') &&
-            f.runner.workCreates.length >= 2,
+        () => reg.events.contains('START agent(tgdog-round2/tg-1/agent)'),
       );
 
       // The retired round-1 session is closed (D-2 fold: no more hand-close).
@@ -1072,10 +1164,7 @@ void main() {
       // The mint completes; the join is NEVER updated to reflect it in this
       // test (exactly like the offline mint fixture) — repeated rebuilds must
       // not treat "never observed" as "vanished".
-      await _pumpUntil(
-        m.owner,
-        () => reg.events.isNotEmpty && f.runner.workCreates.length >= 2,
-      );
+      await _pumpUntil(m.owner, () => f.runner.workCreates.length >= 2);
 
       // A fresh mint is a createSession call PLUS its molecule pour (tg-eli
       // phase 2: every fresh mint pours a molecule graph).
@@ -1094,7 +1183,7 @@ void main() {
         for (var i = 0; i < updates.length; i++) f.runner.metadataOfUpdate(i),
       ].where((meta) => meta.containsKey('grid.rework_declined'));
       expect(declineMarkers, isEmpty);
-      expect(reg.events, ['START agent(tgdog-sess1/tg-1/agent)']);
+      expect(reg.events, isEmpty, reason: 'the joined pour never caught up');
     });
   });
 }
