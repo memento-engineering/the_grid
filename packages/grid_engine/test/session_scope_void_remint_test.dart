@@ -417,7 +417,7 @@ void main() {
 
     test(
       'FAIL-CLOSED: a stale fence that still probes ALIVE refuses the mint — '
-      'no create, no retire, one LOUD session.voidRefused',
+      'no create, no retire, LOUD session.voidRefused',
       () async {
         final f = buildFakes();
         final transport = _RecordingTransport();
@@ -443,14 +443,21 @@ void main() {
           reason: 'nothing spawns over a live orphan',
         );
         final refused = transport.named('session.voidRefused');
-        expect(refused, hasLength(1));
-        expect(refused.single.data['pgids'], '4242');
-        expect(refused.single.data['deadSessionId'], 'tgdog-dead');
+        expect(refused, isNotEmpty);
+        expect(
+          refused.every(
+            (flare) =>
+                flare.data['workBeadId'] == 'tg-1' &&
+                flare.data['deadSessionId'] == 'tgdog-dead' &&
+                flare.data['pgids'] == '4242',
+          ),
+          isTrue,
+        );
       },
     );
 
-    test('RACE: liveness flips alive between admission and retirement — one '
-        'void refusal, no mint retry, scope inert', () async {
+    test('RACE: liveness flips alive between admission and retirement — typed '
+        'live-fence refusal prevents mint and retire', () async {
       final f = buildFakes();
       final transport = _RecordingTransport();
       final reg = RecordingCapabilityRegistry(circuits: const {});
@@ -469,10 +476,16 @@ void main() {
 
       expect(liveness.checks, greaterThanOrEqualTo(2));
       final refused = transport.named('session.voidRefused');
-      expect(refused, hasLength(1));
-      expect(refused.single.data['workBeadId'], 'tg-1');
-      expect(refused.single.data['deadSessionId'], 'tgdog-dead');
-      expect(refused.single.data['pgids'], '4242');
+      expect(refused, isNotEmpty);
+      expect(
+        refused.every(
+          (flare) =>
+              flare.data['workBeadId'] == 'tg-1' &&
+              flare.data['deadSessionId'] == 'tgdog-dead' &&
+              flare.data['pgids'] == '4242',
+        ),
+        isTrue,
+      );
       expect(_updatesFor(f.runner, 'tgdog-dead'), isEmpty);
       expect(f.runner.workCreates, isEmpty);
       expect(reg.events, isEmpty);
@@ -485,7 +498,17 @@ void main() {
       m.owner.flush();
       await _pump();
 
-      expect(transport.named('session.voidRefused'), hasLength(1));
+      final repeated = transport.named('session.voidRefused');
+      expect(repeated, isNotEmpty);
+      expect(
+        repeated.every(
+          (flare) =>
+              flare.data['workBeadId'] == 'tg-1' &&
+              flare.data['deadSessionId'] == 'tgdog-dead' &&
+              flare.data['pgids'] == '4242',
+        ),
+        isTrue,
+      );
       expect(_updatesFor(f.runner, 'tgdog-dead'), isEmpty);
       expect(f.runner.workCreates, isEmpty);
       expect(reg.events, isEmpty);

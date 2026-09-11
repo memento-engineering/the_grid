@@ -184,26 +184,23 @@ final class _UnsnapshottedReservation {
 
 /// All mutable admission state for one station/substation scope.
 ///
-/// These names deliberately remain the incumbent bead-backed latches. Stage 3
-/// replaces their medium; this in-process cut only moves their ownership. The
-/// retained void transition still writes `grid.voided_reason`.
+/// Stage 3 exclusively owns retirement into trajectory projections and
+/// obligation queries: bead-backed mount attempts, structural mounted
+/// membership, and admission latches all keep their incumbent media here.
+/// This is not that switch; every bead write and flare remains. This correction
+/// removes only in-memory report/scheduling suppression for current snapshot
+/// facts, so the existing operations run level-triggered on each pass.
+/// The retained void transition still writes `grid.voided_reason`.
 final class _AdmissionScopeState {
+  // Structural branch membership is not represented by JoinedSnapshot.
   final Set<String> _mountedIds = <String>{};
-  final Set<String> _mountAttemptsScheduled = <String>{};
+  // Refusal timing and restoration history are not snapshot facts.
   final Map<String, ({String clause, DateTime since})>
   _mountEligibilityRefusals = <String, ({String clause, DateTime since})>{};
-  final Set<({String beadId, String clause})> _mountEligibilityRechecks =
-      <({String beadId, String clause})>{};
+  // This timer is the live bounded recheck operation, not a snapshot fact.
   Timer? _mountEligibilityRecheckTimer;
-  final Set<String> _trustRefusedReported = <String>{};
-  final Set<String> _surplusRetiresScheduled = <String>{};
-  final Set<String> _surplusAliveReported = <String>{};
-  final Set<String> _sessionAmbiguityReported = <String>{};
-  final Set<String> _rivalRetiresRequired = <String>{};
-  final Set<String> _rivalCleanupsInFlight = <String>{};
-  final Set<String> _gateSweepsScheduled = <String>{};
+  // First-observed zero-admission timing is not carried by JoinedSnapshot.
   final Map<String, DateTime> _zeroAdmissionSinceByBead = <String, DateTime>{};
-  String? _capacityWaitingSignature;
 }
 
 /// The single station-owned answer to “may this attempt start now?”.
@@ -241,18 +238,24 @@ final class StationAdmissionAuthority {
   final TrajectoryAdmissionHalt? _trajectoryAdmissionHalt;
   void Function()? _removeTrajectoryAdmissionHaltListener;
 
+  // Per-substation branch and status state is unavailable to one-scope calls.
   final Map<_ScopeKey, _AdmissionScopeState> _scopes =
       <_ScopeKey, _AdmissionScopeState>{};
+  // Grants held before their durable session rows appear are not snapshot facts.
   final Map<String, _UnsnapshottedReservation> _reservations =
       <String, _UnsnapshottedReservation>{};
+  // Bare bead ids on async entry points cannot derive their substation scope.
   final Map<String, _ScopeKey> _lastScopeByBead = <String, _ScopeKey>{};
-  final Map<String, _ScopeKey> _scopeBySessionId = <String, _ScopeKey>{};
+  // Registered station consumers are process-local, not snapshot facts.
   final Map<Object, void Function()> _listeners = <Object, void Function()>{};
+  // Live backoff operations are process-local, not snapshot facts.
   final Map<String, Timer> _retryTimers = <String, Timer>{};
+  // Writes not yet represented by JoinedSnapshot require one shared future.
   final Map<String, Future<void>> _mountAttemptWrites =
       <String, Future<void>>{};
-  final Set<String> _retryBlocked = <String>{};
+  // Cancellation quarantine persists until a later snapshot proves readiness.
   final Set<String> _blockedUntilFreshReady = <String>{};
+  // This flag represents one queued capacity invalidation operation.
   bool _capacityRecheckScheduled = false;
   bool _disposed = false;
 
@@ -340,6 +343,7 @@ final class StationAdmissionAuthority {
       );
     }
 
+    _reconcileMountAttemptWrites(snapshot);
     _blockedUntilFreshReady.removeWhere(
       (beadId) => !snapshot.graph.beadsById.containsKey(beadId),
     );
@@ -393,9 +397,6 @@ final class StationAdmissionAuthority {
             row;
       }
     }
-    scope._surplusRetiresScheduled.removeWhere(
-      (sessionId) => !durableRows.containsKey(sessionId),
-    );
     final durableLiveIds = {
       for (final entry in durableRows.entries)
         if (!entry.value.isTerminal &&
@@ -426,10 +427,6 @@ final class StationAdmissionAuthority {
     for (final candidate in ordered) {
       final bead = candidate.bead;
       _lastScopeByBead[bead.id] = scopeKey;
-      final projectedSessionId = candidate.session?.sessionId;
-      if (projectedSessionId != null && projectedSessionId.isNotEmpty) {
-        _scopeBySessionId[projectedSessionId] = scopeKey;
-      }
       // The candidate carries the join's ordered frontier winner (or a retired
       // re-key). This classifies lifecycle only: the linked-session verdict
       // below still owns rival, disposition, and process-liveness refusals.
@@ -512,7 +509,7 @@ final class StationAdmissionAuthority {
       final trustRefusal = _trustRefusal(snapshot, services, bead);
       if (trustRefusal != null) {
         _release(bead.id, onlyScope: scopeKey);
-        _reportTrustRefused(scope, services, bead, trustRefusal);
+        _reportTrustRefused(services, bead, trustRefusal);
         refused.add(
           StationAdmissionRefusal(
             candidate: candidate,
@@ -523,7 +520,7 @@ final class StationAdmissionAuthority {
         continue;
       }
 
-      if (_retryBlocked.contains(bead.id)) {
+      if (_retryTimers.containsKey(bead.id)) {
         waiting.add(candidate);
         continue;
       }
@@ -550,27 +547,12 @@ final class StationAdmissionAuthority {
       }
       switch (verdict) {
         case AdoptLinkedSession(:final session, :final rivals):
-          for (final rival in rivals) {
-            final rivalId = rival.sessionId ?? '';
-            if (rivalId.isNotEmpty &&
-                !scope._surplusRetiresScheduled.contains(rivalId)) {
-              scope._rivalRetiresRequired.add(rivalId);
-            }
-          }
-          final requiredRivals = linked
-              .where((row) {
-                final id = row.sessionId ?? '';
-                return id.isNotEmpty &&
-                    scope._rivalRetiresRequired.contains(id);
-              })
-              .toList(growable: false);
-          if (rivals.isNotEmpty || requiredRivals.isNotEmpty) {
-            _reportDuplicateLive(scope, services, bead.id, session, rivals);
+          if (rivals.isNotEmpty) {
+            _reportDuplicateLive(services, bead.id, session, rivals);
             _release(bead.id, onlyScope: scopeKey);
             final keptSessionId = session.sessionId ?? '';
-            for (final rival in requiredRivals) {
+            for (final rival in rivals) {
               _scheduleRivalCleanup(
-                scope,
                 services,
                 workBeadId: bead.id,
                 keptSessionId: keptSessionId,
@@ -678,7 +660,7 @@ final class StationAdmissionAuthority {
         case RemintLinkedSession(:final session, :final surplus):
           final winnerAlive = staleFences(session).where(_liveness).toList();
           if (winnerAlive.isNotEmpty) {
-            _reportVoidRefused(scope, services, bead.id, session, winnerAlive);
+            _reportVoidRefused(services, bead.id, session, winnerAlive);
             _release(bead.id, onlyScope: scopeKey);
             refused.add(
               StationAdmissionRefusal(
@@ -693,7 +675,7 @@ final class StationAdmissionAuthority {
               .where((row) => staleFences(row).any(_liveness))
               .toList();
           if (aliveSurplus.isNotEmpty) {
-            _reportSurplusAlive(scope, services, bead.id, aliveSurplus);
+            _reportSurplusAlive(services, bead.id, aliveSurplus);
             _release(bead.id, onlyScope: scopeKey);
             refused.add(
               StationAdmissionRefusal(
@@ -765,22 +747,18 @@ final class StationAdmissionAuthority {
       _reservations[bead.id] = reservation;
       scope._mountedIds.add(bead.id);
       admitted.add(_reservationValue(candidate, reservation));
-      _scheduleMountAttempt(scope, services, bead.id, attempt, reservation);
+      _scheduleMountAttempt(services, bead.id, attempt, reservation);
     }
 
     final capacityWaitingSignature = capacityWaiting
         .map((entry) => entry.bead.id)
         .join(',');
-    if (capacityWaiting.isNotEmpty &&
-        scope._capacityWaitingSignature != capacityWaitingSignature) {
+    if (capacityWaiting.isNotEmpty) {
       _flare(services, 'work.throttled', {
         'count': '${capacityWaiting.length}',
         'beadIds': capacityWaitingSignature,
       });
     }
-    scope._capacityWaitingSignature = capacityWaiting.isEmpty
-        ? null
-        : capacityWaitingSignature;
     if (admitted.isEmpty && waiting.isNotEmpty) {
       final waitingIds = {for (final candidate in waiting) candidate.bead.id};
       scope._zeroAdmissionSinceByBead.removeWhere(
@@ -890,16 +868,32 @@ final class StationAdmissionAuthority {
     reservationToken: reservation.reservationToken,
   );
 
+  void _reconcileMountAttemptWrites(JoinedSnapshot snapshot) {
+    for (final entry in snapshot.mountAttemptsByWorkBead.entries) {
+      final recordedCount = entry.value.count;
+      final reservation = _reservations[entry.key];
+      final reservedAttempt = reservation?.mountAttempt;
+      if (reservedAttempt != null && recordedCount >= reservedAttempt) {
+        reservation!.writeState = _MountAttemptWriteState.recorded;
+      }
+      final prefix = '${entry.key}:';
+      _mountAttemptWrites.removeWhere((key, _) {
+        if (!key.startsWith(prefix)) return false;
+        final attempt = int.tryParse(key.substring(prefix.length));
+        return attempt != null && attempt <= recordedCount;
+      });
+    }
+  }
+
   void _scheduleMountAttempt(
-    _AdmissionScopeState scope,
     ServiceBundle services,
     String workBeadId,
     int attempt,
     _UnsnapshottedReservation reservation,
   ) {
     final latch = '$workBeadId:$attempt';
-    final Future<void> write;
-    if (scope._mountAttemptsScheduled.add(latch)) {
+    var write = _mountAttemptWrites[latch];
+    if (write == null) {
       final completer = Completer<void>();
       write = completer.future;
       _mountAttemptWrites[latch] = write;
@@ -916,21 +910,21 @@ final class StationAdmissionAuthority {
           completer.completeError(error, stackTrace);
         }
       });
-    } else {
-      write = _mountAttemptWrites[latch] ?? Future<void>.value();
     }
     scheduleMicrotask(() async {
       try {
-        await write;
+        await write!;
         if (_disposed || !identical(_reservations[workBeadId], reservation)) {
           return;
         }
         reservation.writeState = _MountAttemptWriteState.recorded;
         _notifyListeners();
       } on Object catch (error) {
+        if (identical(_mountAttemptWrites[latch], write)) {
+          unawaited(_mountAttemptWrites.remove(latch));
+        }
         if (!identical(_reservations[workBeadId], reservation)) return;
         _release(workBeadId);
-        scope._mountAttemptsScheduled.remove(latch);
         _flare(services, 'work.mountAttemptRecordFailed', {
           'beadId': workBeadId,
           'attempt': '$attempt',
@@ -962,8 +956,8 @@ final class StationAdmissionAuthority {
           'void retirement refused: the work bead has no admission scope',
         );
       }
-      _reportVoidRefused(scope, services, workBead.id, deadSession, alive);
-      _release(workBead.id);
+      _reportVoidRefused(services, workBead.id, deadSession, alive);
+      _release(workBead.id, onlyScope: _lastScopeByBead[workBead.id]);
       _notifyListeners();
       return StationAdmissionRefusal(
         candidate: StationAdmissionCandidate(
@@ -1066,7 +1060,6 @@ final class StationAdmissionAuthority {
         metadata: metadata,
       );
       reservation.sessionId = id;
-      _scopeBySessionId[id] = reservation.scopeKey;
       _notifyListeners();
       return (sessionId: id, refusal: null);
     } finally {
@@ -1218,9 +1211,6 @@ final class StationAdmissionAuthority {
     required bool reapMolecule,
     required ServiceBundle services,
   }) async {
-    final scope = _scopeForBead(workBeadId);
-    final latch = '$sessionId:${GateCloseCause.supersededRound.wireValue}';
-    if (scope != null && !scope._gateSweepsScheduled.add(latch)) return;
     if (reapMolecule) {
       await _bestEffortReap(sessionId, 'reworked', services);
     }
@@ -1240,9 +1230,6 @@ final class StationAdmissionAuthority {
     required String sessionId,
     required ServiceBundle services,
   }) async {
-    final scope = _scopeForBead(terminalWorkBead.id);
-    final latch = '$sessionId:${GateCloseCause.workBeadClosed.wireValue}';
-    if (scope != null && !scope._gateSweepsScheduled.add(latch)) return;
     try {
       await _writer.closeOpenGatesForTerminal(
         sessionId: sessionId,
@@ -1303,9 +1290,6 @@ final class StationAdmissionAuthority {
     required GateSweepSessionDisposition disposition,
     required ServiceBundle services,
   }) async {
-    final scope = _scopeForSession(sessionId);
-    final latch = '$sessionId:${cause.wireValue}';
-    if (scope != null && !scope._gateSweepsScheduled.add(latch)) return;
     await _writer.closeOpenGatesForTerminal(
       sessionId: sessionId,
       trigger: cause,
@@ -1324,19 +1308,11 @@ final class StationAdmissionAuthority {
     required ServiceBundle services,
   }) async {
     final ordered = orderLinkedSessions(surplus);
-    final verdict = linkedSessionVerdictOf(ordered);
-    if (verdict is AdoptLinkedSession) return;
-    final scope = _scopeForBead(workBeadId);
     for (final row in ordered) {
       final deadId = row.sessionId ?? '';
       if (deadId.isEmpty || !row.isTerminal) continue;
       if (_hasLiveFence(row)) {
-        if (scope != null) {
-          _reportSurplusAlive(scope, services, workBeadId, [row]);
-        }
-        continue;
-      }
-      if (scope != null && !scope._surplusRetiresScheduled.add(deadId)) {
+        _reportSurplusAlive(services, workBeadId, [row]);
         continue;
       }
       final reason = _surplusRetirementReason(workBeadId, keptSessionId);
@@ -1355,8 +1331,6 @@ final class StationAdmissionAuthority {
           'workBeadKey': voidKeyFor(workBeadId, deadId),
           'keptSessionId': keptSessionId,
         });
-        scope?._rivalRetiresRequired.remove(deadId);
-        scope?._rivalCleanupsInFlight.remove(deadId);
         _notifyListeners();
       } on Object catch (error) {
         _flare(services, 'work.sessionSurplusRetireFailed', {
@@ -1365,23 +1339,18 @@ final class StationAdmissionAuthority {
           'reason': truncateReason('$error'),
           ...stateStoreDeadlineMetadata(error),
         });
-        if (scope?._rivalRetiresRequired.contains(deadId) ?? false) {
-          scope!._rivalCleanupsInFlight.remove(deadId);
-          scope._surplusRetiresScheduled.remove(deadId);
-        }
       }
     }
   }
 
   void _scheduleRivalCleanup(
-    _AdmissionScopeState scope,
     ServiceBundle services, {
     required String workBeadId,
     required String keptSessionId,
     required SessionProjection rival,
   }) {
     final rivalId = rival.sessionId ?? '';
-    if (rivalId.isEmpty || !scope._rivalCleanupsInFlight.add(rivalId)) return;
+    if (rivalId.isEmpty) return;
     scheduleMicrotask(() async {
       try {
         final running = _provider.listRunning('$rivalId/');
@@ -1389,8 +1358,7 @@ final class StationAdmissionAuthority {
           await _provider.stop(runtime);
         }
         if (_hasLiveFence(rival)) {
-          _reportSurplusAlive(scope, services, workBeadId, [rival]);
-          scope._rivalCleanupsInFlight.remove(rivalId);
+          _reportSurplusAlive(services, workBeadId, [rival]);
           return;
         }
         final reason = _surplusRetirementReason(workBeadId, keptSessionId);
@@ -1409,8 +1377,6 @@ final class StationAdmissionAuthority {
           'reason': truncateReason('$error'),
           ...stateStoreDeadlineMetadata(error),
         });
-        scope._rivalCleanupsInFlight.remove(rivalId);
-        scope._surplusRetiresScheduled.remove(rivalId);
       }
     });
   }
@@ -1454,13 +1420,11 @@ final class StationAdmissionAuthority {
           ? former.since
           : _clock().toUtc(),
     );
-    if (scope._mountEligibilityRechecks.add((beadId: beadId, clause: clause))) {
+    if (former?.clause != clause) {
       scope._mountEligibilityRecheckTimer ??= Timer(Duration.zero, () {
         scope._mountEligibilityRecheckTimer = null;
         _notifyListeners();
       });
-    }
-    if (former?.clause != clause) {
       _flare(services, 'work.mountEligibilityRefused', {
         'beadId': beadId,
         'clause': clause,
@@ -1473,9 +1437,6 @@ final class StationAdmissionAuthority {
     ServiceBundle services,
     String beadId,
   ) {
-    scope._mountEligibilityRechecks.removeWhere(
-      (entry) => entry.beadId == beadId,
-    );
     final former = scope._mountEligibilityRefusals.remove(beadId);
     if (former != null) {
       _flare(services, 'work.mountEligibilityRestored', {
@@ -1485,13 +1446,7 @@ final class StationAdmissionAuthority {
     }
   }
 
-  void _reportTrustRefused(
-    _AdmissionScopeState scope,
-    ServiceBundle services,
-    Bead bead,
-    String reason,
-  ) {
-    if (!scope._trustRefusedReported.add(bead.id)) return;
+  void _reportTrustRefused(ServiceBundle services, Bead bead, String reason) {
     final scheme = bead.metadata[OriginTrustKeys.scheme];
     final actor = bead.metadata[OriginTrustKeys.actor];
     final origin =
@@ -1510,13 +1465,11 @@ final class StationAdmissionAuthority {
   }
 
   void _reportDuplicateLive(
-    _AdmissionScopeState scope,
     ServiceBundle services,
     String beadId,
     SessionProjection winner,
     List<SessionProjection> rivals,
   ) {
-    if (!scope._sessionAmbiguityReported.add(beadId)) return;
     _flare(services, 'work.duplicateLiveRefused', {
       'beadId': beadId,
       'sessionId': winner.sessionId ?? '',
@@ -1525,12 +1478,10 @@ final class StationAdmissionAuthority {
   }
 
   void _reportSurplusAlive(
-    _AdmissionScopeState scope,
     ServiceBundle services,
     String beadId,
     List<SessionProjection> alive,
   ) {
-    if (!scope._surplusAliveReported.add(beadId)) return;
     _flare(services, 'work.sessionSurplusAlive', {
       'beadId': beadId,
       'sessionIds': alive.map((row) => row.sessionId ?? '').join(','),
@@ -1538,13 +1489,11 @@ final class StationAdmissionAuthority {
   }
 
   void _reportVoidRefused(
-    _AdmissionScopeState scope,
     ServiceBundle services,
     String beadId,
     SessionProjection session,
     List<AdoptFence> alive,
   ) {
-    if (!scope._surplusAliveReported.add(beadId)) return;
     _flare(services, 'session.voidRefused', {
       'workBeadId': beadId,
       'deadSessionId': session.sessionId ?? '',
@@ -1555,11 +1504,6 @@ final class StationAdmissionAuthority {
 
   _AdmissionScopeState? _scopeForBead(String beadId) {
     final key = _lastScopeByBead[beadId];
-    return key == null ? null : _scopes[key];
-  }
-
-  _AdmissionScopeState? _scopeForSession(String sessionId) {
-    final key = _scopeBySessionId[sessionId];
     return key == null ? null : _scopes[key];
   }
 
@@ -1592,15 +1536,16 @@ final class StationAdmissionAuthority {
     // A reworked/voided predecessor can close while a reservation for the next
     // round is already held. Never release that successor reservation.
     if (reservation != null && reservation.sessionId != sessionId) return;
-    _release(workBeadId);
+    _release(
+      workBeadId,
+      onlyScope: reservation?.scopeKey ?? _lastScopeByBead[workBeadId],
+    );
   }
 
   void _scheduleRetryInvalidation(String workBeadId) {
     if (_disposed || _retryTimers.containsKey(workBeadId)) return;
-    _retryBlocked.add(workBeadId);
     _retryTimers[workBeadId] = Timer(Backoff.standard.delayFor(1), () {
       _retryTimers.remove(workBeadId);
-      _retryBlocked.remove(workBeadId);
       _notifyListeners();
     });
   }
@@ -1659,12 +1604,10 @@ final class StationAdmissionAuthority {
       timer.cancel();
     }
     _retryTimers.clear();
-    _retryBlocked.clear();
     _blockedUntilFreshReady.clear();
     _capacityRecheckScheduled = false;
     _mountAttemptWrites.clear();
     _lastScopeByBead.clear();
-    _scopeBySessionId.clear();
     _listeners.clear();
   }
 }
