@@ -1,3 +1,14 @@
+## 0.3.0-rc.25
+
+- Added: `StationAdmissionStatus.zeroAdmissionWaiters`, so a caller can see the
+  waiters parked at zero admissions and wake them after a paused release
+  (tg-qwsx, #399).
+- Fixed: the circuit idles during molecule projection lag rather than treating a
+  lagging projection as work (#403).
+- Fixed: a bd pour deadline is classified as a mint void (#402).
+- Fixed: worklist report edges are derived per pass (#401).
+- Fixed: same-store blockers are reevaluated per frontier (#398).
+
 ## 0.3.0-rc.24
 
 - Fixed: the delivery gate is three-way (delivered, commit-only, voided) and fails closed when a root terminal is a sub-circuit step (the shape the delivery decision forbids), so an observe-only or never-delivered round no longer latches `grid.outcome=complete` and locks the bead out of every later live boot (tg-6cbf, #379).
