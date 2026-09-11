@@ -23,6 +23,7 @@ Future<void> main(List<String> arguments) async {
         ..addCommand(PauseCommand())
         ..addCommand(ResumeCommand())
         ..addCommand(BeadCommand())
+        ..addCommand(ReadCommand())
         ..addCommand(DemoCommand())
         // Stage 0's forensics verbs. Composed here for local measurement; a
         // station runner needs its own explicit ..addCommand(TrajCommand()).
