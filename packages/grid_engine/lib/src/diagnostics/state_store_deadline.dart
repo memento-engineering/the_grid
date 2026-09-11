@@ -15,9 +15,7 @@ Map<String, String> stateStoreDeadlineMetadata(Object error) => switch (error) {
     'deadlineMs': DoltQueryService.queryTimeout.inMilliseconds.toString(),
   },
   BdTimeoutException(:final command, :final timeout)
-      when command.length > 1 &&
-          command[0] == 'create' &&
-          command[1] == '--graph' =>
+      when _isMoleculePourCommand(command) =>
     <String, String>{
       'deadlineConstant': 'BdCliService.pourTimeout',
       'deadlineMs': timeout.inMilliseconds.toString(),
@@ -28,3 +26,10 @@ Map<String, String> stateStoreDeadlineMetadata(Object error) => switch (error) {
   },
   _ => const <String, String>{},
 };
+
+bool _isMoleculePourCommand(List<String> command) =>
+    command.length > 1 && command[0] == 'create' && command[1] == '--graph' ||
+    command.length > 2 &&
+        command[0] == 'bd' &&
+        command[1] == 'create' &&
+        command[2] == '--graph';

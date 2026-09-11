@@ -22,43 +22,13 @@ final class _FailingMountAttemptRunner extends RecordingBdRunner {
   }
 }
 
-final class _TimeoutFirstMoleculeReader implements BeadProbeReader {
-  _TimeoutFirstMoleculeReader(this.delegate)
-    : error = TimeoutException('Future not completed');
-
-  final BeadProbeReader delegate;
-  final TimeoutException error;
-  var _thrown = false;
-
-  @override
-  Future<Bead?> beadById(String id, {required Set<IssueType> types}) =>
-      delegate.beadById(id, types: types);
-
-  @override
-  Future<List<Bead>> openBeads({
-    required Set<IssueType> types,
-    Map<String, String> metadataAll = const {},
-    Map<String, String> metadataAny = const {},
-  }) {
-    if (!_thrown && types.contains(GridIssueTypes.molecule)) {
-      _thrown = true;
-      throw error;
-    }
-    return delegate.openBeads(
-      types: types,
-      metadataAll: metadataAll,
-      metadataAny: metadataAny,
-    );
-  }
-
-  @override
-  Future<List<Bead>> openSuperseding(Set<String> priorIds) =>
-      delegate.openSuperseding(priorIds);
-}
-
 final class _GatedCloseRunner extends RecordingBdRunner {
   _GatedCloseRunner({super.createdId, super.eventLog});
 
+  final error = const BdTimeoutException(
+    command: ['bd', 'create', '--graph', 'plan.json'],
+    timeout: BdCliService.pourTimeout,
+  );
   final closeEntered = Completer<void>();
   final releaseClose = Completer<void>();
 
@@ -68,6 +38,10 @@ final class _GatedCloseRunner extends RecordingBdRunner {
     Duration? timeout,
     String? stdin,
   }) async {
+    if (args.length > 1 && args[0] == 'create' && args[1] == '--graph') {
+      await super.run(args, timeout: timeout, stdin: stdin);
+      throw error;
+    }
     if (args.isNotEmpty && args.first == 'close') {
       if (!closeEntered.isCompleted) closeEntered.complete();
       await releaseClose.future;
@@ -79,6 +53,34 @@ final class _GatedCloseRunner extends RecordingBdRunner {
 final class _FailingCloseRunner extends RecordingBdRunner {
   _FailingCloseRunner({super.createdId});
 
+  final error = const BdTimeoutException(
+    command: ['bd', 'create', '--graph', 'plan.json'],
+    timeout: BdCliService.pourTimeout,
+  );
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    if (args.length > 1 && args[0] == 'create' && args[1] == '--graph') {
+      await super.run(args, timeout: timeout, stdin: stdin);
+      throw error;
+    }
+    final result = await super.run(args, timeout: timeout, stdin: stdin);
+    if (args.isNotEmpty && args.first == 'close') {
+      throw StateError('controlled close failure');
+    }
+    return result;
+  }
+}
+
+final class _GraphErrorRunner extends RecordingBdRunner {
+  _GraphErrorRunner(this.error, {super.createdId});
+
+  final Object error;
+
   @override
   Future<BdResult> run(
     List<String> args, {
@@ -86,8 +88,8 @@ final class _FailingCloseRunner extends RecordingBdRunner {
     String? stdin,
   }) async {
     final result = await super.run(args, timeout: timeout, stdin: stdin);
-    if (args.isNotEmpty && args.first == 'close') {
-      throw StateError('controlled close failure');
+    if (args.length > 1 && args[0] == 'create' && args[1] == '--graph') {
+      throw error;
     }
     return result;
   }
@@ -1065,12 +1067,10 @@ void main() {
       addTearDown(() {
         if (!runner.releaseClose.isCompleted) runner.releaseClose.complete();
       });
-      final reader = _TimeoutFirstMoleculeReader(runner);
       final provider = FakeRuntimeProvider();
       addTearDown(provider.close);
       final station = _stationOver(
         runner,
-        reader: reader,
         provider: provider,
         maxConcurrentWork: 1,
       );
@@ -1117,7 +1117,7 @@ void main() {
         pour,
         throwsA(
           isA<StationMintVoided>()
-              .having((error) => error.cause, 'cause', same(reader.error))
+              .having((error) => error.cause, 'cause', same(runner.error))
               .having(
                 (error) => error.retiredSessionId,
                 'retiredSessionId',
@@ -1149,6 +1149,15 @@ void main() {
       expect(voidIndex, isNonNegative);
       expect(closeIndex, isNonNegative);
       expect(voidIndex, lessThan(closeIndex));
+      expect(
+        runner.calls[voidIndex],
+        contains('${SessionBeadKeys.voidedReason}=mint-timeout'),
+      );
+      expect(runner.graphApplyCalls, hasLength(1));
+      expect(
+        runner.workCreates.where((call) => call.contains('gate')),
+        isEmpty,
+      );
 
       await _pump();
       final beforeBackoff = invalidations;
@@ -1163,12 +1172,10 @@ void main() {
     'failed timeout close retains capacity and schedules no retry',
     () async {
       final runner = _FailingCloseRunner(createdId: 'tg-s1');
-      final reader = _TimeoutFirstMoleculeReader(runner);
       final provider = FakeRuntimeProvider();
       addTearDown(provider.close);
       final station = _stationOver(
         runner,
-        reader: reader,
         provider: provider,
         maxConcurrentWork: 1,
       );
@@ -1203,11 +1210,91 @@ void main() {
         contains('tg-2'),
       );
       expect(invalidations, beforeTimeout);
+      expect(
+        runner
+            .callsFor('update')
+            .singleWhere(
+              (call) =>
+                  call.contains('${SessionBeadKeys.voidedReason}=mint-timeout'),
+            ),
+        contains('${SessionBeadKeys.voidedReason}=mint-timeout'),
+      );
+      expect(runner.callsFor('close'), hasLength(1));
 
       await Future<void>.delayed(
         Backoff.standard.delayFor(1) + const Duration(milliseconds: 50),
       );
       expect(invalidations, beforeTimeout);
+    },
+  );
+
+  test(
+    'unclassified and stale pour failures retain their original identity',
+    () async {
+      final unclassified = StateError('controlled graph failure');
+      final unclassifiedRunner = _GraphErrorRunner(
+        unclassified,
+        createdId: 'tg-unclassified',
+      );
+      final unclassifiedStation = _stationOver(unclassifiedRunner);
+      addTearDown(unclassifiedStation.dispose);
+      final unclassifiedOwned = await _reserveAndCreate(
+        unclassifiedStation,
+        'tg-1',
+      );
+
+      await expectLater(
+        unclassifiedStation.admission.pourMolecule(
+          _moleculePlan,
+          workBeadId: 'tg-1',
+          sessionId: unclassifiedOwned.sessionId,
+          rootCrumbs: const ['tg-1', 'tg-unclassified'],
+          services: const ServiceBundle(),
+        ),
+        throwsA(same(unclassified)),
+      );
+      expect(
+        unclassifiedRunner
+            .callsFor('update')
+            .any(
+              (call) => call.any(
+                (arg) => arg.startsWith('${SessionBeadKeys.voidedReason}='),
+              ),
+            ),
+        isFalse,
+      );
+      expect(unclassifiedRunner.callsFor('close'), isEmpty);
+
+      const stale = BdTimeoutException(
+        command: ['bd', 'create', '--graph', 'plan.json'],
+        timeout: BdCliService.pourTimeout,
+      );
+      final staleRunner = _GraphErrorRunner(stale, createdId: 'tg-owned');
+      final staleStation = _stationOver(staleRunner);
+      addTearDown(staleStation.dispose);
+      await _reserveAndCreate(staleStation, 'tg-2');
+
+      await expectLater(
+        staleStation.admission.pourMolecule(
+          _moleculePlan,
+          workBeadId: 'tg-2',
+          sessionId: 'tg-stale',
+          rootCrumbs: const ['tg-2', 'tg-stale'],
+          services: const ServiceBundle(),
+        ),
+        throwsA(same(stale)),
+      );
+      expect(
+        staleRunner
+            .callsFor('update')
+            .any(
+              (call) => call.any(
+                (arg) => arg.startsWith('${SessionBeadKeys.voidedReason}='),
+              ),
+            ),
+        isFalse,
+      );
+      expect(staleRunner.callsFor('close'), isEmpty);
     },
   );
 

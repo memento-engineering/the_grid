@@ -1161,18 +1161,29 @@ void main() {
     });
 
     test(
-      'raw SQL timeout re-mints from a replacement grant without remounting',
+      'bd graph deadline re-mints from a replacement grant without remounting',
       () async {
         final events = <String>[];
-        final runner = _FailCreateRunner(failCreates: 0, eventLog: events);
-        final reader = _TimeoutMoleculeReads(
-          const EmptyBeadProbeReader(),
-          remaining: 1,
+        final runner = _FailCreateRunner(
+          failCreates: 0,
+          failGraphApplies: 1,
+          graphApplyError: const BdTimeoutException(
+            command: ['bd', 'create', '--graph', 'plan.json'],
+            timeout: BdCliService.pourTimeout,
+          ),
+          eventLog: events,
         );
-        final ctx = _ctxOver(runner, reader: reader);
+        final ctx = _ctxOver(runner);
         addTearDown(ctx.dispose);
         final transport = _RecordingTransport(events);
         final reg = RecordingCapabilityRegistry(circuits: const {});
+        final sink = _CapturingTrajectorySink();
+        final trajectoryScope = TrajectoryRecorderScope(
+          StationTrajectoryRecorder(
+            sink: sink,
+            substationPrefixes: const {'tg', 'tgdog'},
+          ),
+        );
         final workBead = bead('tg-1');
         final snapshot = JoinedSnapshot(graph: _work([workBead], {'tg-1'}));
         const config = SubstationConfig(
@@ -1197,6 +1208,7 @@ void main() {
           registry: reg,
           services: services,
           onState: (state) => reservationHost = state,
+          trajectoryScope: trajectoryScope,
         );
         addTearDown(m.owner.dispose);
         final scopeBranchId = _sessionScopeBranch(m.root).branchId;
@@ -1218,13 +1230,15 @@ void main() {
         );
 
         final abandoned = transport.named('session.mintAbandoned').single;
+        expect(abandoned.data['workBeadId'], 'tg-1');
         expect(abandoned.data['retiredSessionId'], 'tgdog-sess1');
+        expect(abandoned.data['stage'], 'molecule-pour');
         expect(abandoned.data['reason'], 'mint-timeout');
         expect(
           abandoned.data,
-          containsPair('deadlineConstant', 'DoltQueryService.queryTimeout'),
+          containsPair('deadlineConstant', 'BdCliService.pourTimeout'),
         );
-        expect(abandoned.data, containsPair('deadlineMs', '10000'));
+        expect(abandoned.data, containsPair('deadlineMs', '60000'));
         expect(_moleculePourVoidsPropertyOf(m.root).value, 1);
         expect(transport.named('session.moleculePourFailed'), isEmpty);
         expect(transport.named('session.mintFailed'), isEmpty);
@@ -1254,6 +1268,26 @@ void main() {
           runner.callsFor('create').where((call) => call.contains('gate')),
           isEmpty,
         );
+        final terminalRecords = sink.records
+            .where((record) => record.recordType == 'attempt.terminal')
+            .toList();
+        expect(terminalRecords, hasLength(1));
+        expect(
+          terminalRecords.single.correlationToJson(),
+          containsPair('outcome', 'lost'),
+        );
+        expect(
+          terminalRecords.single.payloadToJson(),
+          containsPair('reason', 'mint-timeout'),
+        );
+        final retiredRecords = sink.records
+            .where((record) => record.recordType == 'attempt.round.retired')
+            .toList();
+        expect(retiredRecords, hasLength(1));
+        expect(
+          retiredRecords.single.payloadToJson(),
+          containsPair('cause', 'void'),
+        );
         expect(_sessionScopeBranch(m.root).branchId, scopeBranchId);
 
         await Future<void>.delayed(
@@ -1268,8 +1302,9 @@ void main() {
         expect(sessionCreates, hasLength(2));
         expect(
           runner.calls.where((call) => call.contains('--graph')),
-          hasLength(1),
+          hasLength(2),
         );
+        expect(runner.callsFor('close'), hasLength(1));
         expect(replacementDeliveries, 1);
         expect(_sessionScopeBranch(m.root).branchId, scopeBranchId);
         expect(reg.events, ['START agent(tgdog-sess2/tg-1/agent)']);
@@ -1280,13 +1315,16 @@ void main() {
       },
     );
 
-    test('consecutive pour timeouts exhaust after three voids', () async {
-      final runner = _FailCreateRunner(failCreates: 0);
-      final reader = _TimeoutMoleculeReads(
-        const EmptyBeadProbeReader(),
-        remaining: 4,
+    test('consecutive bd graph deadlines exhaust after three voids', () async {
+      final runner = _FailCreateRunner(
+        failCreates: 0,
+        failGraphApplies: 4,
+        graphApplyError: const BdTimeoutException(
+          command: ['bd', 'create', '--graph', 'plan.json'],
+          timeout: BdCliService.pourTimeout,
+        ),
       );
-      final ctx = _ctxOver(runner, reader: reader);
+      final ctx = _ctxOver(runner);
       addTearDown(ctx.dispose);
       final transport = _RecordingTransport();
       final reg = RecordingCapabilityRegistry(circuits: const {});
@@ -1338,7 +1376,9 @@ void main() {
         transport.named('session.moleculePourExhausted'),
         hasLength(1),
         reason:
-            'deliveries=$replacementDeliveries timeouts=${reader.timeoutCount} creates=${runner.workCreates.length} flares=${transport.flares}',
+            'deliveries=$replacementDeliveries graphApplies='
+            '${runner.calls.where((call) => call.contains('--graph')).length} '
+            'creates=${runner.workCreates.length} flares=${transport.flares}',
       );
 
       await _pumpUntil(
@@ -1355,11 +1395,24 @@ void main() {
         return typeIndex >= 0 &&
             call[typeIndex + 1] == GridIssueTypes.session.wire;
       });
-      expect(reader.timeoutCount, 3);
-      expect(reader.remaining, 1);
       expect(sessionCreates, hasLength(3));
       expect(transport.named('session.mintAbandoned'), hasLength(3));
-      expect(runner.calls.where((call) => call.contains('--graph')), isEmpty);
+      for (final abandoned in transport.named('session.mintAbandoned')) {
+        expect(abandoned.data['stage'], 'molecule-pour');
+        expect(abandoned.data['reason'], 'mint-timeout');
+        expect(abandoned.data['deadlineConstant'], 'BdCliService.pourTimeout');
+        expect(abandoned.data['deadlineMs'], '60000');
+      }
+      expect(
+        runner.calls.where((call) => call.contains('--graph')),
+        hasLength(3),
+      );
+      expect(runner.callsFor('close'), hasLength(3));
+      expect(
+        runner.callsFor('create').where((call) => call.contains('gate')),
+        isEmpty,
+      );
+      expect(transport.named('session.moleculePourFailed'), isEmpty);
       expect(reg.events, isEmpty);
       final exhausted = transport.named('session.moleculePourExhausted').single;
       expect(exhausted.data, {
@@ -1368,8 +1421,8 @@ void main() {
         'attempt': '3',
         'maxAttempts': '3',
         'reason': 'mint-timeout',
-        'deadlineConstant': 'DoltQueryService.queryTimeout',
-        'deadlineMs': '10000',
+        'deadlineConstant': 'BdCliService.pourTimeout',
+        'deadlineMs': '60000',
       });
       expect(_moleculePourVoidsPropertyOf(m.root).value, 3);
       expect(replacementDeliveries, 3);
@@ -1446,58 +1499,6 @@ void main() {
       expect(reg.events, ['START agent(tgdog-sess4/tg-1/agent)']);
       expect(transport.named('session.mintExhausted'), isEmpty);
       expect(transport.named('session.moleculePourExhausted'), isEmpty);
-    });
-
-    test('60-second graph timeout parks once and is not retried', () async {
-      final runner = _FailCreateRunner(
-        failCreates: 0,
-        failGraphApplies: 1,
-        graphApplyError: const BdTimeoutException(
-          command: ['create', '--graph', 'plan.json'],
-          timeout: BdCliService.pourTimeout,
-        ),
-      );
-      final ctx = _ctxOver(runner);
-      addTearDown(ctx.dispose);
-      final transport = _RecordingTransport();
-      final reg = RecordingCapabilityRegistry(circuits: const {});
-      final bridge = StationJoinBridge(
-        work: FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'})),
-        state: FakeSnapshotSource(_state(const [])),
-      )..start();
-      addTearDown(bridge.dispose);
-
-      final m = _mountFull(
-        joined: bridge.notifier,
-        ctx: ctx,
-        registry: reg,
-        services: ServiceBundle(transport: transport),
-      );
-      addTearDown(m.owner.dispose);
-      await _pumpUntil(
-        m.owner,
-        () => transport.named('session.moleculePourFailed').isNotEmpty,
-      );
-
-      final failed = transport.named('session.moleculePourFailed').single;
-      expect(
-        failed.data,
-        containsPair('deadlineConstant', 'BdCliService.pourTimeout'),
-      );
-      expect(failed.data, containsPair('deadlineMs', '60000'));
-      expect(
-        runner.calls.where((call) => call.contains('--graph')),
-        hasLength(1),
-      );
-      final gateCreates = runner.workCreates.where((call) {
-        final typeIndex = call.indexOf('--type');
-        return typeIndex >= 0 &&
-            call[typeIndex + 1] == GridIssueTypes.gate.wire;
-      });
-      expect(gateCreates, hasLength(1));
-      expect(transport.named('session.mintFailed'), isEmpty);
-      expect(transport.named('session.mintExhausted'), isEmpty);
-      expect(reg.events, isEmpty);
     });
 
     test(

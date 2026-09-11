@@ -28,7 +28,19 @@ void main() {
     expect(
       stateStoreDeadlineMetadata(
         const BdTimeoutException(
-          command: ['query', 'id=tg-1'],
+          command: ['bd', 'create', '--graph', 'plan.json'],
+          timeout: BdCliService.pourTimeout,
+        ),
+      ),
+      const {
+        'deadlineConstant': 'BdCliService.pourTimeout',
+        'deadlineMs': '60000',
+      },
+    );
+    expect(
+      stateStoreDeadlineMetadata(
+        const BdTimeoutException(
+          command: ['bd', 'query', 'id=tg-1'],
           timeout: Duration(seconds: 15),
         ),
       ),

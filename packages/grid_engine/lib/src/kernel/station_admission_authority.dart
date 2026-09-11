@@ -136,8 +136,9 @@ final class StationAdmissionBatch {
 }
 
 /// Signals that a freshly-created session was durably voided after its pour
-/// timed out. The caller records its existing Stage-1 observations and waits
-/// for the authority's invalidation instead of parking the retired session.
+/// reached the state-store mint deadline. The caller records its existing
+/// Stage-1 observations and waits for the authority's invalidation instead of
+/// parking the retired session.
 final class StationMintVoided implements Exception {
   const StationMintVoided({
     required this.workBeadId,
@@ -151,7 +152,7 @@ final class StationMintVoided implements Exception {
   /// The session id that was durably voided and closed.
   final String retiredSessionId;
 
-  /// The raw SQL timeout that triggered compensation.
+  /// The raw Dart or classified bd pour timeout that triggered compensation.
   final Object cause;
 
   @override
@@ -1073,8 +1074,12 @@ final class StationAdmissionAuthority {
     }
   }
 
-  /// Pours a fresh or orphaned molecule, durably voiding only a raw Dart
-  /// timeout that belongs to this bead's freshly-created reservation.
+  /// Pours a fresh or orphaned molecule, durably voiding only a state-store
+  /// mint timeout that belongs to this bead's freshly-created reservation.
+  ///
+  /// The mint-timeout class comprises the raw Dart timeout raised by the
+  /// state-store read and the bd graph deadline identified by
+  /// [stateStoreDeadlineMetadata]. Every other failure is rethrown unchanged.
   Future<Map<String, String>> pourMolecule(
     GraphApplyPlan plan, {
     required String workBeadId,
@@ -1091,7 +1096,12 @@ final class StationAdmissionAuthority {
       );
       _notifyListeners();
       return result;
-    } on TimeoutException catch (error) {
+    } on Object catch (error) {
+      final deadline = stateStoreDeadlineMetadata(error);
+      if (error is! TimeoutException &&
+          deadline['deadlineConstant'] != 'BdCliService.pourTimeout') {
+        rethrow;
+      }
       final reservation = _reservations[workBeadId];
       if (reservation?.sessionId != sessionId) rethrow;
       await _voidCreatedSession(

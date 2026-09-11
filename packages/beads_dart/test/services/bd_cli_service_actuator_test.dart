@@ -271,10 +271,14 @@ void main() {
         await service.delete('tg-x');
 
         expect(
-          BdCliService.pourTimeout.inSeconds,
-          greaterThanOrEqualTo(60),
-          reason:
-              'the measured live pour median is 9.3s; the deadline is 6x it',
+          BdCliService.pourTimeout,
+          const Duration(seconds: 60),
+          reason: 'the pour deadline is a fixed, ratified contract',
+        );
+        expect(
+          ProcessBdRunner(workspaceRoot: '.').defaultTimeout,
+          const Duration(seconds: 15),
+          reason: 'ordinary bd calls retain the runner default',
         );
         expect(runner.calls[0].first, 'create');
         expect(
