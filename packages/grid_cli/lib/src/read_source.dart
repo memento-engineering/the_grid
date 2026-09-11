@@ -209,8 +209,10 @@ String _stripNoise(String line) {
 /// Empty when the symbol is not declared here — the caller reports that as a
 /// miss rather than falling back to dumping the file, which is the behaviour
 /// the guessed line range produced.
-List<LineSpan> resolveSymbol(String source, String symbol) =>
-    [for (final line in declarationLines(source, symbol)) declarationExtent(source, line)];
+List<LineSpan> resolveSymbol(String source, String symbol) => [
+  for (final line in declarationLines(source, symbol))
+    declarationExtent(source, line),
+];
 
 /// One slice after the output contract has been applied.
 class CappedSlice {
@@ -283,7 +285,8 @@ ReadReport capSlices(
   }
   final order = [...fresh]
     ..sort(
-      (a, b) => utf8.encode(a.text).length.compareTo(utf8.encode(b.text).length),
+      (a, b) =>
+          utf8.encode(a.text).length.compareTo(utf8.encode(b.text).length),
     );
   final emitted = <String, CappedSlice>{};
   var remaining = capBytes;

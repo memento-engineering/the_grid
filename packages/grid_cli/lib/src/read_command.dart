@@ -65,13 +65,15 @@ class ReadCommand extends Command<int> {
     argParser
       ..addOption(
         'span',
-        help: 'Line range START:END (1-based, inclusive). Whole file if '
+        help:
+            'Line range START:END (1-based, inclusive). Whole file if '
             'neither --span nor --symbol is given.',
         valueHelp: 'a:b',
       )
       ..addOption(
         'symbol',
-        help: 'Resolve the declaration of this symbol instead of guessing a '
+        help:
+            'Resolve the declaration of this symbol instead of guessing a '
             'line range. Reports every declaring site.',
         valueHelp: 'name',
       )
@@ -83,7 +85,8 @@ class ReadCommand extends Command<int> {
       )
       ..addOption(
         'ledger',
-        help: 'Session ledger path. With it, an answer already served in this '
+        help:
+            'Session ledger path. With it, an answer already served in this '
             'session is reported as unchanged instead of re-emitted.',
         valueHelp: 'path',
       )
@@ -114,7 +117,9 @@ class ReadCommand extends Command<int> {
     final capText = argResults!.option('cap')!;
     final cap = int.tryParse(capText);
     if (cap == null || cap <= 0) {
-      stderr.writeln('grid read: --cap must be a positive integer, got "$capText".');
+      stderr.writeln(
+        'grid read: --cap must be a positive integer, got "$capText".',
+      );
       return 64;
     }
     final spanText = argResults!.option('span');
@@ -176,7 +181,9 @@ class ReadCommand extends Command<int> {
     ]);
 
     if (argResults!.flag('json')) {
-      stdout.writeln(jsonEncode(readReportJson(report, missingSymbolIn: misses)));
+      stdout.writeln(
+        jsonEncode(readReportJson(report, missingSymbolIn: misses)),
+      );
     } else {
       stdout.write(renderRead(report));
       for (final path in misses) {
