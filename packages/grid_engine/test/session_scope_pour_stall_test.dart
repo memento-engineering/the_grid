@@ -149,36 +149,28 @@ Future<void> _pumpUntil(
   }
 }
 
-final class _TimeoutFirstMoleculeRead implements BeadProbeReader {
-  _TimeoutFirstMoleculeRead(this.delegate);
-
-  final BeadProbeReader delegate;
+final class _TimeoutFirstGraphPour extends RecordingBdRunner {
   bool _timedOut = false;
 
   @override
-  Future<Bead?> beadById(String id, {required Set<IssueType> types}) =>
-      delegate.beadById(id, types: types);
-
-  @override
-  Future<List<Bead>> openBeads({
-    required Set<IssueType> types,
-    Map<String, String> metadataAll = const {},
-    Map<String, String> metadataAny = const {},
-  }) {
-    if (!_timedOut && types.contains(GridIssueTypes.molecule)) {
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    final result = await super.run(args, timeout: timeout, stdin: stdin);
+    if (!_timedOut &&
+        args.length > 1 &&
+        args[0] == 'create' &&
+        args[1] == '--graph') {
       _timedOut = true;
-      throw TimeoutException('Future not completed');
+      throw const BdTimeoutException(
+        command: ['bd', 'create', '--graph', 'plan.json'],
+        timeout: BdCliService.pourTimeout,
+      );
     }
-    return delegate.openBeads(
-      types: types,
-      metadataAll: metadataAll,
-      metadataAny: metadataAny,
-    );
+    return result;
   }
-
-  @override
-  Future<List<Bead>> openSuperseding(Set<String> priorIds) =>
-      delegate.openSuperseding(priorIds);
 }
 
 void _expectStallFlare(
@@ -277,11 +269,12 @@ void main() {
       });
 
       final fakes = buildFakes();
+      final runner = _TimeoutFirstGraphPour();
       final services = StationServices(
         provider: fakes.provider,
         writer: StationBeadWriter(
-          bd: BdCliService(fakes.runner),
-          reader: _TimeoutFirstMoleculeRead(fakes.runner),
+          bd: BdCliService(runner),
+          reader: runner,
           ownership: BeadOwnershipPredicate(const {stateSubstation}),
         ),
         stateSubstation: stateSubstation,
@@ -331,6 +324,14 @@ void main() {
       );
       expect(transport.named('session.mintFailed'), isEmpty);
       expect(transport.named('session.mintExhausted'), isEmpty);
+      final abandoned = transport.named('session.mintAbandoned').single;
+      expect(abandoned.data['deadlineConstant'], 'BdCliService.pourTimeout');
+      expect(abandoned.data['deadlineMs'], '60000');
+      expect(transport.named('session.moleculePourFailed'), isEmpty);
+      expect(
+        runner.callsFor('create').where((call) => call.contains('gate')),
+        isEmpty,
+      );
     },
   );
 }

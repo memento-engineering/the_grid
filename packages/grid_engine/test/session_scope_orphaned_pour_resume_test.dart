@@ -452,6 +452,11 @@ void main() {
     // LOUD once, cause-bearing, naming the ADOPTED session.
     final parked = transport.named('session.moleculePourFailed');
     expect(parked, hasLength(1));
+    expect(parked.single.data.keys.toSet(), {
+      'sessionId',
+      'workBeadId',
+      'reason',
+    });
     expect(parked.single.data['sessionId'], 'tgdog-orphan');
     expect(parked.single.data['workBeadId'], 'tg-1');
     expect(
@@ -460,6 +465,8 @@ void main() {
     );
     // The park REPLACES the old silent-retry flare, it does not add to it.
     expect(transport.named('session.orphanedPourResumeFailed'), isEmpty);
+    expect(transport.named('session.mintAbandoned'), isEmpty);
+    expect(transport.named('session.moleculePourExhausted'), isEmpty);
 
     // ONE pour attempt total — terminal park, never a blind re-pour.
     expect(

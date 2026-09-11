@@ -850,11 +850,11 @@ class SessionScopeState extends State<SessionScope>
   /// lifecycle position: a `createSession` throw happens BEFORE a durable
   /// session exists and propagates to [_mint]'s `catch` under the
   /// [_maxMintAttempts] budget; a `createMolecule` throw happens AFTER the
-  /// session exists. A raw SQL timeout is compensated by the authority before
-  /// this scope reports abandonment; every other failure parks the session
-  /// durably via [_parkFailedMoleculePour] — terminal, budget-untouched. Only a
-  /// throwing PARK (the gate write itself failing) falls back to [_mint]'s
-  /// bounded retry.
+  /// session exists. A state-store mint timeout is compensated by the authority
+  /// before this scope reports abandonment; every other failure parks the
+  /// session durably via [_parkFailedMoleculePour] — terminal,
+  /// budget-untouched. Only a throwing PARK (the gate write itself failing)
+  /// falls back to [_mint]'s bounded retry.
   ///
   /// [_moleculeSessionId] keeps a post-create attempt tied to the authority's
   /// reservation until pour or compensation finishes. It therefore cannot
