@@ -1,3 +1,12 @@
+## 0.5.0-rc.23
+
+- Floors `grid_engine` to `^0.3.0-rc.25`. rc.22 declared `^0.3.0-rc.24` while
+  calling `StationAdmissionStatus.zeroAdmissionWaiters`, which rc.24 does not
+  have, so it did not build for any consumer resolving from pub and was
+  retracted. rc.23 is rc.22's content on a floor that resolves (tg-qwsx).
+- BREAKING for exhaustive switches: `AttachResult` gained a `DeadPid` case. A
+  consumer that switches over it without a default must add the case.
+
 ## 0.5.0-rc.22
 
 - Added: `read` — bounded source excerpts by symbol or span. Resolves a Dart
