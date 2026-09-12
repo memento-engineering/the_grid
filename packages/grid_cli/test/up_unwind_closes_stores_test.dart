@@ -123,6 +123,9 @@ final class _Control implements ControlResource {
   String get url => 'http://127.0.0.1:9999';
 
   @override
+  void flare(String name, Map<String, String> data) {}
+
+  @override
   Future<void> dispose() async => events.add('control.dispose');
 }
 

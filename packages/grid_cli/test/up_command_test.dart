@@ -167,7 +167,6 @@ final class _Harness {
     required this.monitor,
     required this.admission,
     required this.trajectory,
-    required this.emitRootError,
   });
 
   static Future<_Harness> create({
@@ -185,7 +184,6 @@ final class _Harness {
     WedgeMonitor? monitor,
     StationAdmissionStatus? admission,
     Map<String, Object?> trajectory = const <String, Object?>{},
-    bool emitRootError = false,
     Map<String, PrimaryCheckoutFreshness> checkoutFreshness =
         const <String, PrimaryCheckoutFreshness>{},
   }) async {
@@ -214,7 +212,6 @@ final class _Harness {
       monitor: monitor,
       admission: admission,
       trajectory: trajectory,
-      emitRootError: emitRootError,
     );
   }
 
@@ -236,8 +233,8 @@ final class _Harness {
   final WedgeMonitor? monitor;
   final StationAdmissionStatus? admission;
   final Map<String, Object?> trajectory;
-  final bool emitRootError;
   final events = <String>[];
+  final controlFlares = <({String name, Map<String, String> data})>[];
   final _stdout = ByteConsumer();
   final _stderr = ByteConsumer();
 
@@ -254,6 +251,9 @@ final class _Harness {
   /// The command handler handed to the control seat (routes to the LIVE
   /// delegate's vended handler — or renders its absence as a refusal).
   GridCommandHandler? controlCommandHandler;
+
+  /// The root-error adapter retained by the mounted runner.
+  void Function(GridHookError)? rootErrorReporter;
 
   /// The asset resolver handed through the resident control-start seam.
   AssetCatalogResolver? controlAssetCatalogResolver;
@@ -329,6 +329,7 @@ final class _Harness {
             delegateFactory,
           }) async {
             gridProjector = treeProjector;
+            rootErrorReporter = onError;
             // The seam's contract mirrors runGrid: the boot rail is awaited
             // before the first mount, and on ANY failure the delegate is
             // disposed before the error reaches the shell.
@@ -336,18 +337,6 @@ final class _Harness {
               await delegate.boot(const GridConfiguration());
               events.add('runGrid');
               _throwIf('runGrid');
-              if (emitRootError) {
-                onError(
-                  GridHookError(
-                    'uncaughtError',
-                    delegate.runtimeType,
-                    StateError('detached root boom'),
-                    StackTrace.current,
-                    nodePath: 'earth/tg-a/review',
-                    stepId: 'grade',
-                  ),
-                );
-              }
             } on Object {
               delegate.dispose();
               rethrow;
@@ -375,7 +364,7 @@ final class _Harness {
             controlAssetCatalogResolver = assetCatalogResolver;
             events.add('control');
             _throwIf('control');
-            return _Control(events, failAt: failAt);
+            return _Control(events, controlFlares, failAt: failAt);
           },
       armDevelopmentMode:
           ({
@@ -541,11 +530,17 @@ final class _Grid implements GridResource {
 }
 
 final class _Control implements ControlResource {
-  _Control(this.events, {this.failAt});
+  _Control(this.events, this.flares, {this.failAt});
   final List<String> events;
+  final List<({String name, Map<String, String> data})> flares;
   final String? failAt;
   @override
   String get url => 'http://127.0.0.1:9999';
+  @override
+  void flare(String name, Map<String, String> data) {
+    flares.add((name: name, data: Map<String, String>.of(data)));
+  }
+
   @override
   Future<void> dispose() async {
     events.add('control.dispose');
@@ -988,12 +983,25 @@ void main() {
   });
 
   test(
-    'the injected runner routes a named root record to stderr flare JSON',
+    'a post-control root error reaches stderr and the control flare sink',
     () async {
-      final h = await _Harness.create(emitRootError: true);
+      final h = await _Harness.create(holdOpen: true);
       addTearDown(h.dispose);
 
-      expect(await h.run(), 0);
+      final run = h.run(untimed: true);
+      await h.stationUp.future;
+      h.rootErrorReporter!(
+        GridHookError(
+          'uncaughtError',
+          h.built.single.runtimeType,
+          StateError('detached root boom'),
+          StackTrace.current,
+          nodePath: 'earth/tg-a/review',
+          stepId: 'grade',
+        ),
+      );
+      h.release.complete();
+      expect(await run, 0);
 
       final flare = h.stderrText
           .trim()
@@ -1010,6 +1018,9 @@ void main() {
       expect(data, containsPair('attribution', 'nodePath+stepId'));
       expect(data, containsPair('nodePath', 'earth/tg-a/review'));
       expect(data, containsPair('stepId', 'grade'));
+      expect(h.controlFlares, hasLength(1));
+      expect(h.controlFlares.single.name, 'station.uncaughtError');
+      expect(h.controlFlares.single.data, data);
     },
   );
 
