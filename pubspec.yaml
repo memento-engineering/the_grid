@@ -27,6 +27,16 @@ workspace:
 # cascade. Remove it when pow-jz93 lands and the power packages accept 0.4.0.
 dependency_overrides:
   genesis_tree: ^0.4.0
+  # Same bridge for the grid_engine 0.4.0-dev.1 wave (tg-rvib): grid_cockpit reaches the hosted
+  # federated_grid_assets 0.3.0, whose grid_engine ^0.3.0 pin forbids this workspace's own
+  # grid_engine. A workspace member cannot be overridden, so the hosted consumer is pointed at
+  # power_station's release/grid-engine-0.4-bridge commit, which pins grid_engine ^0.4.0-dev.1.
+  # Remove it together with the genesis_tree line when pow-jz93 lands.
+  federated_grid_assets:
+    git:
+      url: https://github.com/memento-engineering/power_station.git
+      ref: 7b0792d6423a69f3f7fde9107d103d3b6d892ff1
+      path: packages/federated_grid_assets
 
 dev_dependencies:
   melos: ^7.7.0

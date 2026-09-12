@@ -1,3 +1,14 @@
+## 0.4.0-dev.1
+
+- Breaking: the `genesis_tree` constraint moves from `^0.3.0` to `^0.4.0`, and the private
+  `src/seeds/provider.dart` copy of the Provider composition layer (`Provider`, `ProviderCreate`,
+  `ProviderDispose`, `ProviderScope`, `ProviderTreeContext`) is deleted in favour of the one
+  genesis_tree 0.4.0 publishes (tg-ofpn, #414). Migration: pin `genesis_tree: ^0.4.0` beside
+  `grid_engine: ^0.4.0-dev.1`; any import of `package:grid_engine/src/seeds/provider.dart`
+  becomes `package:genesis_tree/genesis_tree.dart`.
+- Published at the `dev` rung: this wave adopts a new genesis_tree line and every member of the
+  grid_engine / grid_sdk / grid_cli family moves together so a resolved set stays coherent.
+
 ## 0.3.0
 
 - PROMOTED from 0.3.0-rc.25. This is the stable release of the 0.3.0 line; the code is the
