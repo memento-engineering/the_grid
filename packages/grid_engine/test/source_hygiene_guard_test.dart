@@ -63,6 +63,13 @@ void main() {
       final amendment = File(
         '$root/docs/decisions/2026-09-04-admission-authority-in-process-cut.md',
       ).readAsStringSync();
+      String authoritySection(String start, String end) {
+        final startIndex = authority.indexOf(start);
+        final endIndex = authority.indexOf(end, startIndex);
+        expect(startIndex, greaterThanOrEqualTo(0), reason: start);
+        expect(endIndex, greaterThan(startIndex), reason: end);
+        return authority.substring(startIndex, endIndex);
+      }
 
       const removed = [
         '_mountAttemptsScheduled',
@@ -72,7 +79,6 @@ void main() {
         '_surplusAliveReported',
         '_sessionAmbiguityReported',
         '_rivalRetiresRequired',
-        '_rivalCleanupsInFlight',
         '_gateSweepsScheduled',
         '_capacityWaitingSignature',
         '_scopeBySessionId',
@@ -98,6 +104,7 @@ void main() {
         '_retryTimers',
         '_mountAttemptWrites',
         '_blockedUntilFreshReady',
+        '_rivalCleanupsInFlight',
       };
       final declaredCollections = RegExp(
         r'final\s+(?:Set|Map|List)<[^;]+?>\s+(_[A-Za-z0-9]+)\s*=',
@@ -115,6 +122,7 @@ void main() {
         '_retryTimers': 'Live backoff operations',
         '_mountAttemptWrites': 'Writes not yet represented by JoinedSnapshot',
         '_blockedUntilFreshReady': 'Cancellation quarantine persists',
+        '_rivalCleanupsInFlight': 'rival-cleanup microtasks are unavailable',
       };
       for (final entry in rationaleByCollection.entries) {
         expect(
@@ -237,7 +245,6 @@ void main() {
         'InheritedModelSeed',
         'package:genesis_tree/',
         'package:tree/',
-        'dependOn',
       ]) {
         expect(
           authority,
@@ -245,6 +252,62 @@ void main() {
           reason: '$treePrimitive must not enter the station-lifetime owner',
         );
       }
+      expect(
+        authority,
+        isNot(matches(RegExp(r'dependOn[A-Za-z]*\s*\('))),
+        reason: 'tree dependency verbs must not enter the authority',
+      );
+
+      final surplusRetirement = authoritySection(
+        'Future<void> retireSurplusSessions({',
+        'void _scheduleRivalCleanup(',
+      );
+      expect(
+        surplusRetirement,
+        matches(
+          RegExp(
+            r'final verdict = linkedSessionVerdictOf\(ordered\);\s*'
+            r'if \(verdict is AdoptLinkedSession\) return;\s*'
+            r'for \(final row in ordered\)',
+          ),
+        ),
+        reason: 'the adopt verdict must return before terminal row writes',
+      );
+
+      final voidRetirement = authoritySection(
+        'Future<StationAdmissionRefusal?> retireVoidedSession({',
+        '/// Creates and binds the session for a reservation',
+      );
+      expect(voidRetirement, contains('_scopeForBead(workBead.id)'));
+      expect(
+        voidRetirement.split('\n').where((line) => line.contains('_release(')),
+        contains('      _release(workBead.id);'),
+      );
+      expect(
+        voidRetirement.indexOf('_reportVoidRefused('),
+        lessThan(voidRetirement.indexOf('_release(workBead.id);')),
+      );
+
+      final terminalSettlement = authoritySection(
+        'Future<void> settleWorkTerminalSession({',
+        '/// Marks a suspicious rework decline',
+      );
+      expect(
+        terminalSettlement
+            .split('\n')
+            .where((line) => line.contains('_release(')),
+        contains('    _release(terminalWorkBead.id);'),
+      );
+      expect(terminalSettlement, isNot(contains('_releaseSession(')));
+      expect(terminalSettlement, isNot(contains('onlyScope')));
+      expect(
+        authority,
+        contains(
+          'void _scheduleRivalCleanup(\n'
+          '    _AdmissionScopeState scope,\n'
+          '    ServiceBundle services, {',
+        ),
+      );
       expect(
         amendment,
         contains('updates: ["the_grid#admission-authority-boundary"]'),

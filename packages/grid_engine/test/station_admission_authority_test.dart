@@ -114,6 +114,26 @@ final class _FailingCloseRunner extends RecordingBdRunner {
   }
 }
 
+final class _GatedTerminalSettlementRunner extends RecordingBdRunner {
+  final updateEntered = Completer<void>();
+  final releaseUpdate = Completer<void>();
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    if (args.length > 1 &&
+        args.first == 'update' &&
+        args[1] == 'tg-terminal-session') {
+      if (!updateEntered.isCompleted) updateEntered.complete();
+      await releaseUpdate.future;
+    }
+    return super.run(args, timeout: timeout, stdin: stdin);
+  }
+}
+
 final class _GraphErrorRunner extends RecordingBdRunner {
   _GraphErrorRunner(this.error, {super.createdId});
 
@@ -160,6 +180,13 @@ final class _FailFirstVoidUpdateRunner extends RecordingBdRunner {
 final class _GatedStopProvider extends FakeRuntimeProvider {
   final stopEntered = Completer<void>();
   final releaseStop = Completer<void>();
+  var listRunningCalls = 0;
+
+  @override
+  List<String> listRunning(String prefix) {
+    listRunningCalls += 1;
+    return super.listRunning(prefix);
+  }
 
   @override
   Future<void> stop(String name) async {
@@ -598,6 +625,86 @@ void main() {
         );
       }
       expect(gateRunner.openBeadsCallCount, 2);
+    },
+  );
+
+  test(
+    'surplus retirement preserves the adopt verdict decision gate',
+    () async {
+      final runner = RecordingBdRunner();
+      final station = _stationOver(runner);
+      addTearDown(station.dispose);
+      const winner = SessionProjection(
+        workBeadId: 'tg-surplus',
+        sessionId: 'tg-winner',
+      );
+      const terminal = SessionProjection(
+        workBeadId: 'tg-surplus',
+        sessionId: 'tg-terminal',
+        isTerminal: true,
+      );
+
+      await station.admission.retireSurplusSessions(
+        workBeadId: 'tg-surplus',
+        keptSessionId: 'tg-winner',
+        surplus: const [winner, terminal],
+        services: const ServiceBundle(),
+      );
+
+      expect(
+        runner.callsFor('update'),
+        isEmpty,
+        reason: 'an adopt verdict leaves terminal-row retirement to its owner',
+      );
+    },
+  );
+
+  test(
+    'terminal settlement releases an unsessioned reservation after the writer succeeds',
+    () async {
+      final runner = _GatedTerminalSettlementRunner();
+      addTearDown(() {
+        if (!runner.releaseUpdate.isCompleted) runner.releaseUpdate.complete();
+      });
+      const sessionId = 'tg-terminal-session';
+      final work = _bead('tg-terminal-work');
+      runner.exportBeads = const [
+        Bead(
+          id: sessionId,
+          issueType: GridIssueTypes.session,
+          status: BeadStatus.open,
+          metadata: {'rig': 'tg', SessionBeadKeys.workBead: 'tg-terminal-work'},
+        ),
+      ];
+      final station = _stationOver(runner, maxConcurrentWork: 1);
+      addTearDown(station.dispose);
+      final snapshot = _snapshot([work]);
+      final reservation = station.admission
+          .admitPending(
+            snapshot,
+            _config.copyWith(maxConcurrentWork: 1),
+            const ServiceBundle(),
+            [StationAdmissionCandidate(bead: work, session: null)],
+          )
+          .admitted
+          .single;
+      expect(reservation.sessionId, isNull);
+
+      final settlement = station.admission.settleWorkTerminalSession(
+        terminalWorkBead: work.copyWith(status: BeadStatus.closed),
+        sessionId: sessionId,
+        services: const ServiceBundle(),
+      );
+      await runner.updateEntered.future;
+      expect(
+        station.admission.admissionStatus.reservations.single.bead,
+        work.id,
+      );
+
+      runner.releaseUpdate.complete();
+      await settlement;
+      expect(station.admission.admissionStatus.reservations, isEmpty);
+      expect(runner.callsFor('close'), hasLength(1));
     },
   );
 
@@ -2016,6 +2123,27 @@ void main() {
         isEmpty,
         reason: 'all stops precede durable cleanup',
       );
+      final overlapping = station.admission.admitPending(
+        duplicate,
+        _config,
+        services,
+        [candidate],
+      );
+      expect(overlapping.refused.single.clause, 'duplicate-live');
+      final overlappingFlares = transport.flares.where(
+        (flare) => flare.name == 'work.duplicateLiveRefused',
+      );
+      expect(overlappingFlares, hasLength(2));
+      expect(
+        overlappingFlares.every(
+          (flare) =>
+              flare.data['beadId'] == 'tg-1' &&
+              flare.data['sessionId'] == 'tg-winner' &&
+              flare.data['rivalSessionIds'] == 'tg-rival',
+        ),
+        isTrue,
+      );
+      expect(provider.listRunningCalls, 1);
       provider.releaseStop.complete();
       await _waitUntil(
         () => transport.flares.any(
@@ -2024,6 +2152,18 @@ void main() {
       );
 
       expect(provider.stopped, ['tg-rival/tg-1/agent', 'tg-rival/tg-1/verify']);
+      expect(provider.listRunningCalls, 1);
+      expect(runner.callsFor('close'), hasLength(1));
+      expect(
+        runner
+            .callsFor('update')
+            .where(
+              (call) => call.contains(
+                '${SessionBeadKeys.workBead}=tg-1#void-tg-rival',
+              ),
+            ),
+        hasLength(1),
+      );
       final closeIndex = runner.calls.indexWhere(
         (call) => call.isNotEmpty && call.first == 'close',
       );
@@ -2039,6 +2179,7 @@ void main() {
       );
       expect(retired.data['sessionId'], 'tg-rival');
 
+      await _pump();
       final stale = station.admission.admitPending(
         duplicate,
         _config,
@@ -2046,6 +2187,20 @@ void main() {
         [candidate],
       );
       expect(stale.refused.single.clause, 'duplicate-live');
+      await _waitUntil(
+        () =>
+            transport.flares
+                .where((flare) => flare.name == 'work.sessionSurplusRetired')
+                .length ==
+            2,
+      );
+      expect(provider.listRunningCalls, 2);
+      expect(
+        transport.flares.where(
+          (flare) => flare.name == 'work.sessionSurplusRetired',
+        ),
+        hasLength(2),
+      );
       final joined = _snapshot([work], sessions: const {'tg-1': winner});
       final adopted = station.admission.admitPending(
         joined,
@@ -2058,7 +2213,7 @@ void main() {
         transport.flares.where(
           (flare) => flare.name == 'work.duplicateLiveRefused',
         ),
-        hasLength(2),
+        hasLength(3),
       );
     },
   );

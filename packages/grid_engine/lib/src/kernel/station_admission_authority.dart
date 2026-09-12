@@ -201,6 +201,8 @@ final class _AdmissionScopeState {
   Timer? _mountEligibilityRecheckTimer;
   // First-observed zero-admission timing is not carried by JoinedSnapshot.
   final Map<String, DateTime> _zeroAdmissionSinceByBead = <String, DateTime>{};
+  // Started rival-cleanup microtasks are unavailable from JoinedSnapshot.
+  final Set<String> _rivalCleanupsInFlight = <String>{};
 }
 
 /// The single station-owned answer to “may this attempt start now?”.
@@ -553,6 +555,7 @@ final class StationAdmissionAuthority {
             final keptSessionId = session.sessionId ?? '';
             for (final rival in rivals) {
               _scheduleRivalCleanup(
+                scope,
                 services,
                 workBeadId: bead.id,
                 keptSessionId: keptSessionId,
@@ -957,7 +960,7 @@ final class StationAdmissionAuthority {
         );
       }
       _reportVoidRefused(services, workBead.id, deadSession, alive);
-      _release(workBead.id, onlyScope: _lastScopeByBead[workBead.id]);
+      _release(workBead.id);
       _notifyListeners();
       return StationAdmissionRefusal(
         candidate: StationAdmissionCandidate(
@@ -1230,18 +1233,14 @@ final class StationAdmissionAuthority {
     required String sessionId,
     required ServiceBundle services,
   }) async {
-    try {
-      await _writer.closeOpenGatesForTerminal(
-        sessionId: sessionId,
-        trigger: GateCloseCause.workBeadClosed,
-        disposition: GateSweepSessionDisposition.live,
-        terminalWorkBead: terminalWorkBead,
-      );
-      _releaseSession(terminalWorkBead.id, sessionId);
-      _notifyListeners();
-    } on Object {
-      rethrow;
-    }
+    await _writer.closeOpenGatesForTerminal(
+      sessionId: sessionId,
+      trigger: GateCloseCause.workBeadClosed,
+      disposition: GateSweepSessionDisposition.live,
+      terminalWorkBead: terminalWorkBead,
+    );
+    _release(terminalWorkBead.id);
+    _notifyListeners();
   }
 
   /// Marks a suspicious rework decline and deliberately keeps it counted.
@@ -1308,6 +1307,8 @@ final class StationAdmissionAuthority {
     required ServiceBundle services,
   }) async {
     final ordered = orderLinkedSessions(surplus);
+    final verdict = linkedSessionVerdictOf(ordered);
+    if (verdict is AdoptLinkedSession) return;
     for (final row in ordered) {
       final deadId = row.sessionId ?? '';
       if (deadId.isEmpty || !row.isTerminal) continue;
@@ -1344,6 +1345,7 @@ final class StationAdmissionAuthority {
   }
 
   void _scheduleRivalCleanup(
+    _AdmissionScopeState scope,
     ServiceBundle services, {
     required String workBeadId,
     required String keptSessionId,
@@ -1351,6 +1353,7 @@ final class StationAdmissionAuthority {
   }) {
     final rivalId = rival.sessionId ?? '';
     if (rivalId.isEmpty) return;
+    if (!scope._rivalCleanupsInFlight.add(rivalId)) return;
     scheduleMicrotask(() async {
       try {
         final running = _provider.listRunning('$rivalId/');
@@ -1377,6 +1380,8 @@ final class StationAdmissionAuthority {
           'reason': truncateReason('$error'),
           ...stateStoreDeadlineMetadata(error),
         });
+      } finally {
+        scope._rivalCleanupsInFlight.remove(rivalId);
       }
     });
   }
