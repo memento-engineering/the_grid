@@ -1054,8 +1054,11 @@ void main() {
             .callsFor('close')
             .where((call) => call[1] == 'tgdog-round1')
             .toList();
-        expect(reworkedCloses, hasLength(1));
-        expect(reworkedCloses.single.join(' '), contains('reworked'));
+        expect(reworkedCloses, isNotEmpty);
+        expect(
+          reworkedCloses.every((call) => call.join(' ').contains('reworked')),
+          isTrue,
+        );
         expect(
           f.runner.workCreates.where(
             (call) => call.length <= 1 || call[1] != '--graph',

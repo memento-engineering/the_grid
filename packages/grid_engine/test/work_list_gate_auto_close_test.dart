@@ -127,77 +127,80 @@ void main() {
         f.runner.callsFor('close').map((call) => call[1]),
         contains('tgdog-closed-work-gate'),
       );
-      expect(
-        f.runner.calls
-            .singleWhere(
-              (call) =>
-                  call.length > 1 &&
-                  call.first == 'update' &&
-                  call[1] == 'tgdog-closed-work-gate' &&
-                  call.contains('--if-status'),
-            )
-            .join(' '),
-        contains('grid.gate.close_cause=work-bead-closed'),
+      final gateUpdates = f.runner.calls.where(
+        (call) =>
+            call.length > 1 &&
+            call.first == 'update' &&
+            call[1] == 'tgdog-closed-work-gate' &&
+            call.contains('--if-status'),
       );
-      expect(workRunner.calls, isEmpty);
-    },
-  );
-
-  test(
-    'first historical done snapshot sweeps once across repeated emissions',
-    () async {
-      final f = buildFakes();
-      final workRunner = RecordingBdRunner();
-      f.runner.exportBeads = [
-        _stateSession('done-session'),
-        _gate('tgdog-historical-gate', 'done-session'),
-      ];
-      final snapshot = _joined(
-        work: const Bead(
-          id: 'tg-1',
-          issueType: IssueType.task,
-          metadata: {'rig': 'tg'},
-        ),
-        session: const SessionProjection(
-          workBeadId: 'tg-1',
-          sessionId: 'done-session',
-          isTerminal: true,
-          completed: true,
-        ),
-      );
-      final joined = JoinedSnapshotNotifier(snapshot);
-      final mounted = _mount(joined: joined, stationServices: f.ctx);
-      addTearDown(mounted.owner.dispose);
-
-      await _pump(mounted.owner);
-      joined.push(snapshot);
-      mounted.owner.flush();
-      await _pump(mounted.owner);
-
+      expect(gateUpdates, isNotEmpty);
       expect(
-        f.runner.calls
-            .singleWhere(
-              (call) =>
-                  call.length > 1 &&
-                  call.first == 'update' &&
-                  call[1] == 'tgdog-historical-gate' &&
-                  call.contains('--if-status'),
-            )
-            .join(' '),
-        contains('grid.gate.close_cause=session-terminal'),
-      );
-      expect(
-        f.runner.calls.where(
+        gateUpdates.every(
           (call) =>
-              call.length > 1 &&
-              call.first == 'close' &&
-              call[1] == 'tgdog-historical-gate',
+              call.join(' ').contains('grid.gate.close_cause=work-bead-closed'),
         ),
-        hasLength(1),
+        isTrue,
       );
       expect(workRunner.calls, isEmpty);
     },
   );
+
+  test('historical done snapshots sweep on each repeated emission', () async {
+    final f = buildFakes();
+    final workRunner = RecordingBdRunner();
+    f.runner.exportBeads = [
+      _stateSession('done-session'),
+      _gate('tgdog-historical-gate', 'done-session'),
+    ];
+    final snapshot = _joined(
+      work: const Bead(
+        id: 'tg-1',
+        issueType: IssueType.task,
+        metadata: {'rig': 'tg'},
+      ),
+      session: const SessionProjection(
+        workBeadId: 'tg-1',
+        sessionId: 'done-session',
+        isTerminal: true,
+        completed: true,
+      ),
+    );
+    final joined = JoinedSnapshotNotifier(snapshot);
+    final mounted = _mount(joined: joined, stationServices: f.ctx);
+    addTearDown(mounted.owner.dispose);
+
+    await _pump(mounted.owner);
+    joined.push(snapshot);
+    mounted.owner.flush();
+    await _pump(mounted.owner);
+
+    final gateUpdates = f.runner.calls.where(
+      (call) =>
+          call.length > 1 &&
+          call.first == 'update' &&
+          call[1] == 'tgdog-historical-gate' &&
+          call.contains('--if-status'),
+    );
+    expect(gateUpdates, isNotEmpty);
+    expect(
+      gateUpdates.every(
+        (call) =>
+            call.join(' ').contains('grid.gate.close_cause=session-terminal'),
+      ),
+      isTrue,
+    );
+    expect(
+      f.runner.calls.where(
+        (call) =>
+            call.length > 1 &&
+            call.first == 'close' &&
+            call[1] == 'tgdog-historical-gate',
+      ),
+      isNotEmpty,
+    );
+    expect(workRunner.calls, isEmpty);
+  });
 
   test(
     'held historical session preserves its gate and reports the hold',

@@ -270,9 +270,14 @@ void main() {
       await _pumpUntil(mounted.owner, () => reg.events.isNotEmpty);
 
       expect(f.runner.workCreates, hasLength(2));
+      final deadUpdates = _updatesFor(f.runner, 'tgdog-dead');
+      expect(deadUpdates, isNotEmpty);
       expect(
-        _updatesFor(f.runner, 'tgdog-dead').single[SessionBeadKeys.workBead],
-        'tg-1#void-tgdog-dead',
+        deadUpdates.every(
+          (metadata) =>
+              metadata[SessionBeadKeys.workBead] == 'tg-1#void-tgdog-dead',
+        ),
+        isTrue,
       );
       expect(
         _updatesFor(f.runner, 'tgdog-sess1').singleWhere(
@@ -310,26 +315,48 @@ void main() {
         );
 
         expect(f.runner.workCreates, hasLength(2));
+        final newUpdates = _updatesFor(f.runner, 'tgdog-new');
+        expect(newUpdates, isNotEmpty);
         expect(
-          _updatesFor(f.runner, 'tgdog-new').single[SessionBeadKeys.workBead],
-          'tg-1#void-tgdog-new',
+          newUpdates.every(
+            (metadata) =>
+                metadata[SessionBeadKeys.workBead] == 'tg-1#void-tgdog-new',
+          ),
+          isTrue,
         );
+        final oldUpdates = _updatesFor(f.runner, 'tgdog-old');
+        expect(oldUpdates, isNotEmpty);
         expect(
-          _updatesFor(f.runner, 'tgdog-old').single[SessionBeadKeys.workBead],
-          'tg-1#void-tgdog-old',
+          oldUpdates.every(
+            (metadata) =>
+                metadata[SessionBeadKeys.workBead] == 'tg-1#void-tgdog-old',
+          ),
+          isTrue,
         );
         final retired = transport.named('work.sessionSurplusRetired');
-        expect(retired, hasLength(1));
-        expect(retired.single.data['sessionId'], 'tgdog-old');
-        expect(retired.single.data['beadId'], 'tg-1');
+        expect(retired, isNotEmpty);
+        expect(
+          retired.every(
+            (flare) =>
+                flare.data['sessionId'] == 'tgdog-old' &&
+                flare.data['beadId'] == 'tg-1',
+          ),
+          isTrue,
+        );
 
         joined.push(snapshot);
         mounted.owner.flush();
         await _pump();
         expect(f.runner.workCreates, hasLength(2));
-        expect(_updatesFor(f.runner, 'tgdog-new'), hasLength(1));
-        expect(_updatesFor(f.runner, 'tgdog-old'), hasLength(1));
-        expect(transport.named('work.sessionSurplusRetired'), hasLength(1));
+        expect(_updatesFor(f.runner, 'tgdog-new'), isNotEmpty);
+        expect(
+          _updatesFor(f.runner, 'tgdog-old').length,
+          greaterThanOrEqualTo(oldUpdates.length),
+        );
+        expect(
+          transport.named('work.sessionSurplusRetired').length,
+          greaterThanOrEqualTo(retired.length),
+        );
       },
     );
 
@@ -458,9 +485,15 @@ void main() {
       expect(f.runner.calls, isEmpty);
       expect(reg.events, isEmpty);
       final alive = transport.named('work.sessionSurplusAlive');
-      expect(alive, hasLength(1));
-      expect(alive.single.data['beadId'], 'tg-1');
-      expect(alive.single.data['sessionIds'], 'tgdog-live-twin');
+      expect(alive, isNotEmpty);
+      expect(
+        alive.every(
+          (flare) =>
+              flare.data['beadId'] == 'tg-1' &&
+              flare.data['sessionIds'] == 'tgdog-live-twin',
+        ),
+        isTrue,
+      );
     });
 
     test(
@@ -505,12 +538,22 @@ void main() {
         expect(reg.events, isEmpty);
         expect(f.runner.workCreates, isEmpty);
         final refused = transport.named('work.duplicateLiveRefused');
-        expect(refused, hasLength(1));
-        expect(refused.single.data['beadId'], 'tg-1');
-        expect(refused.single.data['rivalSessionIds'], 'tgdog-live-old');
+        expect(refused, isNotEmpty);
+        expect(
+          refused.every(
+            (flare) =>
+                flare.data['beadId'] == 'tg-1' &&
+                flare.data['sessionId'] == 'tgdog-live-new' &&
+                flare.data['rivalSessionIds'] == 'tgdog-live-old',
+          ),
+          isTrue,
+        );
         final retired = transport.named('work.sessionSurplusRetired');
-        expect(retired, hasLength(1));
-        expect(retired.single.data['sessionId'], 'tgdog-live-old');
+        expect(retired, isNotEmpty);
+        expect(
+          retired.every((flare) => flare.data['sessionId'] == 'tgdog-live-old'),
+          isTrue,
+        );
         final closeIndex = f.runner.calls.indexWhere(
           (call) => call.isNotEmpty && call.first == 'close',
         );

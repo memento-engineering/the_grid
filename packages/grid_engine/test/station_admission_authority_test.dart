@@ -8,6 +8,7 @@ import 'package:test/test.dart';
 
 final class _FailingMountAttemptRunner extends RecordingBdRunner {
   var failNextAttemptUpdate = true;
+  var writesStarted = 0;
 
   @override
   Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
@@ -15,11 +16,48 @@ final class _FailingMountAttemptRunner extends RecordingBdRunner {
         args.isNotEmpty &&
         args.first == 'update' &&
         args.any((arg) => arg.contains(MountAttemptKeys.count))) {
+      writesStarted += 1;
       failNextAttemptUpdate = false;
       throw StateError('controlled mount-attempt failure');
     }
+    if (args.isNotEmpty &&
+        args.first == 'update' &&
+        args.any((arg) => arg.contains(MountAttemptKeys.count))) {
+      writesStarted += 1;
+    }
     return super.run(args, timeout: timeout, stdin: stdin);
   }
+}
+
+final class _GatedMountAttemptRunner extends RecordingBdRunner {
+  final entered = Completer<void>();
+  final release = Completer<void>();
+  var writesStarted = 0;
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    final type = args.indexOf('--type');
+    if (args.isNotEmpty &&
+        args.first == 'create' &&
+        type >= 0 &&
+        type + 1 < args.length &&
+        args[type + 1] == GridIssueTypes.mountAttempt.wire) {
+      writesStarted += 1;
+      if (!entered.isCompleted) entered.complete();
+      await release.future;
+    }
+    return super.run(args, timeout: timeout, stdin: stdin);
+  }
+}
+
+final class _UnusedTrust implements Trust {
+  @override
+  Future<TrustLevel> levelOf(ActorIdentity actor) =>
+      throw StateError('trust resolution must stay off the mount path');
 }
 
 final class _GatedCloseRunner extends RecordingBdRunner {
@@ -76,6 +114,26 @@ final class _FailingCloseRunner extends RecordingBdRunner {
   }
 }
 
+final class _GatedTerminalSettlementRunner extends RecordingBdRunner {
+  final updateEntered = Completer<void>();
+  final releaseUpdate = Completer<void>();
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    if (args.length > 1 &&
+        args.first == 'update' &&
+        args[1] == 'tg-terminal-session') {
+      if (!updateEntered.isCompleted) updateEntered.complete();
+      await releaseUpdate.future;
+    }
+    return super.run(args, timeout: timeout, stdin: stdin);
+  }
+}
+
 final class _GraphErrorRunner extends RecordingBdRunner {
   _GraphErrorRunner(this.error, {super.createdId});
 
@@ -122,6 +180,13 @@ final class _FailFirstVoidUpdateRunner extends RecordingBdRunner {
 final class _GatedStopProvider extends FakeRuntimeProvider {
   final stopEntered = Completer<void>();
   final releaseStop = Completer<void>();
+  var listRunningCalls = 0;
+
+  @override
+  List<String> listRunning(String prefix) {
+    listRunningCalls += 1;
+    return super.listRunning(prefix);
+  }
 
   @override
   Future<void> stop(String name) async {
@@ -353,6 +418,295 @@ void main() {
     expect(voided.retiredSessionId, 'tgdog-s1');
     expect(voided.cause, same(cause));
   });
+
+  test(
+    'snapshot-derived reports and obligations are level-triggered per pass',
+    () async {
+      final trustRunner = RecordingBdRunner();
+      final trustStation = _stationOver(trustRunner);
+      addTearDown(trustStation.dispose);
+      final trustTransport = _RecordingTransport();
+      final trustServices = ServiceBundle(
+        trust: _UnusedTrust(),
+        trustFloor: const TrustFloor(TrustLevel.trusted),
+        transport: trustTransport,
+      );
+      final untrusted = _bead('tg-trust').copyWith(
+        metadata: const {
+          OriginTrustKeys.scheme: 'github',
+          OriginTrustKeys.actor: 'octocat',
+          OriginTrustKeys.level: 'external',
+        },
+      );
+      final trustSnapshot = _snapshot([untrusted]);
+      final trustCandidate = StationAdmissionCandidate(
+        bead: untrusted,
+        session: null,
+      );
+      for (var pass = 0; pass < 2; pass += 1) {
+        expect(
+          trustStation.admission
+              .admitPending(trustSnapshot, _config, trustServices, [
+                trustCandidate,
+              ])
+              .refused
+              .single
+              .clause,
+          'trust',
+        );
+      }
+      expect(
+        trustTransport.flares.where(
+          (flare) => flare.name == 'work.trustRefused',
+        ),
+        hasLength(2),
+      );
+
+      final fenceRunner = RecordingBdRunner();
+      final fenceStation = _stationOver(fenceRunner, liveness: (_) => true);
+      addTearDown(fenceStation.dispose);
+      final fenceTransport = _RecordingTransport();
+      final fenceServices = ServiceBundle(transport: fenceTransport);
+      final duplicateWork = _bead('tg-duplicate');
+      const winner = SessionProjection(
+        workBeadId: 'tg-duplicate',
+        sessionId: 'tg-winner',
+      );
+      const rival = SessionProjection(
+        workBeadId: 'tg-duplicate',
+        sessionId: 'tg-rival',
+        pid: 42,
+        pgid: 41,
+      );
+      final duplicateSnapshot = _snapshot(
+        [duplicateWork],
+        sessions: const {'tg-duplicate': winner},
+        surplus: const {
+          'tg-duplicate': [rival],
+        },
+      );
+      final duplicateCandidate = StationAdmissionCandidate(
+        bead: duplicateWork,
+        session: winner,
+      );
+      for (var pass = 0; pass < 2; pass += 1) {
+        expect(
+          fenceStation.admission
+              .admitPending(duplicateSnapshot, _config, fenceServices, [
+                duplicateCandidate,
+              ])
+              .refused
+              .single
+              .clause,
+          'duplicate-live',
+        );
+      }
+      expect(
+        fenceTransport.flares.where(
+          (flare) => flare.name == 'work.duplicateLiveRefused',
+        ),
+        hasLength(2),
+      );
+
+      final voidedWork = _bead('tg-voided');
+      const voided = SessionProjection(
+        workBeadId: 'tg-voided',
+        sessionId: 'tg-voided-session',
+        isTerminal: true,
+        pid: 52,
+        pgid: 51,
+      );
+      final voidedSnapshot = _snapshot(
+        [voidedWork],
+        sessions: const {'tg-voided': voided},
+      );
+      final voidedCandidate = StationAdmissionCandidate(
+        bead: voidedWork,
+        session: voided,
+      );
+      for (var pass = 0; pass < 2; pass += 1) {
+        expect(
+          fenceStation.admission
+              .admitPending(voidedSnapshot, _config, fenceServices, [
+                voidedCandidate,
+              ])
+              .refused
+              .single
+              .clause,
+          'live-fence',
+        );
+      }
+      expect(
+        fenceTransport.flares.where(
+          (flare) => flare.name == 'session.voidRefused',
+        ),
+        hasLength(2),
+      );
+
+      final throttleRunner = RecordingBdRunner();
+      final throttleStation = _stationOver(
+        throttleRunner,
+        maxConcurrentWork: 1,
+      );
+      addTearDown(throttleStation.dispose);
+      final throttleTransport = _RecordingTransport();
+      final throttleServices = ServiceBundle(transport: throttleTransport);
+      final first = _bead('tg-first', priority: 0);
+      final waiting = _bead('tg-waiting', priority: 1);
+      final throttleSnapshot = _snapshot([first, waiting]);
+      final throttleCandidates = [
+        StationAdmissionCandidate(bead: first, session: null),
+        StationAdmissionCandidate(bead: waiting, session: null),
+      ];
+      for (var pass = 0; pass < 2; pass += 1) {
+        final batch = throttleStation.admission.admitPending(
+          throttleSnapshot,
+          _config.copyWith(maxConcurrentWork: 1),
+          throttleServices,
+          throttleCandidates,
+        );
+        expect(batch.waiting.single.bead.id, waiting.id);
+      }
+      final throttled = throttleTransport.flares.where(
+        (flare) => flare.name == 'work.throttled',
+      );
+      expect(throttled, hasLength(2));
+      expect(
+        throttled.every(
+          (flare) =>
+              flare.data['count'] == '1' &&
+              flare.data['beadIds'] == 'tg-waiting',
+        ),
+        isTrue,
+      );
+
+      final surplusRunner = RecordingBdRunner();
+      final surplusStation = _stationOver(surplusRunner);
+      addTearDown(surplusStation.dispose);
+      const terminalSurplus = SessionProjection(
+        workBeadId: 'tg-surplus',
+        sessionId: 'tg-surplus-session',
+        isTerminal: true,
+      );
+      for (var request = 0; request < 2; request += 1) {
+        await surplusStation.admission.retireSurplusSessions(
+          workBeadId: 'tg-surplus',
+          keptSessionId: 'tg-kept',
+          surplus: const [terminalSurplus],
+          services: const ServiceBundle(),
+        );
+      }
+      expect(
+        surplusRunner
+            .callsFor('update')
+            .where(
+              (call) => call.length > 1 && call[1] == 'tg-surplus-session',
+            ),
+        hasLength(2),
+      );
+
+      final gateRunner = RecordingBdRunner();
+      gateRunner.exportBeads = const [
+        Bead(
+          id: 'tg-terminal-session',
+          issueType: GridIssueTypes.session,
+          status: BeadStatus.closed,
+          metadata: {'rig': 'tg'},
+        ),
+      ];
+      final gateStation = _stationOver(gateRunner);
+      addTearDown(gateStation.dispose);
+      for (var request = 0; request < 2; request += 1) {
+        await gateStation.admission.closeTerminalGates(
+          sessionId: 'tg-terminal-session',
+          cause: GateCloseCause.sessionTerminal,
+          disposition: GateSweepSessionDisposition.done,
+          services: const ServiceBundle(),
+        );
+      }
+      expect(gateRunner.openBeadsCallCount, 2);
+    },
+  );
+
+  test(
+    'surplus retirement preserves the adopt verdict decision gate',
+    () async {
+      final runner = RecordingBdRunner();
+      final station = _stationOver(runner);
+      addTearDown(station.dispose);
+      const winner = SessionProjection(
+        workBeadId: 'tg-surplus',
+        sessionId: 'tg-winner',
+      );
+      const terminal = SessionProjection(
+        workBeadId: 'tg-surplus',
+        sessionId: 'tg-terminal',
+        isTerminal: true,
+      );
+
+      await station.admission.retireSurplusSessions(
+        workBeadId: 'tg-surplus',
+        keptSessionId: 'tg-winner',
+        surplus: const [winner, terminal],
+        services: const ServiceBundle(),
+      );
+
+      expect(
+        runner.callsFor('update'),
+        isEmpty,
+        reason: 'an adopt verdict leaves terminal-row retirement to its owner',
+      );
+    },
+  );
+
+  test(
+    'terminal settlement releases an unsessioned reservation after the writer succeeds',
+    () async {
+      final runner = _GatedTerminalSettlementRunner();
+      addTearDown(() {
+        if (!runner.releaseUpdate.isCompleted) runner.releaseUpdate.complete();
+      });
+      const sessionId = 'tg-terminal-session';
+      final work = _bead('tg-terminal-work');
+      runner.exportBeads = const [
+        Bead(
+          id: sessionId,
+          issueType: GridIssueTypes.session,
+          status: BeadStatus.open,
+          metadata: {'rig': 'tg', SessionBeadKeys.workBead: 'tg-terminal-work'},
+        ),
+      ];
+      final station = _stationOver(runner, maxConcurrentWork: 1);
+      addTearDown(station.dispose);
+      final snapshot = _snapshot([work]);
+      final reservation = station.admission
+          .admitPending(
+            snapshot,
+            _config.copyWith(maxConcurrentWork: 1),
+            const ServiceBundle(),
+            [StationAdmissionCandidate(bead: work, session: null)],
+          )
+          .admitted
+          .single;
+      expect(reservation.sessionId, isNull);
+
+      final settlement = station.admission.settleWorkTerminalSession(
+        terminalWorkBead: work.copyWith(status: BeadStatus.closed),
+        sessionId: sessionId,
+        services: const ServiceBundle(),
+      );
+      await runner.updateEntered.future;
+      expect(
+        station.admission.admissionStatus.reservations.single.bead,
+        work.id,
+      );
+
+      runner.releaseUpdate.complete();
+      await settlement;
+      expect(station.admission.admissionStatus.reservations, isEmpty);
+      expect(runner.callsFor('close'), hasLength(1));
+    },
+  );
 
   test(
     'admission status is ordered, sanitized, immutable, and retains since',
@@ -1000,8 +1354,57 @@ void main() {
   );
 
   test(
-    'a failed durable attempt invalidates immediately and after standard backoff',
+    'mount-attempt and retry registries remain the single asynchronous sources of truth',
     () async {
+      final gatedRunner = _GatedMountAttemptRunner();
+      addTearDown(() {
+        if (!gatedRunner.release.isCompleted) gatedRunner.release.complete();
+      });
+      final gatedStation = _stationOver(gatedRunner, maxConcurrentWork: 1);
+      addTearDown(gatedStation.dispose);
+      final gatedBead = _bead('tg-gated');
+      final gatedCandidate = StationAdmissionCandidate(
+        bead: gatedBead,
+        session: null,
+      );
+      final gatedSnapshot = _snapshot([gatedBead]);
+      final firstReservation = gatedStation.admission
+          .admitPending(gatedSnapshot, _config, const ServiceBundle(), [
+            gatedCandidate,
+          ])
+          .admitted
+          .single;
+      await gatedRunner.entered.future;
+      gatedStation.admission.admitPending(
+        gatedSnapshot,
+        _config,
+        const ServiceBundle(),
+        const [],
+      );
+      final repeatedReservation = gatedStation.admission
+          .admitPending(gatedSnapshot, _config, const ServiceBundle(), [
+            gatedCandidate,
+          ])
+          .admitted
+          .single;
+      expect(
+        repeatedReservation.reservationToken,
+        isNot(same(firstReservation.reservationToken)),
+      );
+      expect(gatedRunner.writesStarted, 1);
+      gatedRunner.release.complete();
+      await _pump();
+      expect(
+        gatedStation.admission
+            .admitPending(gatedSnapshot, _config, const ServiceBundle(), [
+              gatedCandidate,
+            ])
+            .admitted
+            .single
+            .mountAttempt,
+        1,
+      );
+
       final runner = _FailingMountAttemptRunner();
       final authority = StationAdmissionAuthority(
         writer: StationBeadWriter(
@@ -1036,6 +1439,7 @@ void main() {
       expect(transport.flares.single.name, 'work.mountAttemptRecordFailed');
       expect(transport.flares.single.data['beadId'], bead.id);
       expect(notifications, 1, reason: 'failure invalidates the mounted scope');
+      expect(runner.writesStarted, 1);
       expect(
         authority
             .admitPending(snapshot, _config, services, [candidate])
@@ -1044,6 +1448,12 @@ void main() {
             .bead
             .id,
         bead.id,
+      );
+      await _pump();
+      expect(
+        runner.writesStarted,
+        1,
+        reason: 'the live retry timer is the sole admission block',
       );
 
       await Future<void>.delayed(
@@ -1056,6 +1466,12 @@ void main() {
       ]);
       expect(admitted.admitted.single.candidate.bead.id, bead.id);
       expect(admitted.admitted.single.mountAttempt, isNull);
+      await _pump();
+      expect(
+        runner.writesStarted,
+        2,
+        reason: 'timer removal permits one retry',
+      );
     },
   );
 
@@ -1707,6 +2123,27 @@ void main() {
         isEmpty,
         reason: 'all stops precede durable cleanup',
       );
+      final overlapping = station.admission.admitPending(
+        duplicate,
+        _config,
+        services,
+        [candidate],
+      );
+      expect(overlapping.refused.single.clause, 'duplicate-live');
+      final overlappingFlares = transport.flares.where(
+        (flare) => flare.name == 'work.duplicateLiveRefused',
+      );
+      expect(overlappingFlares, hasLength(2));
+      expect(
+        overlappingFlares.every(
+          (flare) =>
+              flare.data['beadId'] == 'tg-1' &&
+              flare.data['sessionId'] == 'tg-winner' &&
+              flare.data['rivalSessionIds'] == 'tg-rival',
+        ),
+        isTrue,
+      );
+      expect(provider.listRunningCalls, 1);
       provider.releaseStop.complete();
       await _waitUntil(
         () => transport.flares.any(
@@ -1715,6 +2152,18 @@ void main() {
       );
 
       expect(provider.stopped, ['tg-rival/tg-1/agent', 'tg-rival/tg-1/verify']);
+      expect(provider.listRunningCalls, 1);
+      expect(runner.callsFor('close'), hasLength(1));
+      expect(
+        runner
+            .callsFor('update')
+            .where(
+              (call) => call.contains(
+                '${SessionBeadKeys.workBead}=tg-1#void-tg-rival',
+              ),
+            ),
+        hasLength(1),
+      );
       final closeIndex = runner.calls.indexWhere(
         (call) => call.isNotEmpty && call.first == 'close',
       );
@@ -1730,6 +2179,7 @@ void main() {
       );
       expect(retired.data['sessionId'], 'tg-rival');
 
+      await _pump();
       final stale = station.admission.admitPending(
         duplicate,
         _config,
@@ -1737,6 +2187,20 @@ void main() {
         [candidate],
       );
       expect(stale.refused.single.clause, 'duplicate-live');
+      await _waitUntil(
+        () =>
+            transport.flares
+                .where((flare) => flare.name == 'work.sessionSurplusRetired')
+                .length ==
+            2,
+      );
+      expect(provider.listRunningCalls, 2);
+      expect(
+        transport.flares.where(
+          (flare) => flare.name == 'work.sessionSurplusRetired',
+        ),
+        hasLength(2),
+      );
       final joined = _snapshot([work], sessions: const {'tg-1': winner});
       final adopted = station.admission.admitPending(
         joined,
@@ -1749,7 +2213,7 @@ void main() {
         transport.flares.where(
           (flare) => flare.name == 'work.duplicateLiveRefused',
         ),
-        hasLength(1),
+        hasLength(3),
       );
     },
   );
@@ -1812,17 +2276,30 @@ void main() {
       );
       await _pump();
       expect(runner.calls, isEmpty);
-      expect(
-        transport.flares.where(
-          (flare) => flare.name == 'work.duplicateLiveRefused',
-        ),
-        hasLength(1),
+      final duplicateFlares = transport.flares.where(
+        (flare) => flare.name == 'work.duplicateLiveRefused',
       );
+      expect(duplicateFlares, hasLength(2));
       expect(
-        transport.flares.where(
-          (flare) => flare.name == 'work.sessionSurplusAlive',
+        duplicateFlares.every(
+          (flare) =>
+              flare.data['beadId'] == 'tg-1' &&
+              flare.data['sessionId'] == 'tg-winner' &&
+              flare.data['rivalSessionIds'] == 'tg-rival',
         ),
-        hasLength(1),
+        isTrue,
+      );
+      final aliveFlares = transport.flares.where(
+        (flare) => flare.name == 'work.sessionSurplusAlive',
+      );
+      expect(aliveFlares, hasLength(2));
+      expect(
+        aliveFlares.every(
+          (flare) =>
+              flare.data['beadId'] == 'tg-1' &&
+              flare.data['sessionIds'] == 'tg-rival',
+        ),
+        isTrue,
       );
     },
   );
@@ -1888,7 +2365,7 @@ void main() {
         transport.flares.where(
           (flare) => flare.name == 'work.duplicateLiveRefused',
         ),
-        hasLength(1),
+        hasLength(2),
       );
       expect(
         transport.flares

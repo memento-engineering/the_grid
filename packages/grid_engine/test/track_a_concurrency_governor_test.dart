@@ -63,6 +63,24 @@ class _RecordingTransport implements ExplorationTransport {
       flares.add((name: name, data: data));
 }
 
+void _expectThrottleFlares(
+  _RecordingTransport transport, {
+  required String count,
+  required String beadIds,
+}) {
+  final throttled = transport.flares
+      .where((flare) => flare.name == 'work.throttled')
+      .toList();
+  expect(throttled, isNotEmpty);
+  expect(
+    throttled.every(
+      (flare) =>
+          flare.data['count'] == count && flare.data['beadIds'] == beadIds,
+    ),
+    isTrue,
+  );
+}
+
 Bead _bead(String id, {int priority = 0}) => Bead(
   id: id,
   issueType: IssueType.task,
@@ -397,12 +415,7 @@ void main() {
       // Only the two LOWEST-id beads mount: all four are the same priority, so
       // the lowest-id tie-break decides admission (tg-lohr).
       expect(recorder.events, ['START work(tg-1)', 'START work(tg-2)']);
-      expect(transport.flares, hasLength(1));
-      expect(transport.flares.single.name, 'work.throttled');
-      expect(transport.flares.single.data, {
-        'count': '2',
-        'beadIds': 'tg-3,tg-4',
-      });
+      _expectThrottleFlares(transport, count: '2', beadIds: 'tg-3,tg-4');
     });
 
     test('mount-attempt records do not consume capacity or narrow the ready '
@@ -445,10 +458,7 @@ void main() {
 
       expect(snapshot.graph.readyIds, {'tg-1', 'tg-2', 'tg-3', 'tg-4'});
       expect(recorder.events, ['START work(tg-1)', 'START work(tg-2)']);
-      expect(transport.flares.single.data, {
-        'count': '2',
-        'beadIds': 'tg-3,tg-4',
-      });
+      _expectThrottleFlares(transport, count: '2', beadIds: 'tg-3,tg-4');
     });
 
     test('a mounted session closing frees a slot — the next waiting bead mounts '
@@ -524,10 +534,7 @@ void main() {
       // the governor's contract — assert the SET of events, not the order.
       expect(recorder.events.toSet(), {'STOP work(tg-1)', 'START work(tg-3)'});
       expect(recorder.events, hasLength(2));
-      final throttled = transport.flares.singleWhere(
-        (flare) => flare.name == 'work.throttled',
-      );
-      expect(throttled.data, {'count': '1', 'beadIds': 'tg-4'});
+      _expectThrottleFlares(transport, count: '1', beadIds: 'tg-4');
       final skipped = transport.flares.singleWhere(
         (flare) => flare.name == 'work.terminalSkip',
       );
@@ -577,7 +584,7 @@ void main() {
       await _settleAdmissions(owner);
 
       expect(recorder.events, ['START work(tg-1)', 'START work(tg-2)']);
-      expect(transport.flares.single.data, {'count': '1', 'beadIds': 'tg-3'});
+      _expectThrottleFlares(transport, count: '1', beadIds: 'tg-3');
     });
 
     test('no throttling ⇒ no flare at all (the quiet path)', () async {
@@ -652,13 +659,12 @@ void main() {
             (i) => 'START work(tg-${i + 1})',
           ),
         );
-        expect(transport.flares, hasLength(1));
-        expect(transport.flares.single.name, 'work.throttled');
-        expect(transport.flares.single.data, {
-          'count': '2',
-          'beadIds':
+        _expectThrottleFlares(
+          transport,
+          count: '2',
+          beadIds:
               'tg-${kDefaultMaxConcurrentWork + 1},tg-${kDefaultMaxConcurrentWork + 2}',
-        });
+        );
       },
     );
 
@@ -1027,12 +1033,7 @@ void main() {
       // `b`'s two ready beads both wait: the station-wide total is already
       // exhausted by `a`, even though `b`'s OWN substation cap (3, the
       // station default) was never touched.
-      expect(transportB.flares, hasLength(1));
-      expect(transportB.flares.single.name, 'work.throttled');
-      expect(transportB.flares.single.data, {
-        'count': '2',
-        'beadIds': 'b-1,b-2',
-      });
+      _expectThrottleFlares(transportB, count: '2', beadIds: 'b-1,b-2');
     });
 
     test('the cap binds: the HIGHEST-priority pending beads are admitted — a '
@@ -1076,12 +1077,7 @@ void main() {
       expect(recorder.events, ['START work(tg-mmm)', 'START work(tg-zzz)']);
       // The LOUD line keeps its shape and membership; the held beads are now
       // listed in the same admission order, next-up (P1) first.
-      expect(transport.flares, hasLength(1));
-      expect(transport.flares.single.name, 'work.throttled');
-      expect(transport.flares.single.data, {
-        'count': '2',
-        'beadIds': 'tg-bbb,tg-aaa',
-      });
+      _expectThrottleFlares(transport, count: '2', beadIds: 'tg-bbb,tg-aaa');
     });
 
     test('the mixed case — two substations x two priorities, one slot each: '
@@ -1151,12 +1147,8 @@ void main() {
         'START work(b-yak)',
       });
       expect(recorder.events, hasLength(2));
-      expect(transportA.flares, hasLength(1));
-      expect(transportA.flares.single.name, 'work.throttled');
-      expect(transportA.flares.single.data, {'count': '1', 'beadIds': 'a-ace'});
-      expect(transportB.flares, hasLength(1));
-      expect(transportB.flares.single.name, 'work.throttled');
-      expect(transportB.flares.single.data, {'count': '1', 'beadIds': 'b-cat'});
+      _expectThrottleFlares(transportA, count: '1', beadIds: 'a-ace');
+      _expectThrottleFlares(transportB, count: '1', beadIds: 'b-cat');
     });
 
     test('a MOUNTED P4 is never evicted for a pending P0 — the P0 waits and '
@@ -1202,8 +1194,7 @@ void main() {
 
       // The live P4 keeps the only slot; the P0 is HELD, never swapped in.
       expect(recorder.events, ['START work(tg-aaa)']);
-      expect(transport.flares, hasLength(1));
-      expect(transport.flares.single.data, {'count': '1', 'beadIds': 'tg-zzz'});
+      _expectThrottleFlares(transport, count: '1', beadIds: 'tg-zzz');
       recorder.events.clear();
       transport.flares.clear();
 
@@ -1291,12 +1282,7 @@ void main() {
             .data['beadId'],
         'tg-z',
       );
-      expect(
-        transport.flares
-            .singleWhere((flare) => flare.name == 'work.throttled')
-            .data,
-        {'count': '1', 'beadIds': 'tg-c'},
-      );
+      _expectThrottleFlares(transport, count: '1', beadIds: 'tg-c');
     });
 
     test('epoch 27/28 silent pair reaches the mint path or a named eligibility '

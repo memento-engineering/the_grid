@@ -46,7 +46,7 @@ List<Directory> _libRoots() {
 
 void main() {
   test(
-    'the in-process admission cut preserves bead state and appends no admission records',
+    'admission authority retains only documented non-snapshot collections',
     () {
       final workspace = _workspaceRoot();
       expect(workspace, isNotNull);
@@ -63,25 +63,89 @@ void main() {
       final amendment = File(
         '$root/docs/decisions/2026-09-04-admission-authority-in-process-cut.md',
       ).readAsStringSync();
+      String authoritySection(String start, String end) {
+        final startIndex = authority.indexOf(start);
+        final endIndex = authority.indexOf(end, startIndex);
+        expect(startIndex, greaterThanOrEqualTo(0), reason: start);
+        expect(endIndex, greaterThan(startIndex), reason: end);
+        return authority.substring(startIndex, endIndex);
+      }
 
-      const moved = [
-        '_mountedIds',
+      const removed = [
         '_mountAttemptsScheduled',
-        '_mountEligibilityRefusals',
         '_mountEligibilityRechecks',
-        '_mountEligibilityRecheckTimer',
         '_trustRefusedReported',
         '_surplusRetiresScheduled',
         '_surplusAliveReported',
         '_sessionAmbiguityReported',
+        '_rivalRetiresRequired',
         '_gateSweepsScheduled',
+        '_capacityWaitingSignature',
+        '_scopeBySessionId',
+        '_retryBlocked',
+        '_scopeForSession',
       ];
-      for (final name in moved) {
-        expect(authority, contains(name), reason: '$name stays behind owner');
-        expect(workList, isNot(contains(name)), reason: '$name moved out');
+      for (final name in removed) {
+        expect(
+          authority,
+          isNot(contains(name)),
+          reason: '$name must not suppress a current snapshot fact',
+        );
       }
-      expect(authority, contains('_reservations'));
-      expect(authority, contains('_mountEligibilityRefusals'));
+
+      const retained = {
+        '_mountedIds',
+        '_mountEligibilityRefusals',
+        '_zeroAdmissionSinceByBead',
+        '_scopes',
+        '_reservations',
+        '_lastScopeByBead',
+        '_listeners',
+        '_retryTimers',
+        '_mountAttemptWrites',
+        '_blockedUntilFreshReady',
+        '_rivalCleanupsInFlight',
+      };
+      final declaredCollections = RegExp(
+        r'final\s+(?:Set|Map|List)<[^;]+?>\s+(_[A-Za-z0-9]+)\s*=',
+      ).allMatches(authority).map((match) => match.group(1)!).toSet();
+      expect(declaredCollections, retained);
+
+      const rationaleByCollection = {
+        '_mountedIds': 'Structural branch membership',
+        '_mountEligibilityRefusals': 'Refusal timing and restoration history',
+        '_zeroAdmissionSinceByBead': 'First-observed zero-admission timing',
+        '_scopes': 'Per-substation branch and status state',
+        '_reservations': 'durable session rows appear',
+        '_lastScopeByBead': 'Bare bead ids on async entry points',
+        '_listeners': 'Registered station consumers',
+        '_retryTimers': 'Live backoff operations',
+        '_mountAttemptWrites': 'Writes not yet represented by JoinedSnapshot',
+        '_blockedUntilFreshReady': 'Cancellation quarantine persists',
+        '_rivalCleanupsInFlight': 'rival-cleanup microtasks are unavailable',
+      };
+      for (final entry in rationaleByCollection.entries) {
+        expect(
+          authority,
+          matches(
+            RegExp(
+              '//[^\n]*${RegExp.escape(entry.value)}[^\n]*\n'
+              '\\s*final[^;]+${RegExp.escape(entry.key)}\\s*=',
+            ),
+          ),
+          reason: '${entry.key} needs an adjacent non-snapshot rationale',
+        );
+      }
+      expect(authority, contains('Stage 3 exclusively owns retirement'));
+      expect(
+        authority,
+        contains(
+          'This is not that switch; every bead write and flare remains.',
+        ),
+      );
+      expect(authority, contains('run level-triggered on each pass'));
+      expect(authority, contains('_scopeForBead'));
+      expect(workList, isNot(contains('_scopeForBead')));
       final statusStart = authority.indexOf(
         'final class StationAdmissionStatus',
       );
@@ -96,13 +160,7 @@ void main() {
         isNot(contains('set ')),
         reason: 'the public admission snapshot has no mutable setter surface',
       );
-      for (final authorityOnly in [
-        '_surplusRetiresScheduled',
-        '_surplusAliveReported',
-        '_rivalRetiresRequired',
-        '_rivalCleanupsInFlight',
-        '_scheduleRivalCleanup',
-      ]) {
+      for (final authorityOnly in ['_scheduleRivalCleanup']) {
         expect(
           authority,
           contains(authorityOnly),
@@ -171,13 +229,85 @@ void main() {
         'AdmissionRefused',
         'AdmissionRestored',
         'grantId',
+        'authorityId',
+        'reservationId',
         'fencingToken',
         'leaseId',
+        'expiry',
         'expiresAt',
+        'decisionBasis',
         '.append(',
       ]) {
         expect(authority, isNot(contains(stage3Only)));
       }
+      for (final treePrimitive in [
+        'TreeContext',
+        'InheritedModelSeed',
+        'package:genesis_tree/',
+        'package:tree/',
+      ]) {
+        expect(
+          authority,
+          isNot(contains(treePrimitive)),
+          reason: '$treePrimitive must not enter the station-lifetime owner',
+        );
+      }
+      expect(
+        authority,
+        isNot(matches(RegExp(r'dependOn[A-Za-z]*\s*\('))),
+        reason: 'tree dependency verbs must not enter the authority',
+      );
+
+      final surplusRetirement = authoritySection(
+        'Future<void> retireSurplusSessions({',
+        'void _scheduleRivalCleanup(',
+      );
+      expect(
+        surplusRetirement,
+        matches(
+          RegExp(
+            r'final verdict = linkedSessionVerdictOf\(ordered\);\s*'
+            r'if \(verdict is AdoptLinkedSession\) return;\s*'
+            r'for \(final row in ordered\)',
+          ),
+        ),
+        reason: 'the adopt verdict must return before terminal row writes',
+      );
+
+      final voidRetirement = authoritySection(
+        'Future<StationAdmissionRefusal?> retireVoidedSession({',
+        '/// Creates and binds the session for a reservation',
+      );
+      expect(voidRetirement, contains('_scopeForBead(workBead.id)'));
+      expect(
+        voidRetirement.split('\n').where((line) => line.contains('_release(')),
+        contains('      _release(workBead.id);'),
+      );
+      expect(
+        voidRetirement.indexOf('_reportVoidRefused('),
+        lessThan(voidRetirement.indexOf('_release(workBead.id);')),
+      );
+
+      final terminalSettlement = authoritySection(
+        'Future<void> settleWorkTerminalSession({',
+        '/// Marks a suspicious rework decline',
+      );
+      expect(
+        terminalSettlement
+            .split('\n')
+            .where((line) => line.contains('_release(')),
+        contains('    _release(terminalWorkBead.id);'),
+      );
+      expect(terminalSettlement, isNot(contains('_releaseSession(')));
+      expect(terminalSettlement, isNot(contains('onlyScope')));
+      expect(
+        authority,
+        contains(
+          'void _scheduleRivalCleanup(\n'
+          '    _AdmissionScopeState scope,\n'
+          '    ServiceBundle services, {',
+        ),
+      );
       expect(
         amendment,
         contains('updates: ["the_grid#admission-authority-boundary"]'),

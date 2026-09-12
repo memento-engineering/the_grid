@@ -143,20 +143,25 @@ void main() {
       expect(resolver.mounted, ['tg-1']);
       expect(strictTrust.calls, 0);
       expect(legacyTransport.flares, isEmpty);
-      expect(strictTransport.flares, hasLength(1));
-      expect(strictTransport.flares.single.name, 'work.trustRefused');
-      expect(strictTransport.flares.single.data, {
-        'beadId': 'tg-1',
-        'origin': 'github:octocat',
-        'floor': 'trusted',
-        'reason':
-            'grid: tg-1 origin trust external is below floor trusted — '
-            'excluding tg-1 from ready.',
-      });
+      expect(strictTransport.flares, isNotEmpty);
+      final firstPassCount = strictTransport.flares.length;
 
       joined.push(_snapshot(bead, 1));
       owner.flush();
-      expect(strictTransport.flares, hasLength(1));
+      expect(strictTransport.flares.length, greaterThan(firstPassCount));
+      expect(
+        strictTransport.flares.every(
+          (flare) =>
+              flare.name == 'work.trustRefused' &&
+              flare.data['beadId'] == 'tg-1' &&
+              flare.data['origin'] == 'github:octocat' &&
+              flare.data['floor'] == 'trusted' &&
+              flare.data['reason'] ==
+                  'grid: tg-1 origin trust external is below floor trusted — '
+                      'excluding tg-1 from ready.',
+        ),
+        isTrue,
+      );
       expect(strictTrust.calls, 0);
     },
   );
