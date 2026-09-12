@@ -59,9 +59,8 @@ class _NamingCap extends ProcessCapability {
   }
 }
 
-AllocationContext _ctx(FakeRuntimeProvider transport, AllocationSink sink) =>
-    AllocationContext(
-      treeContext: FakeTreeContext(),
+AllocationInputs _inputs(FakeRuntimeProvider transport, AllocationSink sink) =>
+    AllocationInputs(
       args: stepArgs('tg-1/critic'),
       transport: transport,
       address: const AllocationAddress('tgdog-s', 'tg-1/critic'),
@@ -69,14 +68,31 @@ AllocationContext _ctx(FakeRuntimeProvider transport, AllocationSink sink) =>
       sink: sink,
     );
 
+FakeTreeContext _treeContext() => FakeTreeContext();
+
+void _mountAllocation(Allocation allocation, TreeContext treeContext) {
+  final owner = TreeOwner()
+    ..mountRoot(
+      ProviderScope(
+        child: LifecycleProvider<Allocation>.value(
+          allocation,
+          child: const Idle(),
+        ),
+      ),
+    );
+  addTearDown(owner.dispose);
+}
+
 Future<List<AllocationReport>> _direct(_NamingCap capability) async {
   final reports = <AllocationReport>[];
   final transport = FakeRuntimeProvider();
   addTearDown(transport.close);
   final alloc =
-      capability.createAllocation(_ctx(transport, reports.add))
+      capability.createAllocation(_inputs(transport, reports.add))
           as ProcessAllocation;
-  alloc.deliverEventForTest(_exit);
+  final treeContext = _treeContext();
+  _mountAllocation(alloc, treeContext);
+  alloc.deliverEventForTest(_exit, treeContext);
   for (var i = 0; i < 8; i++) {
     await Future<void>.delayed(Duration.zero);
   }
@@ -89,17 +105,18 @@ Future<StepOutcome> _leased(
 }) async {
   final transport = FakeRuntimeProvider();
   addTearDown(transport.close);
-  final context = _ctx(transport, (_) {});
+  final inputs = _inputs(transport, (_) {});
+  final treeContext = _treeContext();
   transport.emit(terminal);
   return stationProcessDispatcher(
     const ProcessHandle(pgid: 1, pid: 1, token: 'token'),
     ProcessLeaseRequest(
       stepBeadId: 'step-critic',
       capability: capability,
-      allocation: context,
+      inputs: inputs,
     ),
-    context.treeContext,
-    context.args,
+    treeContext,
+    inputs.args,
   );
 }
 

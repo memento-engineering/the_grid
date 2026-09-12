@@ -149,15 +149,14 @@ FakeTreeContext _treeCtx() => FakeTreeContext(
   },
 );
 
-AllocationContext _ctx({
+AllocationInputs _inputs({
   required RuntimeProvider transport,
   required AllocationSink sink,
   required CancelToken cancel,
   StepKind kind = StepKind.daemon,
   bool live = true,
   AdoptFence fence = const AdoptFence(pgid: 200, pid: 201, token: 't'),
-}) => AllocationContext(
-  treeContext: _treeCtx(),
+}) => AllocationInputs(
   args: stepArgs('tg-1/harness', cancel: cancel),
   transport: transport,
   address: const AllocationAddress('tgdog-s', 'tg-1/harness'),
@@ -174,6 +173,29 @@ Future<void> _pump() async {
   }
 }
 
+Future<void> _mountAndStart(Allocation allocation, TreeContext treeContext) {
+  final owner = TreeOwner();
+  Seed child = LifecycleProvider<Allocation>.value(
+    allocation,
+    child: const Idle(),
+  );
+  if (treeContext.getInheritedSeedOfExactType<Workspace>() case final value?) {
+    child = InheritedSeed<Workspace>(value: value, child: child);
+  }
+  if (treeContext.getInheritedSeedOfExactType<ServiceBundle>()
+      case final value?) {
+    child = InheritedSeed<ServiceBundle>(value: value, child: child);
+  }
+  owner.mountRoot(ProviderScope(child: child));
+  addTearDown(owner.dispose);
+  return allocation.startOrAdopt(treeContext);
+}
+
+extension on Allocation {
+  Future<void> startMounted(TreeContext treeContext) =>
+      _mountAndStart(this, treeContext);
+}
+
 void main() {
   test(
     'flat process allocation consumes the shared channel contract',
@@ -188,7 +210,7 @@ void main() {
               ),
             ),
           ).createAllocation(
-            _ctx(
+            _inputs(
               transport: provider,
               sink: reports.add,
               cancel: CancelToken(),
@@ -197,7 +219,7 @@ void main() {
             ),
           );
 
-      await allocation.startOrAdopt();
+      await allocation.startMounted(_treeCtx());
       await _pump();
 
       expect(provider.started, hasLength(1));
@@ -220,7 +242,7 @@ void main() {
               ProcessSessionUpdate.failed(reason: 'declared $kind', kind: kind),
             ),
           ).createAllocation(
-            _ctx(
+            _inputs(
               transport: FakeRuntimeProvider(),
               sink: reports.add,
               cancel: CancelToken(),
@@ -229,7 +251,7 @@ void main() {
             ),
           );
 
-      await allocation.startOrAdopt();
+      await allocation.startMounted(_treeCtx());
       await _pump();
 
       final failed = reports.whereType<AllocationFailed>().single;
@@ -252,7 +274,7 @@ void main() {
                 ProcessSessionUpdate.failed(reason: 'default work', kind: kind),
               ),
             ).createAllocation(
-              _ctx(
+              _inputs(
                 transport: FakeRuntimeProvider(),
                 sink: reports.add,
                 cancel: CancelToken(),
@@ -261,7 +283,7 @@ void main() {
               ),
             );
 
-        await allocation.startOrAdopt();
+        await allocation.startMounted(_treeCtx());
         await _pump();
 
         final failed = reports.whereType<AllocationFailed>().single;
@@ -275,10 +297,10 @@ void main() {
     test('a daemon is adoptable + detachable; a job is neither', () {
       final provider = FakeRuntimeProvider();
       final daemon = _DaemonCap().createAllocation(
-        _ctx(transport: provider, sink: (_) {}, cancel: CancelToken()),
+        _inputs(transport: provider, sink: (_) {}, cancel: CancelToken()),
       );
       final job = _JobCap().createAllocation(
-        _ctx(
+        _inputs(
           transport: provider,
           sink: (_) {},
           cancel: CancelToken(),
@@ -300,14 +322,14 @@ void main() {
       final cap = _DaemonCap(fresh: true);
       final alloc =
           cap.createAllocation(
-                _ctx(
+                _inputs(
                   transport: provider,
                   sink: reports.add,
                   cancel: CancelToken(),
                 ),
               )
               as ProcessAllocation;
-      await alloc.startOrAdopt();
+      await alloc.startMounted(_treeCtx());
       await _pump();
 
       expect(alloc.adopted, isTrue);
@@ -324,7 +346,7 @@ void main() {
         final cap = _DaemonCap(fresh: true); // endpoint proof would pass...
         final alloc =
             cap.createAllocation(
-                  _ctx(
+                  _inputs(
                     transport: provider,
                     sink: (_) {},
                     cancel: CancelToken(),
@@ -332,7 +354,7 @@ void main() {
                   ),
                 )
                 as ProcessAllocation;
-        await alloc.startOrAdopt();
+        await alloc.startMounted(_treeCtx());
         await _pump();
         expect(alloc.adopted, isFalse);
         expect(provider.started, hasLength(1), reason: 'respawned fresh');
@@ -344,7 +366,7 @@ void main() {
       final cap = _DaemonCap(fresh: false); // endpoint proof fails
       final alloc =
           cap.createAllocation(
-                _ctx(
+                _inputs(
                   transport: provider,
                   sink: (_) {},
                   cancel: CancelToken(),
@@ -352,7 +374,7 @@ void main() {
                 ),
               )
               as ProcessAllocation;
-      await alloc.startOrAdopt();
+      await alloc.startMounted(_treeCtx());
       await _pump();
       expect(alloc.adopted, isFalse);
       expect(provider.started, hasLength(1), reason: 'respawned fresh');
@@ -365,7 +387,7 @@ void main() {
         final cap = _DaemonCap(fresh: true);
         final alloc =
             cap.createAllocation(
-                  _ctx(
+                  _inputs(
                     transport: provider,
                     sink: (_) {},
                     cancel: CancelToken(),
@@ -373,7 +395,7 @@ void main() {
                   ),
                 )
                 as ProcessAllocation;
-        await alloc.startOrAdopt();
+        await alloc.startMounted(_treeCtx());
         await _pump();
         expect(alloc.adopted, isFalse);
         expect(provider.started, hasLength(1));
@@ -389,7 +411,7 @@ void main() {
         final cap = _JobCap();
         final alloc =
             cap.createAllocation(
-                  _ctx(
+                  _inputs(
                     transport: provider,
                     sink: (_) {},
                     cancel: CancelToken(),
@@ -398,7 +420,7 @@ void main() {
                   ),
                 )
                 as ProcessAllocation;
-        await alloc.startOrAdopt();
+        await alloc.startMounted(_treeCtx());
         await _pump();
         expect(alloc.adopted, isFalse);
         expect(provider.started, hasLength(1));
@@ -419,7 +441,7 @@ void main() {
         final cap = _DaemonCap();
         final alloc =
             cap.createAllocation(
-                  _ctx(
+                  _inputs(
                     transport: provider,
                     sink: (_) {},
                     cancel: CancelToken(),
@@ -427,7 +449,7 @@ void main() {
                   ),
                 )
                 as ProcessAllocation;
-        await alloc.startOrAdopt(); // spawns (not fresh)
+        await alloc.startMounted(_treeCtx()); // spawns (not fresh)
         await _pump();
         expect(provider.started, hasLength(1));
         expect(provider.eventListenerCount, 1);
@@ -457,7 +479,7 @@ void main() {
       final cap = _DaemonCap();
       final alloc =
           cap.createAllocation(
-                _ctx(
+                _inputs(
                   transport: provider,
                   sink: (_) {},
                   cancel: CancelToken(),
@@ -465,7 +487,7 @@ void main() {
                 ),
               )
               as ProcessAllocation;
-      await alloc.startOrAdopt();
+      await alloc.startMounted(_treeCtx());
       await _pump();
       await alloc.dispose();
       expect(provider.stopped, ['tgdog-s/tg-1/harness']);
@@ -477,7 +499,7 @@ void main() {
       final cap = _DaemonCap(fresh: true);
       final alloc =
           cap.createAllocation(
-                _ctx(
+                _inputs(
                   transport: provider,
                   sink: (_) {},
                   cancel: CancelToken(),
@@ -485,7 +507,7 @@ void main() {
                 ),
               )
               as ProcessAllocation;
-      await alloc.startOrAdopt(); // adopts
+      await alloc.startMounted(_treeCtx()); // adopts
       await _pump();
       expect(alloc.adopted, isTrue);
       await alloc.dispose();

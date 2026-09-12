@@ -188,8 +188,7 @@ void _ignoreAllocationReport(AllocationReport report) {}
 ProcessLeaseRequest _request(String stepBeadId) => ProcessLeaseRequest(
   stepBeadId: stepBeadId,
   capability: const _FakeProcessCap(),
-  allocation: AllocationContext(
-    treeContext: FakeTreeContext(),
+  inputs: AllocationInputs(
     args: stepArgs('tg-w1/daemon'),
     transport: FakeRuntimeProvider(),
     address: const AllocationAddress('tgdog-s', 'tg-w1/daemon'),

@@ -59,7 +59,7 @@ abstract class Capability {
   /// [ProcessCapability]/[ServiceCapability] supply defaults, so an existing
   /// capability needs no change; an asset overrides only to customize adopt/
   /// detach/update for a bespoke effect.
-  Allocation createAllocation(AllocationContext ctx);
+  Allocation createAllocation(AllocationInputs inputs);
 
   /// This capability's per-kind supervision declaration.
   ///
@@ -274,8 +274,8 @@ abstract class ProcessCapability extends Capability {
   /// adopt-or-respawn + detach-capable. Override only for a bespoke process
   /// effect.
   @override
-  Allocation createAllocation(AllocationContext ctx) =>
-      ProcessAllocation(this, ctx);
+  Allocation createAllocation(AllocationInputs inputs) =>
+      ProcessAllocation(this, inputs);
 }
 
 /// A capability backed by an async body driving [ServiceBundle] collaborators
@@ -299,8 +299,8 @@ abstract class ServiceCapability extends Capability {
   /// [ServiceAllocation]/`JobAllocation` convenience: start-runs, no adopt/
   /// detach/update, respawn-or-skip.
   @override
-  Allocation createAllocation(AllocationContext ctx) =>
-      ServiceAllocation(this, ctx);
+  Allocation createAllocation(AllocationInputs inputs) =>
+      ServiceAllocation(this, inputs);
 }
 
 /// The outcome of an ordinary capability body — `{Ok, Failed}` and nothing else.

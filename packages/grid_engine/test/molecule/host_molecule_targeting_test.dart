@@ -139,7 +139,7 @@ Future<StepOutcome> _neverDispatch(
 SelfManagedProcessVendor _sinkingVendor(Completer<StepOutcome> gate) =>
     SelfManagedProcessVendor(
       spawn: (request, context, args) async {
-        request.allocation.sink(const AllocationStarted(pid: 100, pgid: 200));
+        request.inputs.sink(const AllocationStarted(pid: 100, pgid: 200));
         return const ProcessHandle(pgid: 200, pid: 100, token: 'tok-h4u');
       },
       dispatch: (handle, request, context, args) => gate.future,

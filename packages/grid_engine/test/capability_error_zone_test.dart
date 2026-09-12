@@ -26,14 +26,13 @@ Future<List<Object>> parentErrorsFor(Future<void> Function() body) async {
   return parentErrors;
 }
 
-AllocationContext contextFor(
+AllocationInputs inputsFor(
   FakeRuntimeProvider provider,
   List<AllocationReport> reports, {
   StepKind kind = StepKind.job,
   AdoptFence fence = const AdoptFence(),
   bool Function(AdoptFence) liveness = neverLive,
-}) => AllocationContext(
-  treeContext: FakeTreeContext(),
+}) => AllocationInputs(
   args: stepArgs('tg-1/work'),
   transport: provider,
   address: const AllocationAddress('sess-1', 'tg-1/work'),
@@ -43,6 +42,25 @@ AllocationContext contextFor(
   fence: fence,
   liveness: liveness,
 );
+
+Future<void> mountAndStart(Allocation allocation, TreeContext treeContext) {
+  final owner = TreeOwner()
+    ..mountRoot(
+      ProviderScope(
+        child: LifecycleProvider<Allocation>.value(
+          allocation,
+          child: const Idle(),
+        ),
+      ),
+    );
+  addTearDown(owner.dispose);
+  return allocation.startOrAdopt(treeContext);
+}
+
+extension on Allocation {
+  Future<void> startMounted(TreeContext treeContext) =>
+      mountAndStart(this, treeContext);
+}
 
 void expectFailure(
   List<AllocationReport> reports,
@@ -196,8 +214,8 @@ void main() {
       final errors = await parentErrorsFor(
         () => ServiceAllocation(
           const _ServiceCap(runError: 'detached run failed'),
-          contextFor(provider, reports),
-        ).startOrAdopt(),
+          inputsFor(provider, reports),
+        ).startMounted(FakeTreeContext()),
       );
 
       expect(errors, isEmpty);
@@ -230,7 +248,7 @@ void main() {
         final reports = <AllocationReport>[];
         final allocation = ProcessAllocation(
           _ProcessCap(failingHook: testCase.hook, message: testCase.message),
-          contextFor(
+          inputsFor(
             provider,
             reports,
             kind: testCase.hook == _ProcessHook.freshness
@@ -243,10 +261,11 @@ void main() {
           ),
         );
         final errors = await parentErrorsFor(() async {
-          await allocation.startOrAdopt();
+          await allocation.startMounted(FakeTreeContext());
           if (testCase.hook == _ProcessHook.result) {
             allocation.deliverEventForTest(
               const Exited(name: 'sess-1/tg-1/work', exitCode: 0),
+              FakeTreeContext(),
             );
             await drainTurns();
           }
@@ -301,9 +320,11 @@ void main() {
             message: testCase.message,
             prior: testCase.prior,
           ),
-          contextFor(provider, reports, kind: testCase.kind),
+          inputsFor(provider, reports, kind: testCase.kind),
         );
-        final errors = await parentErrorsFor(allocation.startOrAdopt);
+        final errors = await parentErrorsFor(
+          () => allocation.startMounted(FakeTreeContext()),
+        );
 
         expect(errors, isEmpty, reason: testCase.message);
         expectFailure(reports, testCase.prefix, testCase.message);
@@ -324,25 +345,25 @@ void main() {
       final reports = <AllocationReport>[];
       final service = ServiceAllocation(
         const _ServiceCap(teardownError: 'service teardown failed'),
-        contextFor(serviceProvider, reports),
+        inputsFor(serviceProvider, reports),
       );
       final process = ProcessAllocation(
         const _ProcessCap(
           failingHook: _ProcessHook.teardown,
           message: 'process teardown failed',
         ),
-        contextFor(processProvider, reports),
+        inputsFor(processProvider, reports),
       );
       final lease = LeaseAllocation<String>(
         const _LeaseCap(
           failingHook: _LeaseHook.release,
           message: 'lease release failed',
         ),
-        contextFor(leaseProvider, reports, kind: StepKind.job),
+        inputsFor(leaseProvider, reports, kind: StepKind.job),
       );
-      await service.startOrAdopt();
-      await process.startOrAdopt();
-      await lease.startOrAdopt();
+      await service.startMounted(FakeTreeContext());
+      await process.startMounted(FakeTreeContext());
+      await lease.startMounted(FakeTreeContext());
       final reportCount = reports.length;
 
       final errors = await parentErrorsFor(() async {
@@ -368,8 +389,8 @@ void main() {
           failures.add(reports);
           await ServiceAllocation(
             const _ServiceCap(runError: 'replayed detached failure'),
-            contextFor(provider, reports),
-          ).startOrAdopt();
+            inputsFor(provider, reports),
+          ).startMounted(FakeTreeContext());
         }
       });
 
@@ -394,23 +415,24 @@ void main() {
       final leaseReports = <AllocationReport>[];
       final service = ServiceAllocation(
         const _ServiceCap(),
-        contextFor(serviceProvider, serviceReports),
+        inputsFor(serviceProvider, serviceReports),
       );
       final process = ProcessAllocation(
         const _ProcessCap(),
-        contextFor(processProvider, processReports),
+        inputsFor(processProvider, processReports),
       );
       final lease = LeaseAllocation<String>(
         const _LeaseCap(),
-        contextFor(leaseProvider, leaseReports, kind: StepKind.job),
+        inputsFor(leaseProvider, leaseReports, kind: StepKind.job),
       );
 
-      await service.startOrAdopt();
-      await process.startOrAdopt();
+      await service.startMounted(FakeTreeContext());
+      await process.startMounted(FakeTreeContext());
       process.deliverEventForTest(
         const Exited(name: 'sess-1/tg-1/work', exitCode: 0),
+        FakeTreeContext(),
       );
-      await lease.startOrAdopt();
+      await lease.startMounted(FakeTreeContext());
       await drainTurns();
 
       for (final reports in [serviceReports, processReports, leaseReports]) {

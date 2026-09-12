@@ -63,6 +63,25 @@ Future<void> _pump() async {
   }
 }
 
+Future<void> _mountAndStart(Allocation allocation, TreeContext treeContext) {
+  final owner = TreeOwner()
+    ..mountRoot(
+      ProviderScope(
+        child: LifecycleProvider<Allocation>.value(
+          allocation,
+          child: const Idle(),
+        ),
+      ),
+    );
+  addTearDown(owner.dispose);
+  return allocation.startOrAdopt(treeContext);
+}
+
+extension on Allocation {
+  Future<void> startMounted(TreeContext treeContext) =>
+      _mountAndStart(this, treeContext);
+}
+
 /// Mounts the REAL [CapabilityHost] for [capability] at [circuit]'s route step.
 /// The work bead is always `tg-1`, so `circuitPath: 'tg-1'` makes the circuit's
 /// terminal step the DELIVERY TERMINAL, and `'tg-1/spec'` makes it a mere
@@ -276,15 +295,14 @@ void main() {
         addTearDown(provider.close);
         await RouteAllocation(
           capability,
-          AllocationContext(
-            treeContext: FakeTreeContext(),
+          AllocationInputs(
             args: stepArgs('tg-1/route'),
             transport: provider,
             address: const AllocationAddress('tgdog-s', 'tg-1/route'),
             env: const {},
             sink: reports.add,
           ),
-        ).startOrAdopt();
+        ).startMounted(FakeTreeContext());
         return reports.single;
       }
 

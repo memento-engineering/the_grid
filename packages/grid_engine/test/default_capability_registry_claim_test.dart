@@ -15,7 +15,7 @@ class _NamedCapability extends Capability {
   final String name;
 
   @override
-  Allocation createAllocation(AllocationContext ctx) =>
+  Allocation createAllocation(AllocationInputs inputs) =>
       throw UnimplementedError('never driven in this test');
 }
 

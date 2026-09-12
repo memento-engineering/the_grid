@@ -10,19 +10,21 @@
 ///
 /// So the Host: computes the [AllocationAddress]; on mount **creates** the
 /// allocation (in `didChangeDependencies`, so teardown is guaranteed on EVERY
-/// exit path) and **kicks** `startOrAdopt` once; on a context change resolves
-/// via `canUpdate` → `update` (or leaves the running effect — the base families
-/// re-key rather than update, and the CircuitScope owns the key); on unmount
-/// kicks `dispose` (kill); and **persists** every [AllocationReport] the effect
-/// pushes — off `build`, latched, through the single [StationBeadWriter].
+/// exit path), mounts its non-Seed lifecycle, and schedules `startOrAdopt`
+/// exactly once; on a context change resolves via `canUpdate` → `update` (or
+/// leaves the running effect — the base families re-key rather than update, and
+/// the CircuitScope owns the key); on unmount kicks `dispose` (kill); and
+/// **persists** every [AllocationReport] the effect pushes — off `build`,
+/// latched, through the single [StationBeadWriter].
 ///
 /// **The effect layer holds NO writer** (invariant 2): the [Allocation] reports;
 /// the Host persists. This is layering — the effect freely reads the tree with
 /// the effect verb (ADR-0009 D3 / ADR-0008 Decision 3, 2026-07-02); only the
 /// Host writes. The Host's own inherited reads are `dependOn*` (the tree verb)
 /// and are RE-READ on every `didChangeDependencies` — never `??=`-cached
-/// (assume every reference can change; D-H rule 1). The captured fields exist
-/// for async-gap use (a `TreeContext` throws post-unmount), not as a cache.
+/// (assume every reference can change; D-H rule 1). Allocations receive watched
+/// values through [TreeLifecycleParticipant], never by retaining this Host's
+/// [TreeContext].
 ///
 /// The load-bearing async-gap guards live entirely here (the tree's discipline):
 /// `_cancelled` (set FIRST in `dispose`) + `TreeContext.mounted` drop a report
@@ -313,12 +315,17 @@ class CapabilityHostState extends State<CapabilityHost>
       // FIRST call: mint the Allocation HERE (synchronously, before the async
       // kick) so `dispose → allocation.dispose` (teardown) is guaranteed on
       // EVERY exit path — even a dispose that races the kick before it spawns
-      // (the Track E finding #1). Then kick `startOrAdopt` exactly once,
-      // fire-and-forget (reconcile never awaits I/O — D5).
+      // (the Track E finding #1). Defer the ONE kick until build has mounted
+      // the allocation's non-Seed lifecycle and delivered its dependencies.
       final alloc = _createAllocationOrFlare();
       if (alloc == null) return;
       _allocation = alloc;
-      unawaited(alloc.startOrAdopt());
+      scheduleMicrotask(() {
+        if (_cancelled || !context.mounted || !identical(_allocation, alloc)) {
+          return;
+        }
+        unawaited(alloc.startOrAdopt(context));
+      });
     } else {
       // A dependency the effect reads CHANGED (ADR-0009 D3: depending on context
       // is the norm). Resolve coherently: `update` in place if the type supports
@@ -351,7 +358,7 @@ class CapabilityHostState extends State<CapabilityHost>
   /// instead of a silent stall or a dead station.
   Allocation? _createAllocationOrFlare() {
     try {
-      final ctx = _buildAllocationContext();
+      final inputs = _buildAllocationInputs();
       final capability = seed.capability;
       // Resolve the write target at MOUNT for every capability — a host that
       // cannot name its step bead must never run an effect it cannot persist.
@@ -362,12 +369,12 @@ class CapabilityHostState extends State<CapabilityHost>
           ProcessLeaseRequest(
             stepBeadId: target,
             capability: capability,
-            allocation: ctx,
+            inputs: inputs,
           ),
         );
-        return lease.createAllocation(ctx);
+        return lease.createAllocation(inputs);
       }
-      return capability.createAllocation(ctx);
+      return capability.createAllocation(inputs);
     } on Object catch (e) {
       _emitFlare('step.allocationFailed', {'error': truncateReason('$e')});
       _firePersist(
@@ -383,15 +390,13 @@ class CapabilityHostState extends State<CapabilityHost>
   /// it, D-5/F1), falling back to the system clock if no registry is ambient.
   DateTime _now() => _registry?.now() ?? DateTime.now();
 
-  /// Assembles the [AllocationContext] the effect runs against — the host's
-  /// stable tree context + the per-step args (the effect reads its ambient
-  /// values itself, with the effect verb), the process transport, the stable
-  /// address, the engine env overlay, the report sink, and the adopt fence
-  /// (the prior identity for a no-adopt-on-faith proof — D4).
-  AllocationContext _buildAllocationContext() {
+  /// Assembles the [AllocationInputs] the effect runs against — the per-step
+  /// values, process transport, stable address, engine env overlay, report
+  /// sink, and adopt fence (the prior identity for a no-adopt-on-faith proof —
+  /// D4). Tree dependencies arrive through the Allocation lifecycle instead.
+  AllocationInputs _buildAllocationInputs() {
     final ctx = _ctx!;
-    return AllocationContext(
-      treeContext: context,
+    return AllocationInputs(
       args: _args!,
       transport: ctx.provider,
       address: AllocationAddress(_sessionId, _nodePath),
@@ -602,7 +607,9 @@ class CapabilityHostState extends State<CapabilityHost>
   /// stream.
   void deliverEventForTest(RuntimeEvent event) {
     final alloc = _allocation;
-    if (alloc is ProcessAllocation) alloc.deliverEventForTest(event);
+    if (alloc is ProcessAllocation) {
+      alloc.deliverEventForTest(event, context);
+    }
   }
 
   /// Test affordance: deliver [report] straight into the Host's report sink,
@@ -1121,5 +1128,9 @@ class CapabilityHostState extends State<CapabilityHost>
   }
 
   @override
-  Seed build(TreeContext context) => const Idle();
+  Seed build(TreeContext context) {
+    final allocation = _allocation;
+    if (allocation == null) return const Idle();
+    return LifecycleProvider<Allocation>.value(allocation, child: const Idle());
+  }
 }

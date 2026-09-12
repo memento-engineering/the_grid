@@ -21,9 +21,10 @@
 /// **The effect layer never holds a writer** (invariant 2): an Allocation
 /// *reports* transitions to its host through an [AllocationSink]; the Host
 /// persists them off-build through the one bd chokepoint. This is layering
-/// (D3) — an Allocation freely reads the tree with the effect verb; it just
-/// may never write, and never subscribes (the gates below are enforced as
-/// mutation-verified tests, not a wall).
+/// (D3) — an Allocation observes ambient values through its non-Seed lifecycle
+/// and receives a call-scoped tree reader for existing capability hooks; it
+/// never retains that reader, writes, or subscribes to the event pipeline (the
+/// gates below are enforced as mutation-verified tests, not a wall).
 library;
 
 import 'dart:async';
@@ -324,7 +325,7 @@ typedef AllocationLiveness = bool Function(AdoptFence fence);
 /// live, so an adoptable effect respawns fresh (no-adopt-on-faith). Public so
 /// the composer / StationServices can use it as the explicit "adopt disabled"
 /// value (the two adopt halves — this liveness seam and the reconciler's
-/// [AdoptProof] — must be co-wired; see [AllocationContext.liveness]).
+/// [AdoptProof] — must be co-wired; see [AllocationInputs.liveness]).
 bool neverLive(AdoptFence fence) => false;
 
 /// The engine's WORK-SIGNAL seam: whether the workspace at [workspaceDir] still
@@ -347,25 +348,25 @@ Future<GateOutcome> noWorkSignal(String workspaceDir) async =>
 /// respawns rather than stalling). Generous: the probe is one `status` call on a
 /// local workspace, so a breach means something is genuinely wedged (an index
 /// lock, a stalled network FS), not merely slow. Overridable per allocation via
-/// [AllocationContext.workSignalTimeout] (a test injects a short one).
+/// [AllocationInputs.workSignalTimeout] (a test injects a short one).
 const Duration kWorkSignalTimeout = Duration(seconds: 30);
 
-/// Everything an [Allocation] needs to manage its effect — assembled by the Host
-/// and handed to [Capability.createAllocation] (ADR-0009 D5).
+/// The values and effect services an [Allocation] needs to manage its effect —
+/// assembled by the Host and handed to [Capability.createAllocation]
+/// (ADR-0009 D5).
 ///
-/// Bundles the host's stable [treeContext] (the effect reads its ambient values
-/// with the effect verb — `getInheritedSeedOfExactType`, loud on unmounted) +
-/// the per-step [args], the process [transport] (a [RuntimeProvider] —
+/// Bundles the per-step [args], the process [transport] (a [RuntimeProvider] —
 /// spawn/kill/events; transport, NOT a writer/notifier), the stable [address],
 /// the engine [env] overlay the Host computed (the GRID_* vars incl. the
 /// freshness token), the [sink] to report through, and the [fence] (the prior
-/// identity for a no-adopt-on-faith proof — D4).
-class AllocationContext {
-  /// Bundles the host's [treeContext] + the per-step [args], the process
-  /// [transport], [address], engine [env] overlay, report [sink], adopt
-  /// [fence], step [kind], and pgid [liveness] seam.
-  const AllocationContext({
-    required this.treeContext,
+/// identity for a no-adopt-on-faith proof — D4). Tree dependencies arrive only
+/// through [TreeLifecycleParticipant] callbacks and the call-scoped
+/// [Allocation.startOrAdopt] reader.
+class AllocationInputs {
+  /// Bundles the per-step [args], process [transport], [address], engine [env]
+  /// overlay, report [sink], adopt [fence], step [kind], and pgid [liveness]
+  /// seam.
+  const AllocationInputs({
     required this.args,
     required this.transport,
     required this.address,
@@ -377,11 +378,6 @@ class AllocationContext {
     this.workSignal = noWorkSignal,
     this.workSignalTimeout = kWorkSignalTimeout,
   });
-
-  /// The host branch's stable tree context — valid while the host is mounted,
-  /// throws (loudly, by design) after unmount. Effects read ambient values
-  /// through it at entry and re-check [StepArgs.cancel] after async gaps.
-  final TreeContext treeContext;
 
   /// The per-step values (params/nodePath/cancel) of this incarnation.
   final StepArgs args;
@@ -443,19 +439,18 @@ class AllocationContext {
 /// then driven asynchronously by the Host through the four verbs (D4/D5).
 ///
 /// Subclasses own their effect's state machine + freshness proof and REPORT
-/// through [AllocationContext.sink]; they never write. The engine ships the
+/// through [AllocationInputs.sink]; they never write. The engine ships the
 /// [ProcessAllocation] + [ServiceAllocation] families; an asset may implement a
 /// custom [Allocation] for a custom [Capability] (tmux, app, lease).
-abstract class Allocation {
-  /// Binds the allocation to its [context] (the sync mint half of D4). Stored so
-  /// [startOrAdopt]/[update]/[dispose] can reference it without re-plumbing.
-  Allocation(this.context);
+abstract class Allocation with TreeLifecycleParticipant {
+  /// Binds the allocation to its [inputs] (the sync mint half of D4).
+  Allocation(this.inputs);
 
-  /// The effect's context (config/transport/address/env/sink/fence).
-  AllocationContext context;
+  /// The effect's values and services (args/transport/address/env/sink/fence).
+  AllocationInputs inputs;
 
   /// This effect's stable address (`<sessionId>/<nodePath>`).
-  AllocationAddress get address => context.address;
+  AllocationAddress get address => inputs.address;
 
   /// The current lifecycle state — a pure observation subclasses advance as
   /// their effect progresses (the Host maps reports → the persisted cursor; this
@@ -474,8 +469,8 @@ abstract class Allocation {
   /// Spawn a fresh effect OR prove-and-adopt a survivor at [address] (D4). The
   /// engine owns only the stable address + **no-adopt-on-faith** (an adoptable
   /// type must return proof of freshness; can't prove → spawn fresh). Reports
-  /// lifecycle through [AllocationContext.sink]. The Host guards the single kick.
-  Future<void> startOrAdopt();
+  /// lifecycle through [AllocationInputs.sink]. The Host guards the single kick.
+  Future<void> startOrAdopt(TreeContext treeContext);
 
   /// Whether this allocation can absorb [next]'s config in place, vs. the Host
   /// re-keying (dispose + recreate) — à la RenderObject `canUpdate` (D4).
@@ -484,14 +479,15 @@ abstract class Allocation {
   bool canUpdate(Allocation next) => false;
 
   /// Mutate in place to serve [next]'s config (only called when [canUpdate] is
-  /// true). Rebinds [context] to [next]'s. Defaults to a no-op rebind.
+  /// true). Rebinds [inputs] to [next]'s. Defaults to a no-op rebind.
   Future<void> update(Allocation next) async {
-    context = next.context;
+    inputs = next.inputs;
   }
 
   /// KILL the live effect (the default / floor unmount verb): the effect is
   /// done/invalidated. A process family terminates its group; a service cancels
   /// its body + runs teardown.
+  @override
   Future<void> dispose();
 
   /// LEAVE the live effect RUNNING and persist its handle so a later
@@ -515,14 +511,14 @@ abstract class Allocation {
 /// Not a process — it holds no group to reap; `dispose` cancels the cooperative
 /// token and runs the capability's teardown.
 class ServiceAllocation extends Allocation {
-  /// Creates the service allocation for [capability] under [context].
-  ServiceAllocation(this.capability, super.context);
+  /// Creates the service allocation for [capability] from [inputs].
+  ServiceAllocation(this.capability, super.inputs);
 
   /// The pure service capability whose body this drives.
   final ServiceCapability capability;
 
   @override
-  Future<void> startOrAdopt() async {
+  Future<void> startOrAdopt(TreeContext treeContext) async {
     state = AllocationState.live;
     // A service body has no adopt path (no survivable external effect) — it
     // simply runs. Its idempotence + the respawn-or-skip cursor make a re-run
@@ -532,24 +528,24 @@ class ServiceAllocation extends Allocation {
     final StepOutcome outcome;
     try {
       outcome = await runCapabilityGuarded(
-        () => capability.run(context.treeContext, context.args),
+        () => capability.run(treeContext, inputs.args),
       );
     } on Object catch (e) {
       state = AllocationState.gone;
-      if (!context.args.cancel.isCancelled) {
-        context.sink(AllocationFailed('run threw: $e'));
+      if (!inputs.args.cancel.isCancelled) {
+        inputs.sink(AllocationFailed('run threw: $e'));
       }
       return;
     }
     // The cooperative token may have been cancelled mid-run (the Host unmounted)
     // — the Host's guarded sink also drops a late report, so this is belt-and-
     // braces.
-    if (context.args.cancel.isCancelled) {
+    if (inputs.args.cancel.isCancelled) {
       state = AllocationState.gone;
       return;
     }
     state = AllocationState.gone;
-    context.sink(_reportFor(outcome));
+    inputs.sink(_reportFor(outcome));
   }
 
   /// Maps a [ServiceCapability] outcome to the report the Host persists. An
@@ -562,9 +558,9 @@ class ServiceAllocation extends Allocation {
   @override
   Future<void> dispose() async {
     state = AllocationState.dying;
-    context.args.cancel.cancel();
+    inputs.args.cancel.cancel();
     try {
-      await runCapabilityGuarded(() => capability.teardown(context.args));
+      await runCapabilityGuarded(() => capability.teardown(inputs.args));
     } on Object {
       // A throwing teardown must not break unmount (no one left to report
       // to). Mirrors LeaseAllocation._release.
@@ -585,8 +581,8 @@ class ServiceAllocation extends Allocation {
 /// `ready`/`complete`/`failed` per the capability's interpretation. Holds NO
 /// writer — the Host persists every report.
 class ProcessAllocation extends Allocation {
-  /// Creates the process allocation for [capability] under [context].
-  ProcessAllocation(this.capability, super.context);
+  /// Creates the process allocation for [capability] from [inputs].
+  ProcessAllocation(this.capability, super.inputs);
 
   /// The pure process capability describing what to spawn and how to read it.
   final ProcessCapability capability;
@@ -598,6 +594,17 @@ class ProcessAllocation extends Allocation {
   bool _started = false;
   bool _adopted = false;
   bool _terminal = false;
+  ServiceBundle _services = const ServiceBundle();
+  Workspace? _workspace;
+
+  @override
+  void didChangeDependencies(
+    TreeWatchingReader reader,
+    TreeDependencyScope scope,
+  ) {
+    _services = reader.watch<ServiceBundle>() ?? const ServiceBundle();
+    _workspace = reader.watch<Workspace>();
+  }
 
   /// Whether the spawn was reached (the Host stops the group on unmount only
   /// when true).
@@ -609,15 +616,14 @@ class ProcessAllocation extends Allocation {
   /// A daemon ([StepKind.daemon]) is adopt-capable + detach-capable; a one-shot
   /// ([StepKind.job]) is respawn-or-skip (never adopts/detaches — D4).
   @override
-  bool get isAdoptable => context.kind == StepKind.daemon;
+  bool get isAdoptable => inputs.kind == StepKind.daemon;
 
   @override
-  bool get isDetachable => context.kind == StepKind.daemon;
+  bool get isDetachable => inputs.kind == StepKind.daemon;
 
   @override
-  Future<void> startOrAdopt() async {
-    final tree = context.treeContext;
-    final args = context.args;
+  Future<void> startOrAdopt(TreeContext treeContext) async {
+    final args = inputs.args;
 
     // ADOPT a proven-fresh survivor (a daemon deliberately detached, or a crash
     // orphan still live) — reattach WITHOUT respawning (D4). **No-adopt-on-faith**
@@ -630,10 +636,10 @@ class ProcessAllocation extends Allocation {
     try {
       fresh =
           isAdoptable &&
-              context.fence.hasIdentity &&
-              context.liveness(context.fence)
+              inputs.fence.hasIdentity &&
+              inputs.liveness(inputs.fence)
           ? await runCapabilityGuarded(
-              () => capability.proveFreshness(context.fence, tree, args),
+              () => capability.proveFreshness(inputs.fence, treeContext, args),
             )
           : false;
     } on Object catch (e) {
@@ -641,7 +647,7 @@ class ProcessAllocation extends Allocation {
       _terminal = true;
       state = AllocationState.gone;
       if (!args.cancel.isCancelled) {
-        context.sink(AllocationFailed('spawn failed: $e'));
+        inputs.sink(AllocationFailed('spawn failed: $e'));
       }
       return;
     }
@@ -651,13 +657,13 @@ class ProcessAllocation extends Allocation {
         return;
       }
       state = AllocationState.adopting;
-      _sub = context.transport.events
+      _sub = inputs.transport.events
           .where((e) => e.name == address.providerName)
-          .listen(_onEvent);
+          .listen((event) => _onEvent(event, treeContext));
       _adopted = true;
       // The survivor was PROVEN live+ready — surface it as ready with no spawn.
       state = AllocationState.ready;
-      context.sink(const AllocationReady());
+      inputs.sink(const AllocationReady());
       return;
     }
 
@@ -667,11 +673,10 @@ class ProcessAllocation extends Allocation {
     // posture, ADR-0008 Decision 10 / OQ-c moment 2: one bad bead's config
     // parks THAT work; the station never crashes).
     try {
-      // Take synchronous `read<T>()` EFFECT snapshots at entry while mounted
-      // (the kick guarantees it), without subscribing the branch: the
-      // per-substation services + the per-session workspace.
-      final services = tree.read<ServiceBundle>() ?? const ServiceBundle();
-      final workspace = tree.read<Workspace>();
+      // The lifecycle provider refreshes both watched values before this kick
+      // and whenever either inherited value changes.
+      final services = _services;
+      final workspace = _workspace;
       // Materialize the workspace BEFORE spawning into it (the effect owns
       // provisioning; ADR-0008 D5). Idempotent — a later step in the same
       // worktree no-ops, and an offline build with no source control no-ops. A
@@ -702,11 +707,11 @@ class ProcessAllocation extends Allocation {
       }
       state = AllocationState.live;
       final name = address.providerName;
-      _sub = context.transport.events
+      _sub = inputs.transport.events
           .where((e) => e.name == name)
-          .listen(_onEvent);
+          .listen((event) => _onEvent(event, treeContext));
       final base = await runCapabilityGuarded(
-        () => capability.spawn(tree, args),
+        () => capability.spawn(treeContext, args),
       );
       if (workspace != null &&
           !_isInsideWorkspace(workspace.workspaceDir, base.workDir)) {
@@ -715,19 +720,19 @@ class ProcessAllocation extends Allocation {
           'workDir=${base.workDir} workspace=${workspace.workspaceDir}',
         );
       }
-      final config = base.copyWith(env: {...base.env, ...context.env});
+      final config = base.copyWith(env: {...base.env, ...inputs.env});
       final session = capability.createSession(
-        runtime: context.transport,
+        runtime: inputs.transport,
         name: name,
-        attemptId: context.env['GRID_ATTEMPT_ID'] ?? '',
-        instanceFence: context.env['GRID_INSTANCE_TOKEN'] ?? '',
-        context: tree,
+        attemptId: inputs.env['GRID_ATTEMPT_ID'] ?? '',
+        instanceFence: inputs.env['GRID_INSTANCE_TOKEN'] ?? '',
+        context: treeContext,
         args: args,
       );
       _session = session;
       _started = true;
       try {
-        await context.transport.start(name, config);
+        await inputs.transport.start(name, config);
       } on SessionAlreadyExists {
         // A re-fired ready event raced the spawn, and the group is up.
       }
@@ -737,29 +742,29 @@ class ProcessAllocation extends Allocation {
       _terminal = true;
       state = AllocationState.gone;
       if (!args.cancel.isCancelled) {
-        context.sink(AllocationFailed('spawn failed: $e'));
+        inputs.sink(AllocationFailed('spawn failed: $e'));
       }
     }
   }
 
-  void _onEvent(RuntimeEvent e) {
+  void _onEvent(RuntimeEvent e, TreeContext treeContext) {
     // A terminal (complete/failed) latches the effect: a re-fired terminal
     // event never reads [ProcessCapability.result] twice nor double-reports (the
     // Host also latches, belt-and-braces). A daemon's `ready` is NOT terminal —
     // it may still die later and report `failed`.
     if (_terminal) return;
     if (e is SessionStarted) {
-      context.sink(AllocationStarted(pid: e.pid, pgid: e.pgid));
+      inputs.sink(AllocationStarted(pid: e.pid, pgid: e.pgid));
     }
     final session = _session;
     if (session != null) {
       if (!_sessionEvents.isClosed) _sessionEvents.add(e);
       return;
     }
-    _onOneTurnEvent(e);
+    _onOneTurnEvent(e, treeContext);
   }
 
-  void _onOneTurnEvent(RuntimeEvent e) {
+  void _onOneTurnEvent(RuntimeEvent e, TreeContext treeContext) {
     if (e is SessionStarted) return;
     final signal = capability.interpretEvent(e);
     // THE COMPLETION FENCE — **no-complete-on-faith**, the dual of D4/D5's
@@ -782,7 +787,7 @@ class ProcessAllocation extends Allocation {
       // The process is GONE either way, so THIS incarnation is over: latch now, so
       // a re-fired event can neither double-probe nor double-report.
       _terminal = true;
-      unawaited(_settleInferredCompletion());
+      unawaited(_settleInferredCompletion(treeContext));
       return;
     }
     switch (signal) {
@@ -790,18 +795,18 @@ class ProcessAllocation extends Allocation {
         return;
       case StepSignal.ready:
         state = AllocationState.ready;
-        context.sink(const AllocationReady());
+        inputs.sink(const AllocationReady());
       case StepSignal.complete:
         _terminal = true;
         // The optional result payload the capability contributes on a clean
         // completion (read once, off the spawned process's output). Reported
         // WITH the completion so the Host records it in one merged write.
-        unawaited(_reportComplete());
+        unawaited(_reportComplete(treeContext));
       case StepSignal.failed:
         _terminal = true;
         state = AllocationState.gone;
         final reason = e is Died && e.reason.isNotEmpty ? e.reason : '';
-        context.sink(AllocationFailed(reason));
+        inputs.sink(AllocationFailed(reason));
     }
   }
 
@@ -809,17 +814,17 @@ class ProcessAllocation extends Allocation {
     final update = await driveProcessSession(
       session: session,
       runtimeEvents: _sessionEvents.stream,
-      retainedTerminal: context.transport.terminalOf(name),
+      retainedTerminal: inputs.transport.terminalOf(name),
     );
-    if (_terminal || context.args.cancel.isCancelled) return;
+    if (_terminal || inputs.args.cancel.isCancelled) return;
     _terminal = true;
     switch (update) {
       case ProcessSessionCompleted(:final result):
         state = AllocationState.gone;
-        context.sink(AllocationCompleted(result));
+        inputs.sink(AllocationCompleted(result));
       case ProcessSessionFailed(:final reason, :final kind):
         state = AllocationState.gone;
-        context.sink(switch (kind) {
+        inputs.sink(switch (kind) {
           null || CapabilityFailureKind.work => AllocationFailed(reason),
           CapabilityFailureKind.noResult ||
           CapabilityFailureKind.invalidResult => AllocationFailed._declared(
@@ -853,10 +858,10 @@ class ProcessAllocation extends Allocation {
   /// does NOT advance over a broken tree. LOUD (the reason lands on the cursor as
   /// `failureReason` + a `step.failed` flare), bounded by the restart budget,
   /// escalated at exhaustion.
-  Future<void> _settleInferredCompletion() async {
-    final args = context.args;
-    // Guard BEFORE the probe: a dispose racing the terminal event must not let the
-    // probe touch an unmounted tree context (which throws), nor report.
+  Future<void> _settleInferredCompletion(TreeContext treeContext) async {
+    final args = inputs.args;
+    // Guard BEFORE the probe: a dispose racing the terminal event must not start
+    // more effect I/O or report after this Allocation has left the tree.
     if (args.cancel.isCancelled) return;
     final GateOutcome outcome;
     try {
@@ -867,7 +872,7 @@ class ProcessAllocation extends Allocation {
       // never an unhandled zone error, never a silently STUCK node.
       state = AllocationState.gone;
       if (!args.cancel.isCancelled) {
-        context.sink(AllocationFailed('work-signal probe threw: $e'));
+        inputs.sink(AllocationFailed('work-signal probe threw: $e'));
       }
       return;
     }
@@ -880,7 +885,7 @@ class ProcessAllocation extends Allocation {
       final why = outcome == GateOutcome.present
           ? 'its workspace still holds UNCOMMITTED work'
           : 'its workspace could not be read (probe error)';
-      context.sink(
+      inputs.sink(
         AllocationFailed(
           'interrupted: a vanished agent gives no readable exit code, and $why — '
           'the turn did not finish; respawning instead of advancing',
@@ -890,12 +895,12 @@ class ProcessAllocation extends Allocation {
     }
     // PROVEN clean: a finished turn. Advance exactly as an unfenced completion
     // does (same result hook, same payload, same report).
-    await _reportComplete();
+    await _reportComplete(treeContext);
   }
 
-  /// The work signal for THIS effect's workspace — captured with synchronous
-  /// `read<T>()` EFFECT snapshots (off-build, non-binding, after the cancel
-  /// guard), and ONLY when both seams AGREE.
+  /// The work signal for THIS effect's workspace — driven from the latest
+  /// lifecycle-watched [ServiceBundle] and [Workspace], and ONLY when both seams
+  /// AGREE.
   ///
   /// The probe the composer bound is a REAL source-control probe expecting a REAL
   /// workspace path. But `SessionScope` mounts a SYNTHETIC [Workspace] when the
@@ -909,9 +914,8 @@ class ProcessAllocation extends Allocation {
   /// **Fail-SAFE here, fail-CLOSED there:** never fence a workspace we cannot even
   /// address; always fence one that is real but merely unreadable.
   Future<GateOutcome> _probeWorkSignal() async {
-    final tree = context.treeContext;
-    final services = tree.read<ServiceBundle>() ?? const ServiceBundle();
-    final workspace = tree.read<Workspace>();
+    final services = _services;
+    final workspace = _workspace;
     if (services.sourceControl == null || workspace == null) {
       return GateOutcome.clear;
     }
@@ -921,44 +925,44 @@ class ProcessAllocation extends Allocation {
     // no supervision can see. A timeout is [GateOutcome.probeError]: fail-closed
     // like every other unreadable workspace, so it respawns LOUDLY instead of
     // stalling (ADR-0008 D3 — a guard is loud or it is gone).
-    return context
+    return inputs
         .workSignal(workspace.workspaceDir)
         .timeout(
-          context.workSignalTimeout,
+          inputs.workSignalTimeout,
           onTimeout: () => GateOutcome.probeError,
         );
   }
 
-  Future<void> _reportComplete() async {
+  Future<void> _reportComplete(TreeContext treeContext) async {
     // Guard BEFORE the read too: a dispose racing the terminal event must not
     // let `result` touch an unmounted tree context (which throws).
-    if (context.args.cancel.isCancelled) return;
+    if (inputs.args.cancel.isCancelled) return;
     if (capability.completionContract ==
         CompletionContract.artifactDurability) {
       var artifact = GateOutcome.probeError;
       try {
         artifact = await capability.probeCompletionArtifact(
-          context.treeContext,
-          context.args,
+          treeContext,
+          inputs.args,
         );
       } on CapabilityFailure catch (e) {
         // A probe that NAMES its own failure kind keeps it; only an untyped
         // throw falls back to the fail-closed probeError default.
         state = AllocationState.gone;
-        if (!context.args.cancel.isCancelled) {
-          context.sink(AllocationFailed.from(e));
+        if (!inputs.args.cancel.isCancelled) {
+          inputs.sink(AllocationFailed.from(e));
         }
         return;
       } on Object {
         // The fail-closed default remains probeError.
       }
-      if (context.args.cancel.isCancelled) return;
+      if (inputs.args.cancel.isCancelled) return;
       switch (artifact) {
         case GateOutcome.clear:
           break;
         case GateOutcome.present:
           state = AllocationState.gone;
-          context.sink(
+          inputs.sink(
             const AllocationFailed.noResult(
               'unresolved: declared completion artifact is not durable',
             ),
@@ -966,7 +970,7 @@ class ProcessAllocation extends Allocation {
           return;
         case GateOutcome.probeError:
           state = AllocationState.gone;
-          context.sink(
+          inputs.sink(
             const AllocationFailed.noResult(
               'unresolved: completion artifact probe failed',
             ),
@@ -980,30 +984,31 @@ class ProcessAllocation extends Allocation {
     final Map<String, String>? payload;
     try {
       payload = await runCapabilityGuarded(
-        () => capability.result(context.treeContext, context.args),
+        () => capability.result(treeContext, inputs.args),
       );
     } on CapabilityFailure catch (e) {
       state = AllocationState.gone;
-      if (!context.args.cancel.isCancelled) {
-        context.sink(AllocationFailed.from(e));
+      if (!inputs.args.cancel.isCancelled) {
+        inputs.sink(AllocationFailed.from(e));
       }
       return;
     } on Object catch (e) {
       state = AllocationState.gone;
-      if (!context.args.cancel.isCancelled) {
-        context.sink(AllocationFailed('result threw: $e'));
+      if (!inputs.args.cancel.isCancelled) {
+        inputs.sink(AllocationFailed('result threw: $e'));
       }
       return;
     }
-    if (context.args.cancel.isCancelled) return;
+    if (inputs.args.cancel.isCancelled) return;
     state = AllocationState.gone;
-    context.sink(AllocationCompleted(payload));
+    inputs.sink(AllocationCompleted(payload));
   }
 
   /// Test affordance: deliver [event] straight to the event handler (exercises
   /// the Host's post-dispose guard in isolation from the subscription cancel).
   /// Production events always arrive via the [transport] stream.
-  void deliverEventForTest(RuntimeEvent event) => _onEvent(event);
+  void deliverEventForTest(RuntimeEvent event, TreeContext treeContext) =>
+      _onEvent(event, treeContext);
 
   /// LEAVE the group RUNNING + keep its persisted handle (the per-node
   /// pgid/pid/token cursor already IS the handle) so a later [startOrAdopt]
@@ -1029,7 +1034,7 @@ class ProcessAllocation extends Allocation {
     _terminal = true;
     // Cancel the cooperative token FIRST — a racing `startOrAdopt` that has not
     // yet spawned bails at its guard (no orphan spawn after unmount).
-    context.args.cancel.cancel();
+    inputs.args.cancel.cancel();
     unawaited(_sub?.cancel());
     _sub = null;
     unawaited(_session?.close());
@@ -1038,10 +1043,10 @@ class ProcessAllocation extends Allocation {
     // Kill the managed group — whether we spawned it (_started) or reattached a
     // survivor (_adopted); dispose is KILL, the floor (D4).
     if (_started || _adopted) {
-      unawaited(context.transport.stop(address.providerName));
+      unawaited(inputs.transport.stop(address.providerName));
     }
     try {
-      await runCapabilityGuarded(() => capability.teardown(context.args));
+      await runCapabilityGuarded(() => capability.teardown(inputs.args));
     } on Object {
       // A throwing teardown must not break unmount (the group is already
       // stopped; there is no one left to report to — the sink drops

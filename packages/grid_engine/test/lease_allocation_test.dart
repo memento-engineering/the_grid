@@ -94,8 +94,7 @@ LeaseAllocation<String> _alloc(
   StepKind kind = StepKind.daemon,
 }) =>
     cap.createAllocation(
-          AllocationContext(
-            treeContext: FakeTreeContext(),
+          AllocationInputs(
             args: stepArgs('tg-1/lease', cancel: cancel),
             transport: FakeRuntimeProvider(),
             address: const AllocationAddress('tgdog-s', 'tg-1/lease'),
@@ -105,6 +104,25 @@ LeaseAllocation<String> _alloc(
           ),
         )
         as LeaseAllocation<String>;
+
+Future<void> _mountAndStart(Allocation allocation, TreeContext treeContext) {
+  final owner = TreeOwner()
+    ..mountRoot(
+      ProviderScope(
+        child: LifecycleProvider<Allocation>.value(
+          allocation,
+          child: const Idle(),
+        ),
+      ),
+    );
+  addTearDown(owner.dispose);
+  return allocation.startOrAdopt(treeContext);
+}
+
+extension on Allocation {
+  Future<void> startMounted(TreeContext treeContext) =>
+      _mountAndStart(this, treeContext);
+}
 
 void main() {
   group('LeaseAllocation — kind drives adoptability/detachability (D6)', () {
@@ -127,7 +145,7 @@ void main() {
       final reports = <AllocationReport>[];
       final cap = _FakeLeaseCap();
       final alloc = _alloc(cap, sink: reports.add);
-      await alloc.startOrAdopt();
+      await alloc.startMounted(FakeTreeContext());
       final readies = reports.whereType<AllocationReady>().toList();
       expect(readies, hasLength(1));
       expect(readies.single.payload, {'endpoint': 'vm://x', 'station': 'peer'});
@@ -142,7 +160,7 @@ void main() {
       () async {
         final cap = _FakeLeaseCap();
         final alloc = _alloc(cap, sink: (_) {});
-        await alloc.startOrAdopt();
+        await alloc.startMounted(FakeTreeContext());
         await alloc.dispose();
         expect(cap.released, ['lease-0']);
         expect(alloc.state, AllocationState.gone);
@@ -157,7 +175,7 @@ void main() {
         final reports = <AllocationReport>[];
         final cap = _FakeLeaseCap(outcome: const Ok({'exitCode': '0'}));
         final alloc = _alloc(cap, sink: reports.add, kind: StepKind.job);
-        await alloc.startOrAdopt();
+        await alloc.startMounted(FakeTreeContext());
         expect(reports.whereType<AllocationCompleted>(), hasLength(1));
         expect(reports.whereType<AllocationReady>(), isEmpty);
         await alloc.dispose();
@@ -168,7 +186,7 @@ void main() {
     test('a double dispose releases ONCE (idempotent)', () async {
       final cap = _FakeLeaseCap();
       final alloc = _alloc(cap, sink: (_) {}, kind: StepKind.job);
-      await alloc.startOrAdopt();
+      await alloc.startMounted(FakeTreeContext());
       await alloc.dispose();
       await alloc.dispose();
       expect(cap.released, ['lease-0']);
@@ -182,7 +200,7 @@ void main() {
         final reports = <AllocationReport>[];
         final cap = _FakeLeaseCap(outcome: const Failed('boom'));
         final alloc = _alloc(cap, sink: reports.add);
-        await alloc.startOrAdopt();
+        await alloc.startMounted(FakeTreeContext());
         expect((reports.single as AllocationFailed).reason, 'boom');
         await alloc.dispose();
         expect(cap.releasedAny(), isTrue);
@@ -197,7 +215,7 @@ void main() {
         final reports = <AllocationReport>[];
         final cap = _FakeLeaseCap(unavailable: 'no peer satisfies X');
         final alloc = _alloc(cap, sink: reports.add);
-        await alloc.startOrAdopt();
+        await alloc.startMounted(FakeTreeContext());
         expect(
           (reports.single as AllocationFailed).reason,
           'no peer satisfies X',
@@ -223,7 +241,7 @@ void main() {
           cancel: CancelToken()..cancel(),
           kind: StepKind.job,
         );
-        await alloc.startOrAdopt();
+        await alloc.startMounted(FakeTreeContext());
         expect(cap.log, isNot(contains('dispatch')));
         expect(cap.releasedAny(), isTrue);
         expect(reports, isEmpty);
@@ -240,7 +258,7 @@ void main() {
         final reports = <AllocationReport>[];
         final cap = _FakeLeaseCap(prior: LeaseBound('prior-0'), fresh: true);
         final alloc = _alloc(cap, sink: reports.add);
-        await alloc.startOrAdopt();
+        await alloc.startMounted(FakeTreeContext());
         expect(alloc.adopted, isTrue);
         expect(cap.log, isNot(contains('acquire')));
         expect(cap.log, isNot(contains('dispatch')));
@@ -257,7 +275,7 @@ void main() {
       () async {
         final cap = _FakeLeaseCap(prior: LeaseBound('stale-0'), fresh: false);
         final alloc = _alloc(cap, sink: (_) {});
-        await alloc.startOrAdopt();
+        await alloc.startMounted(FakeTreeContext());
         expect(alloc.adopted, isFalse);
         expect(cap.log, contains('acquire'));
         expect(cap.log, contains('dispatch:lease-0'));
@@ -276,7 +294,7 @@ void main() {
               cancel.cancel, // dispose lands inside proveFresh's await
         );
         final alloc = _alloc(cap, sink: (_) {}, cancel: cancel);
-        await alloc.startOrAdopt();
+        await alloc.startMounted(FakeTreeContext());
         expect(alloc.adopted, isFalse);
         expect(cap.log, contains('proveFresh:prior-0'));
         expect(
@@ -294,7 +312,7 @@ void main() {
       () async {
         final cap = _FakeLeaseCap(prior: LeaseBound('prior-0'), fresh: true);
         final alloc = _alloc(cap, sink: (_) {}, kind: StepKind.job);
-        await alloc.startOrAdopt();
+        await alloc.startMounted(FakeTreeContext());
         expect(alloc.adopted, isFalse);
         expect(cap.log, isNot(contains('adoptable')));
         expect(cap.log, contains('acquire'));
@@ -309,7 +327,7 @@ void main() {
       () async {
         final cap = _FakeLeaseCap();
         final alloc = _alloc(cap, sink: (_) {});
-        await alloc.startOrAdopt();
+        await alloc.startMounted(FakeTreeContext());
         await alloc.detach();
         expect(cap.releasedAny(), isFalse);
         await alloc.dispose();
@@ -320,7 +338,7 @@ void main() {
     test('detach on a JOB lease throws (never leave a grant held)', () async {
       final cap = _FakeLeaseCap();
       final alloc = _alloc(cap, sink: (_) {}, kind: StepKind.job);
-      await alloc.startOrAdopt();
+      await alloc.startMounted(FakeTreeContext());
       await expectLater(alloc.detach(), throwsA(isA<UnsupportedError>()));
     });
   });
@@ -329,7 +347,7 @@ void main() {
     test('dispose swallows a throwing release (already reaped)', () async {
       final cap = _FakeLeaseCap(releaseThrows: true);
       final alloc = _alloc(cap, sink: (_) {});
-      await alloc.startOrAdopt();
+      await alloc.startMounted(FakeTreeContext());
       await alloc.dispose(); // must not throw
       expect(cap.releasedAny(), isTrue);
     });

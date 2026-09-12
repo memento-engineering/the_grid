@@ -123,21 +123,13 @@ FakeTreeContext _treeCtx({
   },
 );
 
-AllocationContext _allocCtx({
+AllocationInputs _inputs({
   required RuntimeProvider transport,
   required AllocationSink sink,
   required CancelToken cancel,
-  ServiceBundle services = const ServiceBundle(),
-  Bead? bead,
   AdoptFence fence = const AdoptFence(),
   Map<String, String> env = const {},
-  String workspaceDir = '/w/tg-1',
-}) => AllocationContext(
-  treeContext: _treeCtx(
-    services: services,
-    bead: bead,
-    workspaceDir: workspaceDir,
-  ),
+}) => AllocationInputs(
   args: stepArgs('tg-1/agent', cancel: cancel),
   transport: transport,
   address: const AllocationAddress('tgdog-s', 'tg-1/agent'),
@@ -150,6 +142,29 @@ Future<void> _pump() async {
   for (var i = 0; i < 5; i++) {
     await Future<void>.delayed(Duration.zero);
   }
+}
+
+Future<void> _mountAndStart(Allocation allocation, TreeContext treeContext) {
+  final owner = TreeOwner();
+  Seed child = LifecycleProvider<Allocation>.value(
+    allocation,
+    child: const Idle(),
+  );
+  if (treeContext.getInheritedSeedOfExactType<Workspace>() case final value?) {
+    child = InheritedSeed<Workspace>(value: value, child: child);
+  }
+  if (treeContext.getInheritedSeedOfExactType<ServiceBundle>()
+      case final value?) {
+    child = InheritedSeed<ServiceBundle>(value: value, child: child);
+  }
+  owner.mountRoot(ProviderScope(child: child));
+  addTearDown(owner.dispose);
+  return allocation.startOrAdopt(treeContext);
+}
+
+extension on Allocation {
+  Future<void> startMounted(TreeContext treeContext) =>
+      _mountAndStart(this, treeContext);
 }
 
 void main() {
@@ -180,7 +195,7 @@ void main() {
     test('ProcessCapability → ProcessAllocation; ServiceCapability → '
         'ServiceAllocation', () {
       final cancel = CancelToken();
-      final ctx = _allocCtx(
+      final ctx = _inputs(
         transport: FakeRuntimeProvider(),
         sink: (_) {},
         cancel: cancel,
@@ -197,7 +212,7 @@ void main() {
 
     test('the base families are neither adoptable nor detachable, and never '
         'update in place (the P0 replace default)', () {
-      final ctx = _allocCtx(
+      final ctx = _inputs(
         transport: FakeRuntimeProvider(),
         sink: (_) {},
         cancel: CancelToken(),
@@ -213,7 +228,7 @@ void main() {
 
     test('detach() on a non-detachable allocation throws (never an overloaded '
         'dispose — ADR-0009 D4)', () {
-      final ctx = _allocCtx(
+      final ctx = _inputs(
         transport: FakeRuntimeProvider(),
         sink: (_) {},
         cancel: CancelToken(),
@@ -233,13 +248,13 @@ void main() {
         final cancel = CancelToken();
         final alloc = _RecServiceCap(const Ok({'pr_url': pr}), log)
             .createAllocation(
-              _allocCtx(
+              _inputs(
                 transport: FakeRuntimeProvider(),
                 sink: reports.add,
                 cancel: cancel,
               ),
             );
-        await alloc.startOrAdopt();
+        await alloc.startMounted(_treeCtx());
         expect(log, contains('run(tg-1)'));
         expect(reports.single, isA<AllocationCompleted>());
         expect((reports.single as AllocationCompleted).payload, {'pr_url': pr});
@@ -252,13 +267,13 @@ void main() {
       final cancel = CancelToken();
       await _RecServiceCap(const Failed('nope'), [])
           .createAllocation(
-            _allocCtx(
+            _inputs(
               transport: FakeRuntimeProvider(),
               sink: reports.add,
               cancel: cancel,
             ),
           )
-          .startOrAdopt();
+          .startMounted(_treeCtx());
       expect(reports.single, isA<AllocationFailed>());
       expect((reports.single as AllocationFailed).reason, 'nope');
     });
@@ -269,14 +284,14 @@ void main() {
         final reports = <AllocationReport>[];
         final cancel = CancelToken();
         final alloc = _RecServiceCap(const Ok(), []).createAllocation(
-          _allocCtx(
+          _inputs(
             transport: FakeRuntimeProvider(),
             sink: reports.add,
             cancel: cancel,
           ),
         );
         cancel.cancel(); // the Host unmounted before run resolved
-        await alloc.startOrAdopt();
+        await alloc.startMounted(_treeCtx());
         expect(reports, isEmpty);
       },
     );
@@ -288,9 +303,9 @@ void main() {
         final provider = FakeRuntimeProvider();
         final cancel = CancelToken();
         final alloc = _RecServiceCap(const Ok(), log).createAllocation(
-          _allocCtx(transport: provider, sink: (_) {}, cancel: cancel),
+          _inputs(transport: provider, sink: (_) {}, cancel: cancel),
         );
-        await alloc.startOrAdopt();
+        await alloc.startMounted(_treeCtx());
         await alloc.dispose();
         expect(cancel.isCancelled, isTrue);
         expect(log, contains('svc-teardown'));
@@ -310,22 +325,23 @@ void main() {
         addTearDown(() => Directory(workspaceDir).deleteSync(recursive: true));
         final log = <String>[];
         final provider = FakeRuntimeProvider();
+        final services = ServiceBundle(
+          sourceControl: _RecordingProvisionSourceControl(
+            log,
+            createGitEntry: true,
+          ),
+        );
         final alloc = _RecProcessCap(log).createAllocation(
-          _allocCtx(
+          _inputs(
             transport: provider,
             sink: (_) {},
             cancel: CancelToken(),
-            services: ServiceBundle(
-              sourceControl: _RecordingProvisionSourceControl(
-                log,
-                createGitEntry: true,
-              ),
-            ),
             env: const {'GRID_BEAD_ID': 'tg-1', 'GRID_INSTANCE_TOKEN': 'tok'},
-            workspaceDir: workspaceDir,
           ),
         );
-        await alloc.startOrAdopt();
+        await alloc.startMounted(
+          _treeCtx(services: services, workspaceDir: workspaceDir),
+        );
         await _pump();
 
         expect(provider.started, hasLength(1));
@@ -357,19 +373,20 @@ void main() {
         final log = <String>[];
         final reports = <AllocationReport>[];
         final provider = FakeRuntimeProvider();
+        final services = ServiceBundle(
+          sourceControl: _RecordingProvisionSourceControl(log),
+        );
         final alloc = _RecProcessCap(log).createAllocation(
-          _allocCtx(
+          _inputs(
             transport: provider,
             sink: reports.add,
             cancel: CancelToken(),
-            services: ServiceBundle(
-              sourceControl: _RecordingProvisionSourceControl(log),
-            ),
-            workspaceDir: workspaceDir,
           ),
         );
 
-        await alloc.startOrAdopt();
+        await alloc.startMounted(
+          _treeCtx(services: services, workspaceDir: workspaceDir),
+        );
         await _pump();
 
         expect(provider.started, isEmpty);
@@ -390,23 +407,20 @@ void main() {
         addTearDown(() => Directory(workspaceDir).deleteSync(recursive: true));
         final log = <String>[];
         final provider = FakeRuntimeProvider();
-        final alloc = _RecProcessCap(log).createAllocation(
-          _allocCtx(
-            transport: provider,
-            sink: (_) {},
-            cancel: CancelToken(),
-            bead: const Bead(id: 'tg-1', issueType: IssueType.task),
-            services: ServiceBundle(
-              sourceControl: _RecordingProvisionSourceControl(
-                log,
-                root: 'default',
-                createGitEntry: true,
-              ),
-            ),
-            workspaceDir: workspaceDir,
+        final bead = const Bead(id: 'tg-1', issueType: IssueType.task);
+        final services = ServiceBundle(
+          sourceControl: _RecordingProvisionSourceControl(
+            log,
+            root: 'default',
+            createGitEntry: true,
           ),
         );
-        await alloc.startOrAdopt();
+        final alloc = _RecProcessCap(log).createAllocation(
+          _inputs(transport: provider, sink: (_) {}, cancel: CancelToken()),
+        );
+        await alloc.startMounted(
+          _treeCtx(services: services, bead: bead, workspaceDir: workspaceDir),
+        );
         await _pump();
 
         expect(log, contains('provision(default:tg-1)'));
@@ -417,13 +431,9 @@ void main() {
       final reports = <AllocationReport>[];
       final provider = FakeRuntimeProvider();
       final alloc = _RecProcessCap([]).createAllocation(
-        _allocCtx(
-          transport: provider,
-          sink: reports.add,
-          cancel: CancelToken(),
-        ),
+        _inputs(transport: provider, sink: reports.add, cancel: CancelToken()),
       );
-      await alloc.startOrAdopt();
+      await alloc.startMounted(_treeCtx());
       provider.emit(
         const SessionStarted(name: 'tgdog-s/tg-1/agent', pid: 100, pgid: 200),
       );
@@ -441,13 +451,13 @@ void main() {
         final provider = FakeRuntimeProvider();
         final alloc = _RecProcessCap([], payload: const {'grade': 'A'})
             .createAllocation(
-              _allocCtx(
+              _inputs(
                 transport: provider,
                 sink: reports.add,
                 cancel: CancelToken(),
               ),
             );
-        await alloc.startOrAdopt();
+        await alloc.startMounted(_treeCtx());
         provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
         await _pump();
         final done = reports.whereType<AllocationCompleted>().single;
@@ -460,13 +470,9 @@ void main() {
       final reports = <AllocationReport>[];
       final provider = FakeRuntimeProvider();
       final alloc = _RecProcessCap([]).createAllocation(
-        _allocCtx(
-          transport: provider,
-          sink: reports.add,
-          cancel: CancelToken(),
-        ),
+        _inputs(transport: provider, sink: reports.add, cancel: CancelToken()),
       );
-      await alloc.startOrAdopt();
+      await alloc.startMounted(_treeCtx());
       provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 1));
       await _pump();
 
@@ -483,13 +489,13 @@ void main() {
         final reports = <AllocationReport>[];
         final provider = FakeRuntimeProvider();
         final alloc = _RecProcessCap([]).createAllocation(
-          _allocCtx(
+          _inputs(
             transport: provider,
             sink: reports.add,
             cancel: CancelToken(),
           ),
         );
-        await alloc.startOrAdopt();
+        await alloc.startMounted(_treeCtx());
         provider.emit(
           const ActivityChanged(name: 'tgdog-s/tg-1/agent', active: true),
         );
@@ -510,14 +516,14 @@ void main() {
         final provider = FakeRuntimeProvider();
         final alloc =
             _RecProcessCap(log).createAllocation(
-                  _allocCtx(
+                  _inputs(
                     transport: provider,
                     sink: (_) {},
                     cancel: CancelToken(),
                   ),
                 )
                 as ProcessAllocation;
-        await alloc.startOrAdopt();
+        await alloc.startMounted(_treeCtx());
         await _pump();
         expect(provider.eventListenerCount, 1);
         await alloc.dispose();
@@ -539,13 +545,13 @@ void main() {
       final cancel = CancelToken();
       final alloc =
           _RecProcessCap(log).createAllocation(
-                _allocCtx(transport: provider, sink: (_) {}, cancel: cancel),
+                _inputs(transport: provider, sink: (_) {}, cancel: cancel),
               )
               as ProcessAllocation;
       // Cancel before startOrAdopt runs its body → the provision guard drops out
       // before the spawn.
       cancel.cancel();
-      await alloc.startOrAdopt();
+      await alloc.startMounted(_treeCtx());
       await alloc.dispose();
       expect(provider.started, isEmpty, reason: 'the spawn was never reached');
       expect(provider.stopped, isEmpty, reason: 'no group to stop');

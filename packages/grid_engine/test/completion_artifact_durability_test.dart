@@ -70,11 +70,10 @@ class _ArtifactCapability extends ProcessCapability {
   }
 }
 
-AllocationContext _context({
+AllocationInputs _inputs({
   required FakeRuntimeProvider transport,
   required AllocationSink sink,
-}) => AllocationContext(
-  treeContext: FakeTreeContext(),
+}) => AllocationInputs(
   args: stepArgs('tg-1/critic'),
   transport: transport,
   address: const AllocationAddress('tgdog-s', 'tg-1/critic'),
@@ -82,11 +81,26 @@ AllocationContext _context({
   sink: sink,
 );
 
+FakeTreeContext _treeContext() => FakeTreeContext();
+
+void _mountAllocation(Allocation allocation, TreeContext treeContext) {
+  final owner = TreeOwner()
+    ..mountRoot(
+      ProviderScope(
+        child: LifecycleProvider<Allocation>.value(
+          allocation,
+          child: const Idle(),
+        ),
+      ),
+    );
+  addTearDown(owner.dispose);
+}
+
 Future<List<AllocationReport>> _direct(_ArtifactCapability capability) async {
   final reports = <AllocationReport>[];
   final allocation =
       capability.createAllocation(
-            _context(
+            _inputs(
               transport: FakeRuntimeProvider(),
               sink: (report) {
                 reports.add(report);
@@ -97,7 +111,9 @@ Future<List<AllocationReport>> _direct(_ArtifactCapability capability) async {
             ),
           )
           as ProcessAllocation;
-  allocation.deliverEventForTest(_exit);
+  final treeContext = _treeContext();
+  _mountAllocation(allocation, treeContext);
+  allocation.deliverEventForTest(_exit, treeContext);
   for (var i = 0; i < 8; i++) {
     await Future<void>.delayed(Duration.zero);
   }
@@ -109,17 +125,18 @@ Future<StepOutcome> _leased(
   required bool retained,
 }) async {
   final transport = FakeRuntimeProvider();
-  final context = _context(transport: transport, sink: (_) {});
+  final inputs = _inputs(transport: transport, sink: (_) {});
+  final treeContext = _treeContext();
   if (retained) transport.emit(_exit);
   final outcome = stationProcessDispatcher(
     const ProcessHandle(pgid: 1, pid: 1, token: 'token'),
     ProcessLeaseRequest(
       stepBeadId: 'step-critic',
       capability: capability,
-      allocation: context,
+      inputs: inputs,
     ),
-    context.treeContext,
-    context.args,
+    treeContext,
+    inputs.args,
   );
   if (!retained) transport.emit(_exit);
   return outcome;

@@ -205,7 +205,7 @@ abstract class ProcessLeaseVendor {
   /// by (topology-stable; Decided item 2), never an in-run `nodePath`. The
   /// request-carrying shape (tg-h4u round-3 spec): the REAL spawner/dispatcher
   /// need the pure [ProcessCapability] and the host-assembled
-  /// [AllocationContext] (transport/env/address/sink), and they are captured
+  /// [AllocationInputs] (transport/env/address/sink), and they are captured
   /// HERE — `LeaseCapability.acquire`'s own `(TreeContext, StepArgs)`
   /// signature cannot carry them.
   LeaseCapability<ProcessHandle> leaseFor(ProcessLeaseRequest request);
@@ -269,16 +269,16 @@ abstract class ProcessLeaseVendor {
 /// The per-mount request a [ProcessLeaseVendor] vends against (tg-h4u): the
 /// durable step-bead address the lease is keyed by, the pure
 /// [ProcessCapability] describing what to spawn and how to read its events,
-/// and the [AllocationContext] the host assembled — transport, env overlay
+/// and the [AllocationInputs] the host assembled — transport, env overlay
 /// (incl. the freshness token), address, and the report sink the REAL spawner
 /// surfaces `AllocationStarted` through.
 class ProcessLeaseRequest {
   /// Bundles the [stepBeadId] lease address, the pure [capability], and the
-  /// host-assembled [allocation] context.
+  /// host-assembled [inputs].
   const ProcessLeaseRequest({
     required this.stepBeadId,
     required this.capability,
-    required this.allocation,
+    required this.inputs,
   });
 
   /// The durable step-bead id this lease is keyed by (Decided items 2/5).
@@ -288,9 +288,9 @@ class ProcessLeaseRequest {
   /// optional result payload).
   final ProcessCapability capability;
 
-  /// The host-assembled context — transport/env/address/sink — everything the
+  /// The host-assembled inputs — transport/env/address/sink — everything the
   /// REAL spawner/dispatcher need beyond the lease family's `(context, args)`.
-  final AllocationContext allocation;
+  final AllocationInputs inputs;
 }
 
 /// LOUD-or-GONE (Decided item 5): resolves the ambient [ProcessLeaseVendor], a
@@ -596,10 +596,10 @@ Future<StepOutcome> _dispatchProcess({
   required TreeContext context,
   required StepArgs args,
 }) async {
-  final allocation = request.allocation;
-  final name = allocation.address.providerName;
+  final inputs = request.inputs;
+  final name = inputs.address.providerName;
   final session = request.capability.createSession(
-    runtime: allocation.transport,
+    runtime: inputs.transport,
     name: name,
     attemptId: handle.attemptId,
     instanceFence: handle.token,
@@ -614,8 +614,8 @@ Future<StepOutcome> _dispatchProcess({
     session: session,
     runtimeEvents:
         handle.events?.stream ??
-        allocation.transport.events.where((event) => event.name == name),
-    retainedTerminal: allocation.transport.terminalOf(name),
+        inputs.transport.events.where((event) => event.name == name),
+    retainedTerminal: inputs.transport.terminalOf(name),
   );
   return switch (update) {
     ProcessSessionCompleted(:final result) => Ok(result),
@@ -643,7 +643,7 @@ typedef StepMetadataReader =
 /// molecule write already rides, Decided conflict 3), [spawn]/[dispatch] (the
 /// deferred process transport), [metadataOf] (the deferred breadcrumb read),
 /// and [liveness] (`StationServices.liveness`, defaulting to [neverLive] —
-/// same offline default the flat model's `AllocationContext.liveness` uses).
+/// same offline default the flat model's `AllocationInputs.liveness` uses).
 class StationProcessLeaseVendor implements ProcessLeaseVendor {
   /// Creates the vendor over its collaborators. [writer] is REQUIRED (there is
   /// no sensible default for the sole writer of `grid.lease.*`); [spawn]/
@@ -1039,8 +1039,8 @@ class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
   /// the backstop.
   Future<void> _persistBreadcrumb(ProcessHandle handle) async {
     final tap = handle.events;
-    final transport = request.allocation.transport;
-    final name = request.allocation.address.providerName;
+    final transport = request.inputs.transport;
+    final name = request.inputs.address.providerName;
     for (var attempt = 1; ; attempt += 1) {
       // Gate CHECK-THEN-ENQUEUE synchronously (no await between): a tap that
       // is still open here proves release has not yet enqueued its clearing
@@ -1109,9 +1109,7 @@ class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
     // whose dispatch never ran, e.g. a dispose racing the acquire).
     await handle.events?.close();
     try {
-      await request.allocation.transport.stop(
-        request.allocation.address.providerName,
-      );
+      await request.inputs.transport.stop(request.inputs.address.providerName);
     } on Object {
       // Best-effort: an unreachable/already-stopped group never breaks release.
     }
@@ -1217,9 +1215,7 @@ class _SelfManagedProcessLease extends LeaseCapability<ProcessHandle> {
     // lease (idempotent).
     await handle.events?.close();
     try {
-      await request.allocation.transport.stop(
-        request.allocation.address.providerName,
-      );
+      await request.inputs.transport.stop(request.inputs.address.providerName);
     } on Object {
       // Best-effort: an unreachable/already-stopped group never breaks release.
     }

@@ -64,16 +64,16 @@ Future<ProcessHandle> stationProcessSpawner(
   Duration reservationDeadline = const Duration(seconds: 15),
   Duration reservationPollPeriod = const Duration(milliseconds: 50),
 }) async {
-  final ctx = request.allocation;
-  final name = ctx.address.providerName;
-  final token = ctx.env['GRID_INSTANCE_TOKEN'] ?? '';
+  final inputs = request.inputs;
+  final name = inputs.address.providerName;
+  final token = inputs.env['GRID_INSTANCE_TOKEN'] ?? '';
   // The incarnation's trajectory name, read off the SAME env overlay as the
   // freshness token (stage1-wiring §2.1): the host mints both once per mount,
   // this spawn carries them onto the handle, and the breadcrumb persists them
   // together. A FRESH spawn is the only mint site — adoption never reaches
   // here, so the attempt an adopted survivor already owns is never overwritten.
-  final attemptId = ctx.env['GRID_ATTEMPT_ID'] ?? '';
-  final tap = ProcessEventTap.open(ctx.transport.events, name);
+  final attemptId = inputs.env['GRID_ATTEMPT_ID'] ?? '';
+  final tap = ProcessEventTap.open(inputs.transport.events, name);
   final started = Completer<ProcessHandle>();
   ProcessHandle mint({required int pid, int? pgid}) => ProcessHandle(
     pgid: pgid ?? pid,
@@ -82,14 +82,14 @@ Future<ProcessHandle> stationProcessSpawner(
     attemptId: attemptId,
     events: tap,
   );
-  final sub = ctx.transport.events.where((e) => e.name == name).listen((e) {
+  final sub = inputs.transport.events.where((e) => e.name == name).listen((e) {
     if (started.isCompleted) return;
     switch (e) {
       case SessionStarted(:final pid, :final pgid):
         // Surface the start through the host's sink FIRST (the host persists
         // `state=running`; the vendor — not the cursor — owns pgid/pid/token,
         // which land on `grid.lease.*` right after acquire returns).
-        ctx.sink(AllocationStarted(pid: pid, pgid: pgid));
+        inputs.sink(AllocationStarted(pid: pid, pgid: pgid));
         started.complete(mint(pid: pid, pgid: pgid));
       case Died():
         started.completeError(
@@ -138,8 +138,8 @@ Future<ProcessHandle> stationProcessSpawner(
       trajectoryRecorderOf(context).provisioningAttempt(
         workBeadId: args.beadId,
         attemptId: attemptId,
-        sessionId: ctx.address.sessionId,
-        stepPath: ctx.address.nodePath,
+        sessionId: inputs.address.sessionId,
+        stepPath: inputs.address.nodePath,
       );
       await sc.provisionWorkspace(
         beadId: args.beadId,
@@ -151,9 +151,9 @@ Future<ProcessHandle> stationProcessSpawner(
       throw StateError('cancelled before spawn ($name)');
     }
     final base = request.capability.spawn(context, args);
-    final config = base.copyWith(env: {...base.env, ...ctx.env});
+    final config = base.copyWith(env: {...base.env, ...inputs.env});
     try {
-      await ctx.transport.start(name, config);
+      await inputs.transport.start(name, config);
     } on SessionAlreadyExists {
       // A duplicate acquire raced an EXISTING incarnation of this name (a
       // re-fired ready event). What happens next depends on how far the
@@ -178,7 +178,7 @@ Future<ProcessHandle> stationProcessSpawner(
       //  - the name is not even held ⇒ fail LOUD immediately.
       if (!started.isCompleted) {
         _resolveAlreadyExisting(
-          ctx,
+          inputs,
           name,
           started,
           mint,
@@ -207,21 +207,21 @@ Future<ProcessHandle> stationProcessSpawner(
 /// and every check-then-complete below is a synchronous block (no interleave
 /// is possible between a passed guard and its completion).
 void _resolveAlreadyExisting(
-  AllocationContext ctx,
+  AllocationInputs inputs,
   String name,
   Completer<ProcessHandle> started,
   ProcessHandle Function({required int pid, int? pgid}) mint, {
   required Duration deadline,
   required Duration pollPeriod,
 }) {
-  final identity = ctx.transport.identityOf(name);
+  final identity = inputs.transport.identityOf(name);
   if (identity != null) {
     // Still LIVE: surface running + mint the handle synchronously.
-    ctx.sink(AllocationStarted(pid: identity.pid, pgid: identity.pgid));
+    inputs.sink(AllocationStarted(pid: identity.pid, pgid: identity.pgid));
     started.complete(mint(pid: identity.pid, pgid: identity.pgid));
     return;
   }
-  final terminal = ctx.transport.terminalOf(name);
+  final terminal = inputs.transport.terminalOf(name);
   if (terminal != null) {
     // Already DEAD: its retained terminal proves the incarnation is over —
     // an acquire cannot bind it, so fail LOUD and let the frontier respawn
@@ -234,7 +234,7 @@ void _resolveAlreadyExisting(
     );
     return;
   }
-  if (!ctx.transport.isRunning(name)) {
+  if (!inputs.transport.isRunning(name)) {
     started.completeError(
       StateError(
         'session "$name" reported SessionAlreadyExists but the transport '
@@ -258,15 +258,15 @@ void _resolveAlreadyExisting(
     while (!started.isCompleted) {
       await Future<void>.delayed(pollPeriod);
       if (started.isCompleted) return;
-      final identity = ctx.transport.identityOf(name);
+      final identity = inputs.transport.identityOf(name);
       if (identity != null) {
         // The spawn landed but our listener lost the wake-up race — bind
         // from state (belt-and-braces; normally the listener wins).
-        ctx.sink(AllocationStarted(pid: identity.pid, pgid: identity.pgid));
+        inputs.sink(AllocationStarted(pid: identity.pid, pgid: identity.pgid));
         started.complete(mint(pid: identity.pid, pgid: identity.pgid));
         return;
       }
-      final terminal = ctx.transport.terminalOf(name);
+      final terminal = inputs.transport.terminalOf(name);
       if (terminal != null) {
         started.completeError(
           StateError(
@@ -276,7 +276,7 @@ void _resolveAlreadyExisting(
         );
         return;
       }
-      if (!ctx.transport.isRunning(name)) {
+      if (!inputs.transport.isRunning(name)) {
         started.completeError(
           StateError(
             'session "$name" was reserved mid-spawn when this duplicate '
@@ -328,12 +328,12 @@ Future<StepOutcome> stationProcessDispatcher(
   TreeContext context,
   StepArgs args,
 ) async {
-  final ctx = request.allocation;
-  final name = ctx.address.providerName;
+  final inputs = request.inputs;
+  final name = inputs.address.providerName;
 
   // STATE first: the retained terminal (RuntimeProvider.terminalOf).
   ({StepSignal signal, RuntimeEvent event})? resolved;
-  final held = ctx.transport.terminalOf(name);
+  final held = inputs.transport.terminalOf(name);
   if (held != null) {
     final signal = request.capability.interpretEvent(held);
     if (signal != StepSignal.none) {
@@ -348,7 +348,7 @@ Future<StepOutcome> stationProcessDispatcher(
   if (resolved == null) {
     final source =
         handle.events?.stream ??
-        ctx.transport.events.where((e) => e.name == name);
+        inputs.transport.events.where((e) => e.name == name);
     final signalled = Completer<({StepSignal signal, RuntimeEvent event})>();
     final sub = source.listen((e) {
       if (signalled.isCompleted) return;
@@ -375,7 +375,7 @@ Future<StepOutcome> stationProcessDispatcher(
     case StepSignal.complete:
       if (args.cancel.isCancelled) return const Ok();
       if (_mustFenceLeasedCompletion(request.capability, resolved.event)) {
-        final signal = await _probeLeasedWorkSignal(context, ctx);
+        final signal = await _probeLeasedWorkSignal(context, inputs);
         switch (signal) {
           case GateOutcome.clear:
             break;
@@ -444,7 +444,7 @@ bool _mustFenceLeasedCompletion(
 
 Future<GateOutcome> _probeLeasedWorkSignal(
   TreeContext context,
-  AllocationContext ctx,
+  AllocationInputs inputs,
 ) {
   // Synchronous `read<T>()` EFFECT snapshots keep this probe non-binding and
   // do not subscribe the branch.
@@ -453,9 +453,12 @@ Future<GateOutcome> _probeLeasedWorkSignal(
   if (services.sourceControl == null || workspace == null) {
     return Future<GateOutcome>.value(GateOutcome.clear);
   }
-  return ctx
+  return inputs
       .workSignal(workspace.workspaceDir)
-      .timeout(ctx.workSignalTimeout, onTimeout: () => GateOutcome.probeError);
+      .timeout(
+        inputs.workSignalTimeout,
+        onTimeout: () => GateOutcome.probeError,
+      );
 }
 
 /// The production [ProcessLeaseVendor] over [services] — the kernel-root

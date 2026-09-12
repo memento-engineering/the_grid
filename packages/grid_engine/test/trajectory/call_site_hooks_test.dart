@@ -202,16 +202,17 @@ final class _StartedCap extends Capability {
   const _StartedCap();
 
   @override
-  Allocation createAllocation(AllocationContext ctx) => _StartedAllocation(ctx);
+  Allocation createAllocation(AllocationInputs inputs) =>
+      _StartedAllocation(inputs);
 }
 
 final class _StartedAllocation extends Allocation {
-  _StartedAllocation(super.context);
+  _StartedAllocation(super.inputs);
 
   @override
-  Future<void> startOrAdopt() async {
+  Future<void> startOrAdopt(TreeContext treeContext) async {
     state = AllocationState.live;
-    context.sink(const AllocationStarted(pid: 41, pgid: 42));
+    inputs.sink(const AllocationStarted(pid: 41, pgid: 42));
   }
 
   @override
@@ -477,8 +478,7 @@ _Vended _vendor({
     ProcessLeaseRequest(
       stepBeadId: _stepBeadId,
       capability: const _NullProcessCap(),
-      allocation: AllocationContext(
-        treeContext: _NullTreeContext(),
+      inputs: AllocationInputs(
         args: StepArgs(
           params: const {},
           nodePath: 'tg-1/agent',

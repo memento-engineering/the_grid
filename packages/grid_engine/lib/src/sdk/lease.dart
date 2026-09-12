@@ -20,11 +20,11 @@
 ///   `detach`       — LEAVE the handle held + keep it for re-adoption (daemon-only);
 ///   `update`       — declined (a lease is left running on a dependency change).
 ///
-/// A **daemon** lease (`context.kind == StepKind.daemon`) reports `ready` (a
+/// A **daemon** lease (`inputs.kind == StepKind.daemon`) reports `ready` (a
 /// positive terminal that STAYS LIVE, publishing its rendezvous payload) and is
 /// adopt/detach-capable; a **job** lease reports `complete` (latches) —
 /// respawn-or-skip. The discriminator is the circuit step's kind, threaded down
-/// on [AllocationContext.kind], exactly as [ProcessAllocation].
+/// on [AllocationInputs.kind], exactly as [ProcessAllocation].
 ///
 /// **The effect layer holds no writer** (invariant 2): it REPORTS through the
 /// sink; the Host persists off-build. It may freely hold its transport (D3).
@@ -110,16 +110,16 @@ abstract class LeaseCapability<H> extends Capability {
       null;
 
   @override
-  Allocation createAllocation(AllocationContext ctx) =>
-      LeaseAllocation<H>(this, ctx);
+  Allocation createAllocation(AllocationInputs inputs) =>
+      LeaseAllocation<H>(this, inputs);
 }
 
 /// The carrier for a HELD lease (ADR-0009 D6). Holds the bound handle as an
 /// instance field, drives the [capability]'s hooks, and REPORTS through the sink
 /// — never writes. Transport-agnostic: it never names a bus.
 class LeaseAllocation<H> extends Allocation {
-  /// Creates the allocation driving [capability] under [context].
-  LeaseAllocation(this.capability, super.context);
+  /// Creates the allocation driving [capability] from [inputs].
+  LeaseAllocation(this.capability, super.inputs);
 
   /// The pure lease capability describing what to lease and how to run on it.
   final LeaseCapability<H> capability;
@@ -139,17 +139,16 @@ class LeaseAllocation<H> extends Allocation {
 
   /// A daemon lease is adopt-capable + detach-capable; a job lease is
   /// respawn-or-skip (never adopts/detaches — D6). Keyed off the circuit step's
-  /// kind on [AllocationContext.kind].
+  /// kind on [AllocationInputs.kind].
   @override
-  bool get isAdoptable => context.kind == StepKind.daemon;
+  bool get isAdoptable => inputs.kind == StepKind.daemon;
 
   @override
-  bool get isDetachable => context.kind == StepKind.daemon;
+  bool get isDetachable => inputs.kind == StepKind.daemon;
 
   @override
-  Future<void> startOrAdopt() async {
-    final tree = context.treeContext;
-    final args = context.args;
+  Future<void> startOrAdopt(TreeContext treeContext) async {
+    final args = inputs.args;
 
     // ADOPT a still-valid prior handle (a detached daemon lease or a crash
     // survivor) — reattach WITHOUT re-acquiring or re-dispatching (D4).
@@ -159,7 +158,7 @@ class LeaseAllocation<H> extends Allocation {
     if (isAdoptable) {
       try {
         final prior = await runCapabilityGuarded(
-          () => capability.adoptable(tree, args),
+          () => capability.adoptable(treeContext, args),
         );
         if (args.cancel.isCancelled) {
           state = AllocationState.gone;
@@ -168,7 +167,7 @@ class LeaseAllocation<H> extends Allocation {
         final fresh = prior == null
             ? false
             : await runCapabilityGuarded(
-                () => capability.proveFresh(prior.handle, tree, args),
+                () => capability.proveFresh(prior.handle, treeContext, args),
               );
         if (prior != null && fresh) {
           if (args.cancel.isCancelled) {
@@ -182,7 +181,7 @@ class LeaseAllocation<H> extends Allocation {
           _bind(prior.handle);
           _adopted = true;
           state = AllocationState.ready;
-          context.sink(const AllocationReady());
+          inputs.sink(const AllocationReady());
           return;
         }
       } on Object catch (e) {
@@ -200,7 +199,7 @@ class LeaseAllocation<H> extends Allocation {
     final LeaseResolution<H> resolution;
     try {
       resolution = await runCapabilityGuarded(
-        () => capability.acquire(tree, args),
+        () => capability.acquire(treeContext, args),
       );
     } on Object catch (e) {
       state = AllocationState.gone;
@@ -230,7 +229,7 @@ class LeaseAllocation<H> extends Allocation {
     final StepOutcome outcome;
     try {
       outcome = await runCapabilityGuarded(
-        () => capability.dispatchOn(_handle as H, tree, args),
+        () => capability.dispatchOn(_handle as H, treeContext, args),
       );
     } on Object catch (e) {
       state = AllocationState.gone;
@@ -257,9 +256,9 @@ class LeaseAllocation<H> extends Allocation {
   void _reportOutcome(StepOutcome outcome) {
     switch (outcome) {
       case Ok(:final payload):
-        if (context.kind == StepKind.daemon) {
+        if (inputs.kind == StepKind.daemon) {
           state = AllocationState.ready;
-          context.sink(AllocationReady(payload)); // non-latching (OQ-5)
+          inputs.sink(AllocationReady(payload)); // non-latching (OQ-5)
         } else {
           state = AllocationState.gone;
           _reportTerminal(AllocationCompleted(payload));
@@ -275,7 +274,7 @@ class LeaseAllocation<H> extends Allocation {
   void _reportTerminal(AllocationReport report) {
     if (_terminal) return;
     _terminal = true;
-    context.sink(report);
+    inputs.sink(report);
   }
 
   @override
@@ -295,7 +294,7 @@ class LeaseAllocation<H> extends Allocation {
     state = AllocationState.dying;
     // Cancel FIRST — a racing startOrAdopt that hasn't bound a handle bails at
     // its guard (no orphan lease after unmount).
-    context.args.cancel.cancel();
+    inputs.args.cancel.cancel();
     // dispose == RELEASE (the floor, D4): free the slot whether we acquired it or
     // reattached a survivor. Once-only + idempotent.
     if (_hasHandle && !_released) {

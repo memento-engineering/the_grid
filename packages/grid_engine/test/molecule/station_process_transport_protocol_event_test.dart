@@ -79,8 +79,7 @@ void main() {
     );
     var workSignalProbes = 0;
     final args = stepArgs('tg-1/channel');
-    final allocation = AllocationContext(
-      treeContext: tree,
+    final inputs = AllocationInputs(
       args: args,
       transport: transport,
       address: const AllocationAddress('tgdog-s', 'tg-1/channel'),
@@ -94,7 +93,7 @@ void main() {
     final request = ProcessLeaseRequest(
       stepBeadId: 'tgdog-step-channel',
       capability: const _ProtocolEventCapability(),
-      allocation: allocation,
+      inputs: inputs,
     );
     final dispatch = stationProcessDispatcher(
       const ProcessHandle(pgid: 44, pid: 44, token: 'channel-token'),

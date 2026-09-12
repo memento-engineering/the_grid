@@ -50,8 +50,7 @@ ProcessLeaseRequest _request(FakeRuntimeProvider transport) =>
     ProcessLeaseRequest(
       stepBeadId: _stepBeadId,
       capability: const _JobCap(),
-      allocation: AllocationContext(
-        treeContext: FakeTreeContext(),
+      inputs: AllocationInputs(
         args: stepArgs('tg-1/lease'),
         transport: transport,
         address: const AllocationAddress('tgdog-s', 'tg-1/lease'),
@@ -71,8 +70,8 @@ Future<ProcessHandle> _spawnWithTap(
   pid: 4243,
   token: 'tok-bc',
   events: ProcessEventTap.open(
-    request.allocation.transport.events,
-    request.allocation.address.providerName,
+    request.inputs.transport.events,
+    request.inputs.address.providerName,
   ),
 );
 
