@@ -260,6 +260,7 @@ class StationJoinBridge {
     _push(
       JoinedSnapshot(
         graph: _latest.graph,
+        stateCapturedAt: _latest.stateCapturedAt,
         sessionsByWorkBead: _latest.sessionsByWorkBead,
         surplusSessionsByWorkBead: _latest.surplusSessionsByWorkBead,
         mountAttemptsByWorkBead: _latest.mountAttemptsByWorkBead,
@@ -425,6 +426,7 @@ class StationJoinBridge {
     }
     return JoinedSnapshot(
       graph: graph,
+      stateCapturedAt: state?.capturedAt,
       sessionsByWorkBead: sessions,
       surplusSessionsByWorkBead: surplus,
       mountAttemptsByWorkBead: attempts,

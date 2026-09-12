@@ -33,11 +33,12 @@ GraphSnapshot graphOf(
   List<Bead> beads, {
   Set<String>? readyIds,
   int tick = 0,
+  DateTime? capturedAt,
 }) => GraphSnapshot.fromParts(
   beads: beads,
   dependencies: const [],
   readyIds: readyIds ?? beads.map((b) => b.id).toSet(),
-  capturedAt: DateTime.fromMillisecondsSinceEpoch(tick),
+  capturedAt: capturedAt ?? DateTime.fromMillisecondsSinceEpoch(tick),
 );
 
 Bead work(String id, {bool closed = false}) => Bead(
@@ -98,6 +99,84 @@ void main() {
     state: stateSrc,
     onUnresolvedCrossLink: loud.add,
   )..start();
+
+  test(
+    'state freshness is carried without polling timers or retries',
+    () async {
+      final initialStateCapture = DateTime.utc(2026, 9, 10, 0, 30, 28);
+      final workOnlyCapture = DateTime.utc(2026, 9, 10, 0, 30, 42);
+      final freshStateCapture = DateTime.utc(2026, 9, 10, 0, 30, 44);
+      workSrc = FakeSource(
+        graphOf([work('tg-1')], capturedAt: workOnlyCapture),
+      );
+      stateSrc = FakeSource(
+        graphOf(const [], readyIds: const {}, capturedAt: initialStateCapture),
+      );
+      final bridge = bridgeOf();
+      addTearDown(bridge.dispose);
+
+      expect(read(bridge.notifier).stateCapturedAt, initialStateCapture);
+
+      workSrc.emit(
+        graphOf([
+          work('tg-1'),
+          work('tg-2'),
+        ], capturedAt: workOnlyCapture.add(const Duration(seconds: 1))),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        read(bridge.notifier).stateCapturedAt,
+        initialStateCapture,
+        reason: 'a WORK-only emission cannot claim a fresher STATE read',
+      );
+
+      stateSrc.emit(
+        graphOf(const [], readyIds: const {}, capturedAt: freshStateCapture),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(read(bridge.notifier).stateCapturedAt, freshStateCapture);
+
+      bridge.repush();
+      expect(
+        read(bridge.notifier).stateCapturedAt,
+        freshStateCapture,
+        reason: 'a cooldown re-poke must preserve the joined read witness',
+      );
+
+      final bridgeSource = File(
+        'lib/src/bridge/station_join_bridge.dart',
+      ).readAsStringSync();
+      expect(
+        RegExp(r'\.snapshots\.listen\(').allMatches(bridgeSource),
+        hasLength(2),
+        reason: 'freshness rides the existing WORK and STATE subscriptions',
+      );
+      expect(bridgeSource, isNot(contains('Timer.periodic')));
+      expect(bridgeSource, isNot(contains('Future.delayed')));
+
+      for (final path in const [
+        'lib/src/domain/joined_snapshot.dart',
+        'lib/src/domain/mount_eligibility.dart',
+      ]) {
+        final source = File(path).readAsStringSync();
+        for (final forbidden in const [
+          'dart:async',
+          'BdCliService',
+          'DoltQueryService',
+          'BeadProbeReader',
+          'SnapshotSource',
+          'Timer',
+          'Future.delayed',
+        ]) {
+          expect(
+            source,
+            isNot(contains(forbidden)),
+            reason: '$path must carry or compare freshness, never fetch it',
+          );
+        }
+      }
+    },
+  );
 
   group('the state-store link edge source', () {
     test(

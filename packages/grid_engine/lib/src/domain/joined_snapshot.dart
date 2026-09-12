@@ -18,6 +18,7 @@ class JoinedSnapshot {
   /// Creates a joined value over [graph] and [sessionsByWorkBead].
   const JoinedSnapshot({
     required this.graph,
+    this.stateCapturedAt,
     this.sessionsByWorkBead = const {},
     this.surplusSessionsByWorkBead = const {},
     this.mountAttemptsByWorkBead = const {},
@@ -34,6 +35,7 @@ class JoinedSnapshot {
         readyIds: const [],
         capturedAt: DateTime.fromMillisecondsSinceEpoch(0),
       ),
+      stateCapturedAt = null,
       sessionsByWorkBead = const {},
       surplusSessionsByWorkBead = const {},
       mountAttemptsByWorkBead = const {},
@@ -41,6 +43,13 @@ class JoinedSnapshot {
 
   /// The read-workspace work graph (pristine source — read-only, A37).
   final GraphSnapshot graph;
+
+  /// The capture instant of the exact STATE snapshot used for this join.
+  ///
+  /// `null` means no STATE read has been observed. This is deliberately
+  /// separate from [graph]'s WORK capture instant: admission compares it with
+  /// a work bead's approval stamp before trusting the joined cross-link set.
+  final DateTime? stateCapturedAt;
 
   /// The_grid's owned session cursor per work bead id (from the state store).
   ///

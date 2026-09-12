@@ -337,6 +337,11 @@ class _WorkListState extends State<WorkList>
       ),
       dispatchableWorkClause(resident: seed.substationConfig.resident),
       driveListClause(seed.substationConfig.driveList),
+      // A per-candidate freshness refusal is orthogonal to the pending bin's
+      // priority-then-bead-id ordering below. It cannot admit a terminal or
+      // paused row; the linked-session disposition still decides those after
+      // this pure gate.
+      freshCrossLinkReadClause(_snapshot.stateCapturedAt),
       crossLinkExclusionClause(
         _snapshot.frontierExclusionsByBeadId,
         _snapshot.sessionsByWorkBead,

@@ -77,6 +77,7 @@ JoinedSnapshot _joined({
   Map<String, SessionProjection> sessions = const {},
   Map<String, MountAttemptRecord> mountAttempts = const {},
   Map<String, String> frontierExclusionsByBeadId = const {},
+  DateTime? stateCapturedAt,
 }) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
     beads: beads,
@@ -84,6 +85,7 @@ JoinedSnapshot _joined({
     readyIds: ready,
     capturedAt: DateTime(2026),
   ),
+  stateCapturedAt: stateCapturedAt,
   sessionsByWorkBead: sessions,
   mountAttemptsByWorkBead: mountAttempts,
   frontierExclusionsByBeadId: frontierExclusionsByBeadId,
@@ -1375,6 +1377,7 @@ void main() {
               sessionId: 'tgdog-live',
             ),
           },
+          stateCapturedAt: DateTime.utc(2026, 9, 4),
         ),
       );
       final recorder = _Recorder();

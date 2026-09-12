@@ -99,6 +99,7 @@ final class _Harness {
 
   void pushAndFlush({
     Set<String>? readyIds,
+    DateTime? stateCapturedAt,
     Map<String, String> frontierExclusionsByBeadId = const {},
     Map<String, SessionProjection> sessionsByWorkBead = const {},
   }) {
@@ -107,6 +108,7 @@ final class _Harness {
         bead,
         _second++,
         readyIds: readyIds,
+        stateCapturedAt: stateCapturedAt,
         frontierExclusionsByBeadId: frontierExclusionsByBeadId,
         sessionsByWorkBead: sessionsByWorkBead,
       ),
@@ -124,6 +126,7 @@ JoinedSnapshot _snapshot(
   Bead bead,
   int second, {
   Set<String>? readyIds,
+  DateTime? stateCapturedAt,
   List<Bead> additionalBeads = const [],
   Map<String, String> frontierExclusionsByBeadId = const {},
   Map<String, SessionProjection> sessionsByWorkBead = const {},
@@ -134,6 +137,7 @@ JoinedSnapshot _snapshot(
     readyIds: readyIds ?? {bead.id},
     capturedAt: DateTime(2026, 1, 1, 0, 0, second),
   ),
+  stateCapturedAt: stateCapturedAt,
   sessionsByWorkBead: sessionsByWorkBead,
   frontierExclusionsByBeadId: frontierExclusionsByBeadId,
 );
@@ -157,9 +161,11 @@ Future<void> _settleAdmissions(_Harness harness) async {
 }
 
 _Harness _mountHarness({
+  Bead? bead,
   MountEligibilityPredicate? mountEligibility,
   ExplorationTransport? transport,
   Set<String>? readyIds,
+  DateTime? stateCapturedAt,
   List<Bead> additionalBeads = const [],
   Map<String, String> frontierExclusionsByBeadId = const {},
   Map<String, SessionProjection> sessionsByWorkBead = const {},
@@ -167,12 +173,13 @@ _Harness _mountHarness({
   bool includeStationServices = true,
   TrajectoryRecorderScope? trajectoryScope,
 }) {
-  final bead = _task();
+  final workBead = bead ?? _task();
   final joined = JoinedSnapshotNotifier(
     _snapshot(
-      bead,
+      workBead,
       0,
       readyIds: readyIds,
+      stateCapturedAt: stateCapturedAt,
       additionalBeads: additionalBeads,
       frontierExclusionsByBeadId: frontierExclusionsByBeadId,
       sessionsByWorkBead: sessionsByWorkBead,
@@ -219,12 +226,109 @@ _Harness _mountHarness({
     owner: owner,
     root: root,
     joined: joined,
-    bead: bead,
+    bead: workBead,
     runner: fakes.runner,
   );
 }
 
 void main() {
+  test(
+    'fresh cross-link clause gates valid approvals until the state read catches up',
+    () async {
+      final approval = DateTime.utc(2026, 9, 10, 5, 30, 41);
+      final approved = Bead(
+        id: 'tg-1',
+        issueType: IssueType.task,
+        status: BeadStatus.open,
+        metadata: const {'grid.approved_at': '2026-09-10T00:30:41-05:00'},
+      );
+      const clause = 'fresh cross-link read pending: tg-1';
+
+      MountEligibilityDecision evaluate(Bead bead, DateTime? capturedAt) =>
+          freshCrossLinkReadClause(capturedAt)(bead);
+
+      expect(
+        evaluate(approved, null),
+        const MountEligibilityDecision.refused(clause: clause),
+      );
+      expect(
+        evaluate(approved, approval.subtract(const Duration(microseconds: 1))),
+        const MountEligibilityDecision.refused(clause: clause),
+      );
+      expect(
+        evaluate(approved, approval),
+        const MountEligibilityDecision.eligible(),
+      );
+      expect(
+        evaluate(approved, approval.add(const Duration(microseconds: 1))),
+        const MountEligibilityDecision.eligible(),
+      );
+
+      for (final bead in <Bead>[
+        _task(),
+        const Bead(
+          id: 'tg-1',
+          issueType: IssueType.task,
+          metadata: {'grid.approved_at': ''},
+        ),
+        const Bead(
+          id: 'tg-1',
+          issueType: IssueType.task,
+          metadata: {'grid.approved_at': 41},
+        ),
+        const Bead(
+          id: 'tg-1',
+          issueType: IssueType.task,
+          metadata: {'grid.approved_at': 'not-an-instant'},
+        ),
+      ]) {
+        expect(
+          evaluate(bead, null),
+          const MountEligibilityDecision.eligible(),
+          reason: 'the vended approval policy owns malformed or absent values',
+        );
+      }
+
+      final stale = approval.subtract(const Duration(seconds: 13));
+      final authorityTransport = _RecordingTransport();
+      final authority = _mountHarness(
+        bead: approved,
+        stateCapturedAt: stale,
+        transport: authorityTransport,
+      );
+      expect(authority.workBeads(), isEmpty);
+      expect(
+        authorityTransport.flares.single.name,
+        'work.mountEligibilityRefused',
+      );
+      expect(authorityTransport.flares.single.data, {
+        'beadId': 'tg-1',
+        'clause': clause,
+      });
+
+      authority.pushAndFlush(stateCapturedAt: approval);
+      await _settleAdmissions(authority);
+      expect(authority.workBeads().map((work) => work.bead.id), ['tg-1']);
+      expect(
+        authorityTransport.flares.last.name,
+        'work.mountEligibilityRestored',
+      );
+      expect(authorityTransport.flares.last.data, {
+        'beadId': 'tg-1',
+        'clause': clause,
+      });
+
+      final offline = _mountHarness(
+        bead: approved,
+        stateCapturedAt: stale,
+        includeStationServices: false,
+      );
+      expect(offline.workBeads(), isEmpty);
+      offline.pushAndFlush(stateCapturedAt: approval);
+      expect(offline.workBeads().map((work) => work.bead.id), ['tg-1']);
+    },
+  );
+
   test(
     'offline fallback refuses fresh work after the shared trajectory halt',
     () {

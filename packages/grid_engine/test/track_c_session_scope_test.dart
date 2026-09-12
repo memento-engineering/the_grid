@@ -87,6 +87,7 @@ JoinedSnapshot _joined({
   required Set<String> ready,
   List<BeadDependency> dependencies = const [],
   Map<String, SessionProjection> sessions = const {},
+  DateTime? stateCapturedAt,
 }) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
     beads: beads,
@@ -94,6 +95,7 @@ JoinedSnapshot _joined({
     readyIds: ready,
     capturedAt: DateTime(2026),
   ),
+  stateCapturedAt: stateCapturedAt,
   sessionsByWorkBead: sessions,
 );
 
@@ -367,6 +369,7 @@ void main() {
               sessionId: 'tgdog-live',
             ),
           },
+          stateCapturedAt: DateTime.utc(2026, 9, 4),
         );
 
         // the-frontier-demotes-surplus-linked-sessions governs the adjacent
