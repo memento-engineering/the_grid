@@ -2,7 +2,6 @@ import 'package:genesis_tree/genesis_tree.dart';
 // The SDK already vends this engine-private provider vocabulary as its public
 // composition bridge; roster composition uses that same pinned seam.
 // ignore: implementation_imports
-import 'package:grid_engine/src/seeds/provider.dart';
 import 'package:state_notifier/state_notifier.dart' show RemoveListener;
 
 import '../composition/composition.dart' show Substations;

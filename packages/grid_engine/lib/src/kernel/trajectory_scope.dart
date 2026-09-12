@@ -18,8 +18,6 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:meta/meta.dart';
 
-import '../seeds/provider.dart';
-
 /// The stable gate reason for every cut-only trajectory admission halt.
 const String kTrajectoryAdmissionHaltGateReason = 'trajectory-admission-halted';
 

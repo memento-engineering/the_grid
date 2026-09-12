@@ -12,7 +12,6 @@ import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
     show StationLockRecord;
 import 'package:grid_engine/grid_engine.dart';
 // The availability registry root, imported the way run_grid.dart does.
-import 'package:grid_engine/src/seeds/provider.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_sdk/grid_sdk.dart'
     show TreeOwner, GridCommandHandler, GridCommandRequest, GridCommandResult;

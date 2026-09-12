@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart' show TreeProjector;
-import 'package:grid_engine/src/seeds/provider.dart';
 import 'package:state_notifier/state_notifier.dart';
 
 import '../stores/state_store_gc.dart';

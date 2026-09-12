@@ -85,7 +85,6 @@ import '../sdk/cursor.dart';
 import '../sdk/circuit.dart';
 import '../sdk/frontier.dart';
 import '../sdk/route.dart' show EscalationRequest;
-import '../seeds/provider.dart';
 import 'capability_host.dart' show persistRaisedEscalation;
 import 'capability_registry.dart';
 import 'circuit_scope.dart';

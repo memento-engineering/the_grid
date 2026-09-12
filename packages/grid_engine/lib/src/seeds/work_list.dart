@@ -22,7 +22,6 @@ import '../kernel/station_services.dart';
 import '../kernel/trajectory_scope.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
 import '../sdk/capability.dart';
-import 'provider.dart';
 import 'work_bead.dart';
 
 /// The work-axis observer and projection of the station admission authority.

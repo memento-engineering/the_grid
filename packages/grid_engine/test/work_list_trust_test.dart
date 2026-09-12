@@ -5,7 +5,6 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:test/test.dart';
-import 'package:grid_engine/src/seeds/provider.dart';
 
 final class _ThrowingTrust implements Trust {
   var calls = 0;

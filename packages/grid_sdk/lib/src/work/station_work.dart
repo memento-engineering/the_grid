@@ -2,7 +2,6 @@ import 'package:genesis_tree/genesis_tree.dart';
 // The engine's OLD SubstationScope seed collides in name with the SDK's scope
 // VALUE (`scopes.dart`) — hide it; this module reads only the SDK scope.
 import 'package:grid_engine/grid_engine.dart' hide SubstationScope;
-import 'package:grid_engine/src/seeds/provider.dart';
 
 import '../composition/scopes.dart';
 import '../roster/roster_seat.dart' show SubstationDrain;

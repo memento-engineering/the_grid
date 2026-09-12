@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
-import 'package:grid_engine/src/seeds/provider.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:test/test.dart';
 

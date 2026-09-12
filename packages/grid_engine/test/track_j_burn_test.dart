@@ -13,7 +13,6 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
-import 'package:grid_engine/src/seeds/provider.dart';
 
 // --- the Burn circuits (§9) --------------------------------------------------
 

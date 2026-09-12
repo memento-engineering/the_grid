@@ -10,7 +10,6 @@ import 'dart:async';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
-import 'package:grid_engine/src/seeds/provider.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';

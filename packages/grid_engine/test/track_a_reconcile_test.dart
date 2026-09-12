@@ -15,7 +15,6 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:test/test.dart';
-import 'package:grid_engine/src/seeds/provider.dart';
 
 // ---------------------------------------------------------------------------
 // Fakes: an SessionResolver that mounts a recording subtree-root per work bead.

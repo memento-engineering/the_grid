@@ -18,7 +18,6 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
-import 'package:grid_engine/src/seeds/provider.dart';
 
 /// The REAL transport-backed lease vendor (tg-h4u) — routes a molecule-mode
 /// `ProcessCapability` through the SAME `RuntimeProvider` machinery the
