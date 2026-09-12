@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:grid_cli/grid_cli.dart';
+import 'package:grid_engine/grid_engine.dart' show ExplorationTransport;
 import 'package:test/test.dart';
 
 void main() {
@@ -18,15 +19,46 @@ void main() {
     });
   });
 
-  test('throwing line writer propagates', () {
+  test('throwing line writer is contained before a later transport', () {
+    final transport = _RecordingTransport();
     final reporter = StationDiagnosticsReporter(
       writeLine: (_) => throw StateError('disk full'),
-    );
+    )..addTransport(transport);
 
     expect(
       () => reporter.flare('work.held', const <String, String>{}),
-      throwsStateError,
+      returnsNormally,
     );
+    expect(transport.flares, hasLength(1));
+    expect(transport.flares.single.name, 'work.held');
+    expect(transport.flares.single.data, isEmpty);
+  });
+
+  test('rate limit accepts once before the whole fan-out', () {
+    var now = DateTime.utc(2026, 9, 12);
+    final order = <String>[];
+    final first = _RecordingTransport(onFlare: (_) => order.add('first'));
+    final second = _RecordingTransport(onFlare: (_) => order.add('second'));
+    final reporter =
+        StationDiagnosticsReporter(
+            writeLine: (_) => order.add('line'),
+            now: () => now,
+          )
+          ..addTransport(first)
+          ..addTransport(second);
+
+    reporter.flare('relay.escalated', {'beadId': 'tg-a'});
+    reporter.flare('relay.escalated', {'beadId': 'tg-a'});
+
+    expect(order, ['line', 'first', 'second']);
+    expect(first.flares, hasLength(1));
+    expect(second.flares, hasLength(1));
+
+    now = now.add(const Duration(seconds: 30));
+    reporter.flare('relay.escalated', {'beadId': 'tg-a'});
+    expect(order, ['line', 'first', 'second', 'line', 'first', 'second']);
+    expect(first.flares, hasLength(2));
+    expect(second.flares, hasLength(2));
   });
 
   test('step failure flares use independent leading-edge rate limits', () {
@@ -211,4 +243,17 @@ void main() {
 
     await done;
   });
+}
+
+final class _RecordingTransport implements ExplorationTransport {
+  _RecordingTransport({this.onFlare});
+
+  final void Function(String name)? onFlare;
+  final flares = <({String name, Map<String, String> data})>[];
+
+  @override
+  void flare(String name, Map<String, String> data) {
+    flares.add((name: name, data: Map<String, String>.of(data)));
+    onFlare?.call(name);
+  }
 }

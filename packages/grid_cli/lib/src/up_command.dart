@@ -23,6 +23,7 @@ import 'package:genesis_foundation/genesis_foundation.dart'
         TreeSnapshot;
 import 'package:grid_engine/grid_engine.dart'
     show
+        ExplorationTransport,
         MountEligible,
         MountRefused,
         SessionProjection,
@@ -114,7 +115,7 @@ abstract interface class GridResource {
 }
 
 /// The control resource owned by a resident boot.
-abstract interface class ControlResource {
+abstract interface class ControlResource implements ExplorationTransport {
   String get url;
   Future<void> dispose();
 }
@@ -618,6 +619,7 @@ class UpCommand extends Command<int> {
         assetCatalogResolver: assetCatalogResolver,
         treeProjector: treeProjector,
       );
+      diagnostics.addTransport(armingControl);
       await stationLock.updateControl(
         controlUrl: armingControl.url,
         token: token,
@@ -936,6 +938,9 @@ final class _ControlResource implements ControlResource {
 
   @override
   String get url => _control.url;
+  @override
+  void flare(String name, Map<String, String> data) =>
+      _control.flare(name, data);
   @override
   Future<void> dispose() => _control.dispose();
 }

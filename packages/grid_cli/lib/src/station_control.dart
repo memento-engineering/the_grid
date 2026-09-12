@@ -13,9 +13,11 @@
 /// the control plane cannot be a WORK trigger (`bd` stays the only work intake).
 /// operator one-shots ARE control-plane requests.
 /// `/healthz`, `/status`, `/hooks`, `/assets`, and the diagnostics WebSocket
-/// `/stream` remain read-only; fenced `POST /command` is the sole scoped
-/// mutation. This file holds no bd writer and calls no re-query. `/hooks` and
-/// `/assets` resolve declarations but never execute or install them.
+/// `/stream` never trigger work; the governor feed's acknowledgement frames
+/// alter only its resident-local delivery telemetry. Fenced `POST /command` is
+/// the sole scoped operator mutation. This file holds no bd writer and calls
+/// no re-query. `/hooks` and `/assets` resolve declarations but never execute
+/// or install them.
 ///
 /// D-C5: this is a floor — it gets re-homed onto the unified-surfaces
 /// substrate later (perception / control plane / MCP / CLI+RPC / MQTT, one
@@ -30,7 +32,8 @@ import 'dart:math';
 import 'package:genesis_foundation/genesis_foundation.dart' show TreeSnapshot;
 import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
     show stationTreeBearerProtocolPrefix;
-import 'package:grid_engine/grid_engine.dart' show TreeProjector;
+import 'package:grid_engine/grid_engine.dart'
+    show ExplorationTransport, TreeProjector;
 import 'package:grid_runtime/grid_runtime.dart' show OperatorBeadTextField;
 // The wedge signal is the STATION's own derivation — this surface only reports
 // it. Named through the SDK, never the private engine (ADR-0008 D2).
@@ -54,6 +57,9 @@ const _assetsPath = '/assets';
 const _fenceHeader = 'X-Grid-Fence';
 const _idempotencyHeader = 'Idempotency-Key';
 
+/// The flare-name family delivered to the governor feed on `/stream`.
+const kGovernorFlarePrefix = 'relay.';
+
 final class _CommandResponse {
   const _CommandResponse(this.statusCode, this.body);
   final int statusCode;
@@ -64,6 +70,24 @@ final class _IdempotentCommand {
   const _IdempotentCommand(this.fingerprint, this.response);
   final String fingerprint;
   final Future<_CommandResponse> response;
+}
+
+/// Resident-local delivery state for governor-addressed flares.
+final class GovernorFlareStatus {
+  /// Creates an immutable delivery snapshot.
+  const GovernorFlareStatus({this.delivered = 0, this.unacknowledged = 0});
+
+  /// Flares handed to at least one governor-feed socket this resident boot.
+  final int delivered;
+
+  /// Delivered flares that no governor-feed socket has acknowledged yet.
+  final int unacknowledged;
+
+  /// Serializes to the top-level `/status` wire shape.
+  Map<String, Object?> toJson() => <String, Object?>{
+    'delivered': delivered,
+    'unacknowledged': unacknowledged,
+  };
 }
 
 /// One owned substation's slice of the station status (tg-7gm) — the
@@ -216,7 +240,9 @@ class StationStatus {
   final StationAdmissionStatus? admission;
 
   /// Serializes to the wire shape `/status` returns.
-  Map<String, Object?> toJson() => <String, Object?>{
+  Map<String, Object?> toJson({
+    GovernorFlareStatus governorFlares = const GovernorFlareStatus(),
+  }) => <String, Object?>{
     'station': <String, Object?>{
       'substation': substation,
       'stateStore': stateStore,
@@ -268,6 +294,7 @@ class StationStatus {
       },
     // First-class, top-level — a watcher reads THIS, never the gate list.
     'wedge': wedge.toJson(),
+    'governorFlares': governorFlares.toJson(),
     if (sync.isNotEmpty) 'sync': sync,
     if (trajectory.isNotEmpty) 'trajectory': trajectory,
   };
@@ -286,9 +313,10 @@ String mintControlToken() {
 /// explicit LAN binding. Read-only exact-match routes
 /// are `/healthz` (liveness), `/status` (the [StationStatus] snapshot),
 /// `/hooks` (contribution resolution only), and `/assets` (content/capability
-/// catalog resolution only); neither declaration route executes work;
-/// `/stream` is the read-only diagnostics WebSocket. The VM exploration/debug
-/// surface remains separate.
+/// catalog resolution only); neither declaration route executes work. A bare
+/// `/stream` carries tree snapshots; `/stream?feed=governor` carries `relay.`
+/// flares and accepts acknowledgements that affect only delivery telemetry.
+/// The VM exploration/debug surface remains separate.
 /// ADR-0014 D-C4 (Nico-ratified 2026-07-24):
 /// the control plane cannot be a WORK trigger (`bd` stays the only work intake).
 /// operator one-shots ARE control-plane requests.
@@ -296,11 +324,12 @@ String mintControlToken() {
 /// EVERY route requires
 /// `Authorization: Bearer <token>` — checked BEFORE routing, so an
 /// unauthenticated caller learns nothing (not even which paths exist).
-class StationControl {
+class StationControl implements ExplorationTransport {
   StationControl._(
     this._server,
     this._token,
     this._statusView,
+    this._statusSnapshot,
     this._statusBody,
     this._hooksResolver,
     this._assetCatalogResolver,
@@ -313,6 +342,7 @@ class StationControl {
   final HttpServer _server;
   final String _token;
   final FutureOr<StationStatus> Function() _statusView;
+  StationStatus _statusSnapshot;
   String _statusBody;
   final Map<String, Map<String, Object?> Function()> _routes;
   final HooksResolver _hooksResolver;
@@ -320,13 +350,19 @@ class StationControl {
   final GridCommandHandler _commandHandler;
   final TreeProjector? _treeProjector;
   final Set<WebSocket> _webSockets = <WebSocket>{};
+  final Set<WebSocket> _governorWebSockets = <WebSocket>{};
   final Map<WebSocket, StreamSubscription<TreeSnapshot>>
   _snapshotSubscriptions = <WebSocket, StreamSubscription<TreeSnapshot>>{};
+  final Map<WebSocket, StreamSubscription<dynamic>> _governorSubscriptions =
+      <WebSocket, StreamSubscription<dynamic>>{};
+  final Set<String> _unacknowledgedGovernorFlares = <String>{};
   final Map<String, _IdempotentCommand> _commands = {};
   Timer? _statusRefreshTimer;
   bool _statusRefreshInFlight = false;
   bool _disposed = false;
   int _highestFence = -1;
+  int _governorFlareCounter = 0;
+  int _deliveredGovernorFlares = 0;
 
   /// The bound URL, e.g. `http://127.0.0.1:54321`.
   String get url => 'http://${_server.address.address}:${_server.port}';
@@ -355,7 +391,8 @@ class StationControl {
     TreeProjector? treeProjector,
     Duration statusSnapshotInterval = const Duration(seconds: 1),
   }) async {
-    final initialStatusBody = jsonEncode((await view()).toJson());
+    final initialStatus = await view();
+    final initialStatusBody = jsonEncode(initialStatus.toJson());
     final server = await HttpServer.bind(
       address ?? InternetAddress.loopbackIPv4,
       port,
@@ -364,6 +401,7 @@ class StationControl {
       server,
       token,
       view,
+      initialStatus,
       initialStatusBody,
       hooksResolver,
       assetCatalogResolver,
@@ -385,8 +423,11 @@ class StationControl {
 
   Future<void> _refreshStatus() async {
     try {
-      final nextBody = jsonEncode((await _statusView()).toJson());
-      if (!_disposed) _statusBody = nextBody;
+      final nextStatus = await _statusView();
+      if (!_disposed) {
+        _statusSnapshot = nextStatus;
+        _encodeStatus();
+      }
     } on Object {
       // A failed refresh cannot poison the status door. Keep serving the last
       // complete body and let the next timer tick retry the view.
@@ -473,8 +514,9 @@ class StationControl {
   }
 
   Future<void> _handleStream(HttpRequest request) async {
+    final isGovernorFeed = request.uri.queryParameters['feed'] == 'governor';
     final projector = _treeProjector;
-    if (projector == null) {
+    if (!isGovernorFeed && projector == null) {
       await _respond(request, HttpStatus.serviceUnavailable, const {
         'error': 'diagnostics unavailable',
       });
@@ -493,8 +535,23 @@ class StationControl {
       protocolSelector: (protocols) =>
           protocols.contains(bearerProtocol) ? bearerProtocol : null,
     );
+    if (isGovernorFeed) {
+      _governorWebSockets.add(socket);
+      final subscription = socket.listen(
+        _handleGovernorAcknowledgement,
+        onError: (_) {},
+      );
+      _governorSubscriptions[socket] = subscription;
+      unawaited(
+        socket.done.whenComplete(() async {
+          _governorWebSockets.remove(socket);
+          await _governorSubscriptions.remove(socket)?.cancel();
+        }),
+      );
+      return;
+    }
     _webSockets.add(socket);
-    final latest = projector.latest;
+    final latest = projector!.latest;
     final subscription = projector.snapshots.listen(
       (snapshot) => socket.add(jsonEncode(snapshot.toJson())),
       onError: socket.addError,
@@ -508,6 +565,63 @@ class StationControl {
         _webSockets.remove(socket);
         await _snapshotSubscriptions.remove(socket)?.cancel();
       }),
+    );
+  }
+
+  void _handleGovernorAcknowledgement(dynamic frame) {
+    if (_disposed || frame is! String) return;
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(frame);
+    } on FormatException {
+      return;
+    }
+    if (decoded is! Map<String, Object?>) return;
+    final acknowledgement = decoded['ack'];
+    if (acknowledgement is! String ||
+        !_unacknowledgedGovernorFlares.remove(acknowledgement)) {
+      return;
+    }
+    _encodeStatus();
+  }
+
+  @override
+  void flare(String name, Map<String, String> data) {
+    if (_disposed ||
+        !name.startsWith(kGovernorFlarePrefix) ||
+        _governorWebSockets.isEmpty) {
+      return;
+    }
+    final id = 'governor-${++_governorFlareCounter}';
+    final frame = jsonEncode(<String, Object?>{
+      'type': 'flare',
+      'id': id,
+      'name': name,
+      'data': data,
+    });
+    var delivered = false;
+    for (final socket in _governorWebSockets.toList(growable: false)) {
+      try {
+        socket.add(frame);
+        delivered = true;
+      } on Object {
+        // One failed governor socket never withholds the flare from another.
+      }
+    }
+    if (!delivered) return;
+    _deliveredGovernorFlares++;
+    _unacknowledgedGovernorFlares.add(id);
+    _encodeStatus();
+  }
+
+  void _encodeStatus() {
+    _statusBody = jsonEncode(
+      _statusSnapshot.toJson(
+        governorFlares: GovernorFlareStatus(
+          delivered: _deliveredGovernorFlares,
+          unacknowledged: _unacknowledgedGovernorFlares.length,
+        ),
+      ),
     );
   }
 
@@ -848,10 +962,18 @@ class StationControl {
   Future<void> dispose() async {
     _disposed = true;
     _statusRefreshTimer?.cancel();
-    final subscriptions = _snapshotSubscriptions.values.toList();
-    final sockets = _webSockets.toList();
+    final subscriptions = <StreamSubscription<dynamic>>[
+      ..._snapshotSubscriptions.values,
+      ..._governorSubscriptions.values,
+    ];
+    final sockets = <WebSocket>{
+      ..._webSockets,
+      ..._governorWebSockets,
+    }.toList();
     _snapshotSubscriptions.clear();
+    _governorSubscriptions.clear();
     _webSockets.clear();
+    _governorWebSockets.clear();
     await Future.wait(
       subscriptions.map((subscription) => subscription.cancel()),
     );
