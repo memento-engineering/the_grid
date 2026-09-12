@@ -353,6 +353,35 @@ void main() {
           ),
         );
 
+        final beadReplace = await _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '9',
+          idempotencyKey: 'bead-set-2',
+          body: {
+            'id': 'set-2',
+            'method': 'grid/bead/set',
+            'params': {
+              'beadId': 'tg-1',
+              'field': 'notes',
+              'content': 'replacement',
+              'append': false,
+              'allowNotesReplacement': true,
+            },
+          },
+        );
+        expect(beadReplace.statusCode, HttpStatus.ok);
+        expect(
+          handler.calls.last,
+          const GridCommandRequest.setBeadText(
+            beadId: 'tg-1',
+            field: OperatorBeadTextField.notes,
+            content: 'replacement',
+            allowNotesReplacement: true,
+          ),
+        );
+
         for (final entry in const [
           ('grid/session/pause', 'pause-1', '10'),
           ('grid/session/resume', 'resume-1', '11'),
@@ -419,6 +448,42 @@ void main() {
             rationale: 'checked',
           ),
         );
+      },
+    );
+
+    test(
+      'POST /command rejects a non-boolean notes replacement opt-in',
+      () async {
+        final handler = _FakeCommandHandler();
+        final control = await StationControl.start(
+          port: 0,
+          token: 't',
+          view: _sampleStatus,
+          commandHandler: handler,
+        );
+        addTearDown(control.dispose);
+
+        final response = await _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '1',
+          idempotencyKey: 'bad-notes-opt-in',
+          body: {
+            'id': 'bad-notes-opt-in',
+            'method': 'grid/bead/set',
+            'params': {
+              'beadId': 'tg-1',
+              'field': 'notes',
+              'content': 'replacement',
+              'append': false,
+              'allowNotesReplacement': 'yes',
+            },
+          },
+        );
+
+        expect(response.statusCode, HttpStatus.badRequest);
+        expect(handler.calls, isEmpty);
       },
     );
 

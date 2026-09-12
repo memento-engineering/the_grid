@@ -784,6 +784,7 @@ class StationControl implements ExplorationTransport {
       final field = params['field'];
       final content = params['content'];
       final append = params['append'];
+      final allowNotesReplacement = params['allowNotesReplacement'] ?? false;
       final fieldValue = switch (field) {
         'description' => OperatorBeadTextField.description,
         'design' => OperatorBeadTextField.design,
@@ -795,12 +796,14 @@ class StationControl implements ExplorationTransport {
           beadId.isNotEmpty &&
           content is String &&
           append is bool &&
+          allowNotesReplacement is bool &&
           fieldValue != null) {
         command = GridCommandRequest.setBeadText(
           beadId: beadId,
           field: fieldValue,
           content: content,
           append: append,
+          allowNotesReplacement: allowNotesReplacement,
         );
       }
     } else if (method == 'grid/session/pause' ||

@@ -30,6 +30,7 @@ void main() {
       0,
     );
     expect(client.params!['content'], fixture);
+    expect(client.params!['allowNotesReplacement'], isFalse);
     expect(
       () => runner.run(const [
         'bead',
@@ -71,6 +72,74 @@ void main() {
     );
     expect(client.calls, 0);
   });
+
+  test('notes replacement opt-in reaches the resident payload', () async {
+    final client = _FakeClient(const StationCommandCompleted({}));
+    final runner = CommandRunner<int>('grid', 'test')
+      ..addCommand(
+        BeadCommand(client: client, input: Stream.value(utf8.encode(fixture))),
+      );
+
+    expect(
+      await runner.run(const [
+        'bead',
+        'set',
+        '--bead',
+        'tg-a',
+        '--field',
+        'notes',
+        '--allow-notes-replacement',
+        '--file',
+        '-',
+        '--grid-root',
+        '/grid',
+      ]),
+      0,
+    );
+    expect(client.params!['allowNotesReplacement'], isTrue);
+    expect(client.params!['append'], isFalse);
+  });
+
+  test(
+    'notes replacement opt-in invalid combinations read and dispatch nothing',
+    () async {
+      for (final args in const <List<String>>[
+        [
+          'bead',
+          'set',
+          '--bead',
+          'tg-a',
+          '--field',
+          'design',
+          '--allow-notes-replacement',
+          '--file',
+          '/missing',
+          '--grid-root',
+          '/grid',
+        ],
+        [
+          'bead',
+          'set',
+          '--bead',
+          'tg-a',
+          '--field',
+          'notes',
+          '--append',
+          '--allow-notes-replacement',
+          '--file',
+          '/missing',
+          '--grid-root',
+          '/grid',
+        ],
+      ]) {
+        final client = _FakeClient(const StationCommandCompleted({}));
+        final runner = CommandRunner<int>('grid', 'test')
+          ..addCommand(BeadCommand(client: client));
+        expect(await runner.run(args), 64);
+        expect(client.calls, 0);
+      }
+    },
+  );
 }
 
 final class _FakeClient extends StationCommandClient {

@@ -74,6 +74,121 @@ void main() {
       }
     });
 
+    test(
+      'grid/bead/set maps guarded notes replacement to a resident refusal',
+      () async {
+        final stateRunner = _RecordingRunner();
+        final workRunner = _RecordingRunner(
+          results: [_beadResult(const Bead(id: 'tg-1', notes: 'éx'))],
+        );
+        final result =
+            await _handler(
+              state: _Source(_snapshot(const [])),
+              work: _Source(_workSnapshot()),
+              stateRunner: stateRunner,
+              workRunner: workRunner,
+            )(
+              const GridCommandRequest.setBeadText(
+                beadId: 'tg-1',
+                field: OperatorBeadTextField.notes,
+                content: 'replacement',
+              ),
+            );
+
+        expect(
+          result,
+          isA<GridCommandRefused>()
+              .having((value) => value.code, 'code', 'bd_guardrail_refused')
+              .having(
+                (value) => value.message,
+                'message',
+                allOf(
+                  contains('3 existing UTF-8 byte(s)'),
+                  contains('--allow-notes-replacement'),
+                ),
+              ),
+        );
+        expect(workRunner.calls, [
+          ['query', 'id=tg-1', '--all', '--json', '--limit', '0'],
+        ]);
+      },
+    );
+
+    test(
+      'grid/bead/set carries replacement opt-in and preserves append semantics',
+      () async {
+        final replacementRunner = _RecordingRunner(
+          results: [
+            _beadResult(const Bead(id: 'tg-1', notes: 'old')),
+            _okResult(),
+            _beadResult(const Bead(id: 'tg-1', notes: 'replacement')),
+          ],
+        );
+        final replacement =
+            await _handler(
+              state: _Source(_snapshot(const [])),
+              work: _Source(_workSnapshot()),
+              stateRunner: _RecordingRunner(),
+              workRunner: replacementRunner,
+            )(
+              const GridCommandRequest.setBeadText(
+                beadId: 'tg-1',
+                field: OperatorBeadTextField.notes,
+                content: 'replacement',
+                allowNotesReplacement: true,
+              ),
+            );
+        expect(replacement, isA<GridCommandCompleted>());
+        final replacementCall = replacementRunner.calls.singleWhere(
+          (call) => call.first == 'update',
+        );
+        expect(replacementCall, containsAllInOrder(['--notes', 'replacement']));
+        expect(replacementCall, isNot(contains('--append-notes')));
+        expect(replacementRunner.calls.map((call) => call.first), [
+          'query',
+          'update',
+          'query',
+        ]);
+        expect(replacementRunner.calls.first, [
+          'query',
+          'id=tg-1',
+          '--all',
+          '--json',
+          '--limit',
+          '0',
+        ]);
+        expect(replacementRunner.calls.last, replacementRunner.calls.first);
+
+        final appendRunner = _RecordingRunner(
+          results: [
+            _beadResult(const Bead(id: 'tg-1', notes: 'old')),
+            _okResult(),
+            _beadResult(const Bead(id: 'tg-1', notes: 'old\nmore')),
+          ],
+        );
+        final append =
+            await _handler(
+              state: _Source(_snapshot(const [])),
+              work: _Source(_workSnapshot()),
+              stateRunner: _RecordingRunner(),
+              workRunner: appendRunner,
+            )(
+              const GridCommandRequest.setBeadText(
+                beadId: 'tg-1',
+                field: OperatorBeadTextField.notes,
+                content: 'more',
+                append: true,
+              ),
+            );
+        expect(append, isA<GridCommandCompleted>());
+        final appendCall = appendRunner.calls.singleWhere(
+          (call) => call.first == 'update',
+        );
+        expect(appendCall, containsAllInOrder(['--append-notes', 'more']));
+        expect(appendCall, isNot(contains('--notes')));
+      },
+    );
+
     test('grid/gate/ls refreshes and returns sorted open gates only', () async {
       var refreshed = false;
       final state = _Source(_snapshot(const []));
@@ -1984,6 +2099,21 @@ Bead _resultStep(
 GraphSnapshot _workSnapshot([String id = 'tg-1']) => _snapshot([
   Bead(id: id, issueType: IssueType.task, metadata: const {'rig': 'tg'}),
 ]);
+
+BdResult _beadResult(Bead bead) => BdResult(
+  exitCode: 0,
+  stdout: jsonEncode({
+    'schema_version': 1,
+    'data': [bead.toJson()],
+  }),
+  stderr: '',
+);
+
+BdResult _okResult() => const BdResult(
+  exitCode: 0,
+  stdout: '{"schema_version":1,"data":{}}',
+  stderr: '',
+);
 
 GraphSnapshot _gateSnapshot() => _snapshot([
   const Bead(

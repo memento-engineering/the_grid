@@ -773,7 +773,7 @@ void main() {
       'update() can clear design and acceptance without touching body text',
       () async {
         runner.stubCommand(
-          'show',
+          'query',
           BdReply(stdout: _beadEnvelope(acceptanceCriteria: '')),
         );
         await service.update('tg-7', design: '', acceptanceCriteria: '');
@@ -795,7 +795,7 @@ void main() {
       'update() carries spec fields, metadata, and metadata unset atomically',
       () async {
         runner.stubCommand(
-          'show',
+          'query',
           BdReply(stdout: _beadEnvelope(acceptanceCriteria: '')),
         );
         await service.update(
@@ -964,7 +964,7 @@ void main() {
     test('argv text guard permits tabs and newlines', () async {
       const text = 'tab\tline\nend';
       runner.stubCommand(
-        'show',
+        'query',
         BdReply(stdout: _beadEnvelope(acceptanceCriteria: text)),
       );
       await service.update(
@@ -1009,6 +1009,7 @@ void main() {
           "literal `cmd` and \$(cmd) and \$VAR and 'single'\n  trailing  ";
       final runner = FakeBdRunner(
         queuedReplies: [
+          BdReply(stdout: _beadEnvelope()),
           _okEnvelope(),
           BdReply(stdout: _beadEnvelope(notes: text)),
         ],
@@ -1016,14 +1017,27 @@ void main() {
 
       await BdCliService(runner).update('tg-7', notes: text);
 
-      expect(runner.calls.map((call) => call.first), ['update', 'show']);
-      expect(runner.calls.first, containsAllInOrder(['--notes', text]));
-      expect(runner.calls.first, isNot(contains('--append-notes')));
+      expect(runner.calls.map((call) => call.first), [
+        'query',
+        'update',
+        'query',
+      ]);
+      expect(runner.calls.first, [
+        'query',
+        'id=tg-7',
+        '--all',
+        '--json',
+        '--limit',
+        '0',
+      ]);
+      expect(runner.calls.last, runner.calls.first);
+      expect(runner.calls[1], containsAllInOrder(['--notes', text]));
+      expect(runner.calls[1], isNot(contains('--append-notes')));
     });
 
     test('argv text round trip reports first divergent offset', () async {
       runner.stubCommand(
-        'show',
+        'query',
         BdReply(stdout: _beadEnvelope(acceptanceCriteria: 'abcX')),
       );
       await expectLater(
@@ -1099,10 +1113,19 @@ void main() {
       );
 
       expect(verifyingRunner.calls.map((args) => args.first), [
-        'show',
+        'query',
         'update',
-        'show',
+        'query',
       ]);
+      expect(verifyingRunner.calls.first, [
+        'query',
+        'id=tg-7',
+        '--all',
+        '--json',
+        '--limit',
+        '0',
+      ]);
+      expect(verifyingRunner.calls.last, verifyingRunner.calls.first);
       expect(
         verifyingRunner.calls[1],
         containsAllInOrder(['--append-notes', text]),

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:meta/meta.dart';
@@ -7,14 +8,22 @@ import '../errors/bd_exception.dart';
 import '../models/bead.dart';
 import '../models/bead_dependency.dart';
 import '../models/bead_status.dart';
+import '../models/bd_query_result.dart';
 import '../models/dependency_type.dart';
 import '../models/graph_apply_plan.dart';
 import '../models/issue_type.dart';
 import '../ready/ready_work_filter.dart';
 import '../ready/ready_work_sort.dart';
 import 'bd_runner.dart';
+import 'beads_workspace.dart';
 
 enum _GuardedWriteSupport { supported, unsupported, indeterminate }
+
+DoltMode _discoverDoltMode(BdRunner runner) {
+  if (runner is! ProcessBdRunner) return DoltMode.unknown;
+  return BeadsWorkspace.discover(start: runner.workspaceRoot)?.mode ??
+      DoltMode.unknown;
+}
 
 /// The bd-CLI service tier (predictable-flutter Services: stateless I/O).
 ///
@@ -29,7 +38,8 @@ enum _GuardedWriteSupport { supported, unsupported, indeterminate }
 /// mutation carries `--actor grid-controller`. This service holds no Dolt
 /// dependency by construction: it cannot issue a SQL string.
 class BdCliService {
-  BdCliService(this._runner);
+  BdCliService(this._runner, {DoltMode? doltMode})
+    : _doltMode = doltMode ?? _discoverDoltMode(_runner);
 
   /// The actor stamped on every mutation's audit trail (CLAUDE.md / ADR-0001).
   static const String actor = 'grid-controller';
@@ -74,6 +84,7 @@ class BdCliService {
   }
 
   final BdRunner _runner;
+  final DoltMode _doltMode;
 
   // ---------------------------------------------------------------------------
   // READS
@@ -123,6 +134,91 @@ class BdCliService {
       queryArgs(expr, includeClosed: includeClosed),
     );
     return _beadsFromList(env.dataList);
+  }
+
+  /// Runs [expression] with an independent positive control when it is empty.
+  ///
+  /// An exit-zero empty target is never returned as proof of absence by
+  /// itself. Only a non-empty [positiveControlExpression] proves that the same
+  /// store/read path was reachable; every other ambiguous outcome is typed as
+  /// [BdQueryUnavailable]. Both calls use [queryArgs], including `--limit 0`.
+  Future<BdQueryResult> queryWithPositiveControl(
+    String expression, {
+    required String positiveControlExpression,
+    bool includeClosed = false,
+  }) async {
+    final targetArgs = queryArgs(expression, includeClosed: includeClosed);
+    final controlArgs = queryArgs(
+      positiveControlExpression,
+      includeClosed: includeClosed,
+    );
+    final targetCall = <String>['bd', ...targetArgs];
+    final controlCall = <String>['bd', ...controlArgs];
+
+    final List<Bead> targetRows;
+    try {
+      final envelope = await _runEnvelope(targetArgs);
+      targetRows = _beadsFromList(envelope.dataList);
+    } on Object catch (error) {
+      return BdQueryResult.unavailable(
+        targetCall: targetCall,
+        positiveControlCall: controlCall,
+        reason: 'The target query failed: $error',
+        remedy: _positiveControlRemedy,
+      );
+    }
+    if (targetRows.isNotEmpty) return BdQueryResult.rows(rows: targetRows);
+
+    final List<Bead> controlRows;
+    try {
+      final envelope = await _runEnvelope(controlArgs);
+      controlRows = _beadsFromList(envelope.dataList);
+    } on Object catch (error) {
+      return BdQueryResult.unavailable(
+        targetCall: targetCall,
+        positiveControlCall: controlCall,
+        reason: 'The positive-control query failed: $error',
+        remedy: _positiveControlRemedy,
+      );
+    }
+    if (controlRows.isNotEmpty) {
+      return BdQueryResult.verifiedEmpty(
+        targetCall: targetCall,
+        positiveControlCall: controlCall,
+      );
+    }
+    return BdQueryResult.unavailable(
+      targetCall: targetCall,
+      positiveControlCall: controlCall,
+      reason:
+          'Both target and positive-control queries exited zero with no rows; '
+          'store reachability is unproven.',
+      remedy: _positiveControlRemedy,
+    );
+  }
+
+  static const _positiveControlRemedy =
+      'Confirm the workspace store is reachable, choose a control expression '
+      'known to match at least one bead, and retry both calls.';
+
+  /// Refusal-only tombstone for the retired `bd export --all` read surface.
+  ///
+  /// Proxied stores can return exit zero and an empty export for a non-empty
+  /// store. The old parser is deliberately not recreated for other modes;
+  /// callers use a scoped list or an evidence-bearing query instead.
+  Future<Never> exportAll() async {
+    final proxied = _doltMode == DoltMode.proxiedServer;
+    throw BdGuardrailRefused(
+      call: const ['bd', 'export', '--all'],
+      reason: proxied
+          ? 'A proxied store can return exit zero with an empty export even '
+                'when beads exist.'
+          : 'The unscoped export read is retired because its empty result '
+                'cannot prove store absence.',
+      remedy:
+          'Use listScope with an explicit type/external-ref scope, or '
+          'queryWithPositiveControl for an absence-bearing query.',
+    );
   }
 
   /// `bd dep list id1 id2 … --json` — dependency edges for the given issues,
@@ -206,16 +302,23 @@ class BdCliService {
     String? externalRef,
     Map<String, String> setMetadata = const {},
   }) async {
-    final env = await _runEnvelope(
-      createArgs(
-        title: title,
-        type: type,
-        priority: priority,
-        description: description,
-        defer: defer,
-        externalRef: externalRef,
-      ),
+    final args = createArgs(
+      title: title,
+      type: type,
+      priority: priority,
+      description: description,
+      defer: defer,
+      externalRef: externalRef,
     );
+    final call = <String>['bd', ...args];
+    _refuseUnsafeArgvText('title', title, call);
+    if (description != null) {
+      _refuseUnsafeArgvText('description', description, call);
+    }
+    if (externalRef != null) {
+      _refuseUnsafeArgvText('externalRef', externalRef, call);
+    }
+    final env = await _runEnvelope(args);
     final id = _idFromEnvelope(env);
     if (setMetadata.isNotEmpty) {
       await update(id, mergeMetadata: setMetadata);
@@ -245,8 +348,9 @@ class BdCliService {
   ///
   /// [appendNotes] is a straight `--append-notes <text>` passthrough (bd
   /// concatenates it onto the bead's existing notes with a newline separator,
-  /// `cmd/bd/update.go`); mutually exclusive with `--notes` upstream, but this
-  /// service never sends `--notes`, so no conflict arises here.
+  /// `cmd/bd/update.go`). [notes] preserves replacement semantics and first
+  /// proves the explicit target readable; replacing a non-empty field requires
+  /// [allowNotesReplacement]. Neither path is transformed into the other.
   Future<void> update(
     String id, {
 
@@ -271,6 +375,9 @@ class BdCliService {
     String? notes,
     String? appendNotes,
 
+    /// Explicitly permits `--notes` to replace a non-empty stored field.
+    bool allowNotesReplacement = false,
+
     /// Whether to re-read and verify argv-transported text after mutation.
     ///
     /// When false, acceptance criteria and appended notes remain guarded before
@@ -280,25 +387,7 @@ class BdCliService {
     if (notes != null && appendNotes != null && appendNotes.isNotEmpty) {
       throw ArgumentError('notes and appendNotes are mutually exclusive');
     }
-    if (notes != null) _refuseUnsafeArgvText('notes', notes);
-    if (acceptanceCriteria != null) {
-      _refuseUnsafeArgvText('acceptanceCriteria', acceptanceCriteria);
-    }
-    if (appendNotes != null && appendNotes.isNotEmpty) {
-      _refuseUnsafeArgvText('appendNotes', appendNotes);
-    }
-    for (final entry in mergeMetadata.entries) {
-      _refuseUnsafeArgvText('metadata.${entry.key}', entry.value);
-    }
-
     var expectedNotes = '';
-    if (verifyTextRoundTrip && appendNotes != null && appendNotes.isNotEmpty) {
-      final before = (await show([id])).single;
-      expectedNotes = before.notes.isEmpty
-          ? appendNotes
-          : '${before.notes}\n$appendNotes';
-    }
-
     Directory? tempDir;
     String? stdinText;
     String? bodyFile;
@@ -319,6 +408,56 @@ class BdCliService {
         await file.writeAsString(design);
         designFile = file.path;
       }
+      final attemptedArgs = updateArgs(
+        id,
+        ifAssignee: ifAssignee,
+        ifStatus: ifStatus,
+        title: title,
+        status: status,
+        priority: priority,
+        bodyFile: bodyFile,
+        designFile: designFile,
+        acceptanceCriteria: acceptanceCriteria,
+        type: type,
+        assignee: assignee,
+        mergeMetadata: mergeMetadata,
+        unsetMetadata: unsetMetadata,
+        notes: notes,
+        appendNotes: appendNotes,
+      );
+      final call = <String>['bd', ...attemptedArgs];
+      if (title != null) _refuseUnsafeArgvText('title', title, call);
+      if (ifAssignee != null) {
+        _refuseUnsafeArgvText('ifAssignee', ifAssignee, call);
+      }
+      if (assignee != null) _refuseUnsafeArgvText('assignee', assignee, call);
+      if (notes != null) _refuseUnsafeArgvText('notes', notes, call);
+      if (acceptanceCriteria != null) {
+        _refuseUnsafeArgvText('acceptanceCriteria', acceptanceCriteria, call);
+      }
+      if (appendNotes != null && appendNotes.isNotEmpty) {
+        _refuseUnsafeArgvText('appendNotes', appendNotes, call);
+      }
+      for (final entry in mergeMetadata.entries) {
+        _refuseUnsafeArgvText('metadata.${entry.key}', entry.value, call);
+      }
+
+      if (notes != null) {
+        await _guardNotesReplacement(
+          id,
+          call: call,
+          allowNotesReplacement: allowNotesReplacement,
+        );
+      }
+      if (verifyTextRoundTrip &&
+          appendNotes != null &&
+          appendNotes.isNotEmpty) {
+        final before = await _readTextTarget(id);
+        expectedNotes = before.notes.isEmpty
+            ? appendNotes
+            : '${before.notes}\n$appendNotes';
+      }
+
       final requestedGuard = ifAssignee != null || ifStatus != null;
       final capability = requestedGuard
           ? await _guardedWriteCapability()
@@ -382,7 +521,7 @@ class BdCliService {
     };
     if (expected.isEmpty) return;
 
-    final storedBead = (await show([id])).single;
+    final storedBead = await _readTextTarget(id);
     final stored = <String, String>{
       if (acceptanceCriteria != null)
         'acceptanceCriteria': storedBead.acceptanceCriteria,
@@ -447,7 +586,11 @@ class BdCliService {
 
   /// `bd close <id> [--reason …]`.
   Future<void> close(String id, {String? reason}) async {
-    await _runEnvelope(closeArgs(id, reason: reason));
+    final args = closeArgs(id, reason: reason);
+    if (reason != null) {
+      _refuseUnsafeArgvText('reason', reason, ['bd', ...args]);
+    }
+    await _runEnvelope(args);
   }
 
   /// `bd dep add <issueId> <dependsOnId> [--type …]`.
@@ -536,6 +679,17 @@ class BdCliService {
     GraphApplyPlan plan, {
     bool ephemeral = false,
   }) async {
+    if (ephemeral && _doltMode == DoltMode.proxiedServer) {
+      throw BdGuardrailRefused(
+        call: ['bd', ...applyGraphArgs('<plan>', ephemeral: true)],
+        reason:
+            'A proxied store accepts an ephemeral graph but hides it from '
+            'list/search and cannot promote it.',
+        remedy:
+            'Call applyGraph with ephemeral: false for a persistent graph, '
+            'or use a direct store for a genuinely ephemeral wisp.',
+      );
+    }
     final dir = await Directory.systemTemp.createTemp('grid-graph-apply');
     final planFile = File('${dir.path}/plan.json');
     try {
@@ -782,17 +936,85 @@ class BdCliService {
     return _runner.run(args, stdin: stdin, timeout: timeout);
   }
 
-  void _refuseUnsafeArgvText(String field, String value) {
+  void _refuseUnsafeArgvText(String field, String value, List<String> call) {
     for (var offset = 0; offset < value.length; offset++) {
       final unit = value.codeUnitAt(offset);
       if (unit <= 0x1f && unit != 0x09 && unit != 0x0a && unit != 0x0d) {
         throw BeadTextRefused(
+          call: call,
+          remedy:
+              'Remove the NUL/control byte from the argv-carried value; use '
+              'the existing file/stdin transport for description or design.',
           field: field,
           offset: offset,
           context: _contextAt(value, offset),
         );
       }
     }
+  }
+
+  Future<void> _guardNotesReplacement(
+    String id, {
+    required List<String> call,
+    required bool allowNotesReplacement,
+  }) async {
+    final existing = (await _readTextTarget(id)).notes;
+    if (existing.isEmpty || allowNotesReplacement) return;
+    final byteCount = utf8.encode(existing).length;
+    throw BdGuardrailRefused(
+      call: call,
+      reason:
+          'Replacing notes would destroy $byteCount existing UTF-8 byte(s).',
+      remedy:
+          'Use appendNotes to accrue text, or pass '
+          'allowNotesReplacement: true (CLI: --allow-notes-replacement) to '
+          'replace the field deliberately.',
+    );
+  }
+
+  /// Reads exactly one bead for resident text preflight or verification.
+  ///
+  /// The controller path must never use [show]: bd writes
+  /// `.beads/last-touched` for that nominal read and self-triggers the watcher.
+  /// This id-scoped query stays on the unlimited [queryArgs] path and refuses
+  /// every unreadable or non-unique result before a caller can treat it as the
+  /// requested bead.
+  Future<Bead> _readTextTarget(String id) async {
+    final args = queryArgs('id=$id', includeClosed: true);
+    final call = <String>['bd', ...args];
+    final List<Bead> rows;
+    try {
+      final envelope = await _runEnvelope(args);
+      rows = _beadsFromList(envelope.dataList);
+    } on Object catch (error) {
+      throw BdGuardrailRefused(
+        call: call,
+        reason: 'The text target "$id" could not be read safely: $error',
+        remedy:
+            'Retry ${call.join(' ')} and proceed only after exactly one '
+            'target is readable.',
+      );
+    }
+
+    final matches = rows.where((bead) => bead.id == id).toList();
+    if (rows.length != 1 || matches.length != 1) {
+      final shape = matches.isEmpty
+          ? 'missing'
+          : matches.length > 1
+          ? 'duplicated'
+          : 'ambiguous';
+      throw BdGuardrailRefused(
+        call: call,
+        reason:
+            'The text target "$id" was $shape '
+            '(query returned ${rows.length} row(s), '
+            '${matches.length} exact match(es)).',
+        remedy:
+            'Retry ${call.join(' ')} and proceed only when it returns that '
+            'bead exactly once.',
+      );
+    }
+    return matches.single;
   }
 
   /// bd's calendar-date form for `--defer`/`--due` (`2026-01-05`).

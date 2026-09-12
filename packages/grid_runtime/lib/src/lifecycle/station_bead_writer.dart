@@ -1189,6 +1189,7 @@ class StationBeadWriter {
     required OperatorBeadTextField field,
     required String content,
     required bool append,
+    bool allowNotesReplacement = false,
   }) async {
     _assertOwned('writeOperatorText', id, const {});
     if (append && field != OperatorBeadTextField.notes) {
@@ -1196,6 +1197,20 @@ class StationBeadWriter {
         field,
         'field',
         'append is valid only for notes',
+      );
+    }
+    if (allowNotesReplacement && field != OperatorBeadTextField.notes) {
+      throw ArgumentError.value(
+        field,
+        'field',
+        'allowNotesReplacement is valid only for notes',
+      );
+    }
+    if (allowNotesReplacement && append) {
+      throw ArgumentError.value(
+        allowNotesReplacement,
+        'allowNotesReplacement',
+        'notes replacement cannot be combined with append',
       );
     }
     return _serialized(id, () async {
@@ -1221,6 +1236,7 @@ class StationBeadWriter {
             id,
             notes: append ? null : content,
             appendNotes: append ? content : null,
+            allowNotesReplacement: allowNotesReplacement,
           );
       }
     });

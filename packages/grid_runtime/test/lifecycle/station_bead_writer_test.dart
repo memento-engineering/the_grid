@@ -10,8 +10,9 @@ import 'support/recording_bd_runner.dart';
 ///
 /// The heart is the fail-closed safety: a write whose target rig is WRONG or
 /// ABSENT is refused before any `bd` call, and every allowed write carries
-/// `--actor grid-controller`, merges metadata, and never calls `bd show` or any
-/// SQL.
+/// `--actor grid-controller` and merges metadata. Controller lifecycle writes
+/// never call `bd show` or SQL; the explicit operator notes path performs its
+/// guarded reads through an id-scoped `bd query`.
 Bead _step(
   String id, {
   String sessionId = 'tgdog-sess1',
@@ -267,7 +268,7 @@ void main() {
     );
   });
 
-  group('allowed writes — bd-only, --actor grid-controller, merge, no show', () {
+  group('allowed writes — bd-only, actor, merge, guarded operator read', () {
     test('link writes use the chokepoint actor', () async {
       runner.nextCreatedId = 'tgdog-link1';
       final id = await writer().createLink(
@@ -391,6 +392,92 @@ void main() {
         expect(runner.stdins.single, 'operator description');
       },
     );
+
+    test(
+      'writeOperatorText refuses non-empty notes unless replacement is explicit',
+      () async {
+        runner.exportBeads = const [Bead(id: 'tgdog-work1', notes: 'éx')];
+
+        await expectLater(
+          writer().writeOperatorText(
+            'tgdog-work1',
+            field: OperatorBeadTextField.notes,
+            content: 'replacement',
+            append: false,
+          ),
+          throwsA(
+            isA<BdGuardrailRefused>()
+                .having(
+                  (error) => error.reason,
+                  'reason',
+                  contains('3 existing UTF-8 byte(s)'),
+                )
+                .having(
+                  (error) => error.remedy,
+                  'remedy',
+                  contains('--allow-notes-replacement'),
+                ),
+          ),
+        );
+
+        expect(runner.callsFor('update'), isEmpty);
+        expect(runner.calls, [
+          ['query', 'id=tgdog-work1', '--all', '--json', '--limit', '0'],
+        ]);
+        expect(runner.neverCalledShow, isTrue);
+      },
+    );
+
+    test(
+      'writeOperatorText carries notes replacement opt-in without transform',
+      () async {
+        runner.exportBeads = const [
+          Bead(id: 'tgdog-work1', notes: 'old notes'),
+        ];
+
+        await writer().writeOperatorText(
+          'tgdog-work1',
+          field: OperatorBeadTextField.notes,
+          content: 'replacement',
+          append: false,
+          allowNotesReplacement: true,
+        );
+
+        final mutation = runner.callsFor('update').single;
+        expect(mutation, containsAllInOrder(['--notes', 'replacement']));
+        expect(mutation, isNot(contains('--append-notes')));
+        expect(runner.calls.map((call) => call.first), [
+          'query',
+          'update',
+          'query',
+        ]);
+        expect(runner.calls.first, [
+          'query',
+          'id=tgdog-work1',
+          '--all',
+          '--json',
+          '--limit',
+          '0',
+        ]);
+        expect(runner.calls.last, runner.calls.first);
+        expect(runner.neverCalledShow, isTrue);
+      },
+    );
+
+    test('writeOperatorText append remains append only', () async {
+      runner.exportBeads = const [Bead(id: 'tgdog-work1', notes: 'old notes')];
+
+      await writer().writeOperatorText(
+        'tgdog-work1',
+        field: OperatorBeadTextField.notes,
+        content: 'more',
+        append: true,
+      );
+
+      final mutation = runner.callsFor('update').single;
+      expect(mutation, containsAllInOrder(['--append-notes', 'more']));
+      expect(mutation, isNot(contains('--notes')));
+    });
 
     test(
       'ADR-0006 D2 / ADR-0001 D5: appendNotes update issues no bd show',

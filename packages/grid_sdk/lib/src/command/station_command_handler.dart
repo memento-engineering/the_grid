@@ -219,12 +219,14 @@ final class StationCommandHandler implements GridCommandHandler {
       :final field,
       :final content,
       :final append,
+      :final allowNotesReplacement,
     ) =>
       _setBeadText(
         beadId: beadId,
         field: field,
         content: content,
         append: append,
+        allowNotesReplacement: allowNotesReplacement,
       ),
     GridPauseSession(:final beadId) => _setPauseState(
       beadId: beadId,
@@ -754,9 +756,22 @@ final class StationCommandHandler implements GridCommandHandler {
     required OperatorBeadTextField field,
     required String content,
     required bool append,
+    required bool allowNotesReplacement,
   }) async {
     if (append && field != OperatorBeadTextField.notes) {
       return _refused('append_invalid', '--append is valid only for notes.');
+    }
+    if (allowNotesReplacement && field != OperatorBeadTextField.notes) {
+      return _refused(
+        'notes_replacement_invalid',
+        '--allow-notes-replacement is valid only for notes.',
+      );
+    }
+    if (allowNotesReplacement && append) {
+      return _refused(
+        'notes_replacement_invalid',
+        '--allow-notes-replacement cannot be combined with --append.',
+      );
     }
     final identity = BeadOwnershipPredicate.ownedPrefixOf(
       beadId,
@@ -789,11 +804,14 @@ final class StationCommandHandler implements GridCommandHandler {
         field: field,
         content: content,
         append: append,
+        allowNotesReplacement: allowNotesReplacement,
       );
     } on OwnershipRefused catch (error) {
       return _refused('ownership_refused', error.toString());
     } on OwnershipGuardRefused catch (error) {
       return _refused('ownership_refused', error.toString());
+    } on BdGuardrailRefused catch (error) {
+      return _refused('bd_guardrail_refused', error.toString());
     } on BeadTextRefused catch (error) {
       return _refused('text_refused', error.toString());
     } on BeadTextRoundTripFailure catch (error) {

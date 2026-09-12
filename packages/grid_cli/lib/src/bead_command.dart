@@ -85,6 +85,7 @@ final class BeadSetCommand extends Command<int> {
       )
       ..addOption('file', mandatory: true)
       ..addFlag('append', negatable: false)
+      ..addFlag('allow-notes-replacement', negatable: false)
       ..addOption('grid-root', mandatory: true);
   }
 
@@ -103,12 +104,25 @@ final class BeadSetCommand extends Command<int> {
     final root = args.option('grid-root')!;
     final field = args.option('field')!;
     final append = args.flag('append');
+    final allowNotesReplacement = args.flag('allow-notes-replacement');
     if (!root.startsWith('/')) {
       stderr.writeln('grid bead set: --grid-root must be an absolute path.');
       return 64;
     }
     if (append && field != 'notes') {
       stderr.writeln('grid bead set: --append is valid only for notes.');
+      return 64;
+    }
+    if (allowNotesReplacement && field != 'notes') {
+      stderr.writeln(
+        'grid bead set: --allow-notes-replacement is valid only for notes.',
+      );
+      return 64;
+    }
+    if (allowNotesReplacement && append) {
+      stderr.writeln(
+        'grid bead set: --allow-notes-replacement cannot be combined with --append.',
+      );
       return 64;
     }
     String content;
@@ -139,6 +153,7 @@ final class BeadSetCommand extends Command<int> {
         'field': field,
         'content': content,
         'append': append,
+        'allowNotesReplacement': allowNotesReplacement,
       },
     );
     switch (result) {
