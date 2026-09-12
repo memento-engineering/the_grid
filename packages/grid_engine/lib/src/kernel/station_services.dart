@@ -57,7 +57,7 @@ class StationServices {
   final String stateSubstation;
 
   /// The engine pgid-liveness half of the daemon adopt-freshness proof
-  /// (ADR-0009 D4) — the Host threads it into each `AllocationContext.liveness`.
+  /// (ADR-0009 D4) — the Host threads it into each `AllocationInputs.liveness`.
   /// Null (the default) ⇒ [neverLive] ⇒ the Host never adopts at mount (P1
   /// offline). **All-or-nothing** with the `RestartReconciler`'s `adoptProof`:
   /// the composer wires BOTH (from a real `ProcessGroupController`) at the live
@@ -66,7 +66,7 @@ class StationServices {
   final AllocationLiveness? liveness;
 
   /// The station's work-signal probe — the COMPLETION FENCE's binding. The Host
-  /// threads it into each `AllocationContext.workSignal`. Null (the default) ⇒
+  /// threads it into each `AllocationInputs.workSignal`. Null (the default) ⇒
   /// [noWorkSignal] ⇒ the fence is INERT and an inferred one-shot exit is taken at
   /// face value (today's behavior). The live composer binds it to its own
   /// source-control service's uncommitted-work probe, EXCLUDING the grid's own

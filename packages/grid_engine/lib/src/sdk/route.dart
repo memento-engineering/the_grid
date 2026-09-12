@@ -126,41 +126,41 @@ abstract class RouteCapability extends Capability {
   /// The default [Allocation] for a route (ADR-0009 Decision 4/6) —
   /// [RouteAllocation].
   @override
-  Allocation createAllocation(AllocationContext ctx) =>
-      RouteAllocation(this, ctx);
+  Allocation createAllocation(AllocationInputs inputs) =>
+      RouteAllocation(this, inputs);
 }
 
 /// The **route family** (ADR-0009 Decision 6's graduated conveniences) — drives a
 /// [RouteCapability]'s body once and reports its verdict. Not a process: it holds
 /// no group to reap; `dispose` cancels the cooperative token and runs teardown.
 class RouteAllocation extends Allocation {
-  /// Creates the route allocation for [capability] under [context].
-  RouteAllocation(this.capability, super.context);
+  /// Creates the route allocation for [capability] from [inputs].
+  RouteAllocation(this.capability, super.inputs);
 
   /// The pure route capability whose body this drives.
   final RouteCapability capability;
 
   @override
-  Future<void> startOrAdopt() async {
+  Future<void> startOrAdopt(TreeContext treeContext) async {
     state = AllocationState.live;
     // A THROWING body routes to supervision as a failure — never an unhandled
     // zone error (ADR-0008 Decision 10, the per-work fail-closed posture).
     final RouteVerdict verdict;
     try {
-      verdict = await capability.route(context.treeContext, context.args);
+      verdict = await capability.route(treeContext, inputs.args);
     } on Object catch (e) {
       state = AllocationState.gone;
-      if (!context.args.cancel.isCancelled) {
-        context.sink(AllocationFailed('route threw: $e'));
+      if (!inputs.args.cancel.isCancelled) {
+        inputs.sink(AllocationFailed('route threw: $e'));
       }
       return;
     }
-    if (context.args.cancel.isCancelled) {
+    if (inputs.args.cancel.isCancelled) {
       state = AllocationState.gone;
       return;
     }
     state = AllocationState.gone;
-    context.sink(_reportFor(verdict));
+    inputs.sink(_reportFor(verdict));
   }
 
   /// Maps a verdict to the report the ROUTER (the Host) persists.
@@ -173,9 +173,9 @@ class RouteAllocation extends Allocation {
   @override
   Future<void> dispose() async {
     state = AllocationState.dying;
-    context.args.cancel.cancel();
+    inputs.args.cancel.cancel();
     try {
-      await capability.teardown(context.args);
+      await capability.teardown(inputs.args);
     } on Object {
       // A throwing teardown must not break unmount (no one left to report to).
     }
