@@ -1,3 +1,12 @@
+## 0.3.0
+
+- PROMOTED from 0.3.0-rc.4. This is the stable release of the 0.3.0 line; the code is the
+  candidate's, unchanged. Every intra-family dependency constraint is rewritten from its
+  prerelease form to the stable one, because pub refuses a stable package that depends on a
+  prerelease.
+- Consumers on a `^0.3.0-rc.N` constraint resolve this automatically: a caret range admits the
+  release above its own prereleases, so no downstream pubspec edit is required to pick it up.
+
 ## 0.3.0-rc.4
 
 - Breaking: requires `leonard_contract ^0.2.2` (genesis_perception 0.3.0 / genesis_tree 0.3.0). Migration: consumers on genesis_tree 0.2 stay on rc.3; consumers on 0.3 bump `genesis_tree` to `^0.3.0`. This is the release that lets grid_cli resolve from pub.dev again (rc.9 pinned genesis_tree 0.3 while this package still reached genesis_tree 0.2 through leonard_contract 0.2.1).

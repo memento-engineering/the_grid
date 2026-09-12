@@ -1,3 +1,12 @@
+## 0.3.0
+
+- PROMOTED from 0.3.0-rc.22. This is the stable release of the 0.3.0 line; the code is the
+  candidate's, unchanged. Every intra-family dependency constraint is rewritten from its
+  prerelease form to the stable one, because pub refuses a stable package that depends on a
+  prerelease.
+- Consumers on a `^0.3.0-rc.N` constraint resolve this automatically: a caret range admits the
+  release above its own prereleases, so no downstream pubspec edit is required to pick it up.
+
 ## 0.3.0-rc.22
 
 - Added: `assembleStationWork` takes an optional `registryBuilderWithSpecWriter` (a two-argument builder receiving the work-note appender and the SPECIFY-authored spec writer) beside the unchanged one-argument `CapabilityRegistryBuilder`; when both are supplied the enhanced builder wins and a direct `registry` stays mutually exclusive with either (tg-vb4m, #390).

@@ -1,3 +1,12 @@
+## 0.2.0
+
+- PROMOTED from 0.2.0-rc.19. This is the stable release of the 0.2.0 line; the code is the
+  candidate's, unchanged. Every intra-family dependency constraint is rewritten from its
+  prerelease form to the stable one, because pub refuses a stable package that depends on a
+  prerelease.
+- Consumers on a `^0.2.0-rc.N` constraint resolve this automatically: a caret range admits the
+  release above its own prereleases, so no downstream pubspec edit is required to pick it up.
+
 ## 0.2.0-rc.19
 
 - Fixed: `StationBeadWriter.clearRoundAuthoredSpec` preserves `design` and `acceptance_criteria` on rework unless the bead carries `spec.author == specify`, so hand-written and governor-restored spec text survives a re-key; `writeSpecifyAuthoredSpec(id, design:, acceptanceCriteria:)` is restored as the ownership chokepoint that stamps that marker and refuses foreign prefixes (tg-vb4m, #390). The stamping caller lands in grid_assets (pow-m8v5).
