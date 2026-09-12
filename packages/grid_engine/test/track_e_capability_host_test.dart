@@ -139,6 +139,94 @@ class _DaemonCap extends ProcessCapability {
   Future<void> teardown(StepArgs args) async => log.add('daemon-teardown');
 }
 
+final class _WatchedValue {
+  const _WatchedValue(this.value);
+
+  final String value;
+}
+
+final class _MutableWatchedValue extends StatefulSeed {
+  const _MutableWatchedValue({
+    required this.initial,
+    required this.onState,
+    required this.child,
+  });
+
+  final _WatchedValue initial;
+  final void Function(_MutableWatchedValueState state) onState;
+  final Seed child;
+
+  @override
+  State<_MutableWatchedValue> createState() => _MutableWatchedValueState();
+}
+
+final class _MutableWatchedValueState extends State<_MutableWatchedValue> {
+  late _WatchedValue _value;
+
+  @override
+  void initState() {
+    _value = seed.initial;
+    seed.onState(this);
+  }
+
+  void replace(_WatchedValue value) => setState(() => _value = value);
+
+  @override
+  Seed build(TreeContext context) =>
+      InheritedSeed<_WatchedValue>(value: _value, child: seed.child);
+}
+
+final class _LifecycleCapability extends Capability {
+  _LifecycleCapability(this.events);
+
+  final List<String> events;
+  late _LifecycleAllocation allocation;
+
+  @override
+  Allocation createAllocation(AllocationInputs inputs) =>
+      allocation = _LifecycleAllocation(inputs, events);
+}
+
+final class _LifecycleAllocation extends Allocation {
+  _LifecycleAllocation(super.inputs, this.events);
+
+  final List<String> events;
+  final List<TreeDependencyScope> scopes = [];
+  final List<String> watchedValues = [];
+  int starts = 0;
+  int disposals = 0;
+
+  @override
+  void initState(TreeSnapshotReader reader) => events.add('initState');
+
+  @override
+  void didChangeDependencies(
+    TreeWatchingReader reader,
+    TreeDependencyScope scope,
+  ) {
+    final value = reader.watch<_WatchedValue>()!;
+    scopes.add(scope);
+    watchedValues.add(value.value);
+    events.add('dependency:${value.value}');
+  }
+
+  @override
+  Future<void> startOrAdopt(TreeContext treeContext) async {
+    starts += 1;
+    state = AllocationState.live;
+    events.add('start');
+  }
+
+  @override
+  Future<void> dispose() async {
+    if (state == AllocationState.gone) return;
+    disposals += 1;
+    inputs.args.cancel.cancel();
+    state = AllocationState.gone;
+    events.add('dispose');
+  }
+}
+
 Future<void> _pump() async {
   for (var i = 0; i < 5; i++) {
     await Future<void>.delayed(Duration.zero);
@@ -224,6 +312,7 @@ const _realVendor = SelfManagedProcessVendor(
   StepMount? mount,
   ProcessLeaseVendor? leaseVendor,
   DateTime Function()? nowFn,
+  Seed Function(Seed child)? wrap,
 }) {
   final resolvedFakes = fakes ?? buildFakes();
   final owner = TreeOwner();
@@ -259,20 +348,23 @@ const _realVendor = SelfManagedProcessVendor(
       child: tree,
     );
   }
+  if (wrap != null) tree = wrap(tree);
   // The Workspace is the ambient value SessionScope would mount in the full
   // tree (the context rip-out) — the harness mounts it above the bare host. A
   // test wiring a SourceControl passes the workspace derived from it (matching
   // SessionScope's computation), per the ProcessAllocation spawn-path assert.
   final root = owner.mountRoot(
-    InheritedSeed<StationServices>(
-      value: resolvedFakes.ctx,
-      child: InheritedSeed<CapabilityRegistry>(
-        value: registry,
-        child: InheritedSeed<ServiceBundle>(
-          value: services,
-          child: InheritedSeed<Workspace>(
-            value: workspace ?? testWorkspace('tg-1'),
-            child: tree,
+    ProviderScope(
+      child: InheritedSeed<StationServices>(
+        value: resolvedFakes.ctx,
+        child: InheritedSeed<CapabilityRegistry>(
+          value: registry,
+          child: InheritedSeed<ServiceBundle>(
+            value: services,
+            child: InheritedSeed<Workspace>(
+              value: workspace ?? testWorkspace('tg-1'),
+              child: tree,
+            ),
           ),
         ),
       ),
@@ -748,6 +840,83 @@ void main() {
   });
 
   group('Track E — the async-gap guards (ported from EffectSeed)', () {
+    test(
+      'Allocation lifecycle runs before the Host kick and refreshes a watched value',
+      () async {
+        final events = <String>[];
+        final capability = _LifecycleCapability(events);
+        late _MutableWatchedValueState valueState;
+        final h = _host(
+          capability,
+          wrap: (child) => _MutableWatchedValue(
+            initial: const _WatchedValue('first'),
+            onState: (state) => valueState = state,
+            child: child,
+          ),
+        );
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+
+        final allocation = capability.allocation;
+        expect(events, ['initState', 'dependency:first']);
+        expect(allocation.starts, 0, reason: 'the Host kick is deferred');
+        expect(allocation.scopes.single.isCurrent, isTrue);
+
+        await _pump();
+        expect(events, ['initState', 'dependency:first', 'start']);
+        expect(allocation.starts, 1);
+
+        final firstScope = allocation.scopes.single;
+        valueState.replace(const _WatchedValue('second'));
+        h.owner.flush();
+        await _pump();
+        h.owner.flush();
+
+        expect(allocation.watchedValues, ['first', 'second']);
+        expect(allocation.starts, 1, reason: 'a refresh never re-kicks');
+        expect(firstScope.isCurrent, isFalse);
+        expect(allocation.scopes.last.isCurrent, isTrue);
+        expect(identical(capability.allocation, allocation), isTrue);
+      },
+    );
+
+    test(
+      'dispose before the deferred kick disposes once without starting',
+      () async {
+        final events = <String>[];
+        final capability = _LifecycleCapability(events);
+        final h = _host(
+          capability,
+          wrap: (child) => _MutableWatchedValue(
+            initial: const _WatchedValue('only'),
+            onState: (_) {},
+            child: child,
+          ),
+        );
+        final allocation = capability.allocation;
+        final scope = allocation.scopes.single;
+
+        h.owner.dispose();
+        await _pump();
+        await h.fakes.provider.close();
+
+        expect(allocation.starts, 0);
+        expect(allocation.disposals, 1);
+        expect(allocation.inputs.args.cancel.isCancelled, isTrue);
+        expect(scope.isCurrent, isFalse);
+        expect(events, ['initState', 'dependency:only', 'dispose']);
+        expect(h.fakes.runner.calls, isEmpty);
+
+        final uri = await Isolate.resolvePackageUri(
+          Uri.parse('package:grid_engine/src/circuit/capability_host.dart'),
+        );
+        final source = File(uri!.toFilePath()).readAsStringSync();
+        expect(source, contains('bool _cancelled = false;'));
+      },
+    );
+
     test(
       'a terminal delivered AFTER dispose writes nothing + does not throw',
       () async {

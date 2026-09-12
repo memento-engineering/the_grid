@@ -131,6 +131,102 @@ class _DaemonCap extends ProcessCapability {
   ) async => fresh;
 }
 
+final class _LatestDependencyCap extends ProcessCapability {
+  const _LatestDependencyCap();
+
+  @override
+  CompletionContract get completionContract =>
+      CompletionContract.committedWorkspace;
+
+  @override
+  RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
+    workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
+    command: 'sh',
+    args: const ['-c', 'echo hi'],
+    lifecycle: Lifecycle.oneTurn,
+  );
+
+  @override
+  StepSignal interpretEvent(RuntimeEvent event) => switch (event) {
+    Exited(:final exitCode) when exitCode == 0 => StepSignal.complete,
+    Exited() || Died() => StepSignal.failed,
+    _ => StepSignal.none,
+  };
+}
+
+final class _WatchingSourceControl implements SourceControl {
+  _WatchingSourceControl(this.label, this.provisioned);
+
+  final String label;
+  final List<String> provisioned;
+
+  @override
+  String workspaceFor(String beadId) => '/unused/$beadId';
+
+  @override
+  String branchFor(String beadId) => 'grid/$beadId';
+
+  @override
+  String get baseBranch => 'main';
+
+  @override
+  Future<void> provisionWorkspace({
+    required String beadId,
+    required String workspaceDir,
+  }) async {
+    provisioned.add('$label:$workspaceDir');
+    Directory('$workspaceDir/.git').createSync(recursive: true);
+  }
+}
+
+final class _MutableAllocationDependencies extends StatefulSeed {
+  const _MutableAllocationDependencies({
+    required this.initialServices,
+    required this.initialWorkspace,
+    required this.allocation,
+    required this.onState,
+  });
+
+  final ServiceBundle initialServices;
+  final Workspace initialWorkspace;
+  final Allocation allocation;
+  final void Function(_MutableAllocationDependenciesState state) onState;
+
+  @override
+  State<_MutableAllocationDependencies> createState() =>
+      _MutableAllocationDependenciesState();
+}
+
+final class _MutableAllocationDependenciesState
+    extends State<_MutableAllocationDependencies> {
+  late ServiceBundle _services;
+  late Workspace _workspace;
+
+  @override
+  void initState() {
+    _services = seed.initialServices;
+    _workspace = seed.initialWorkspace;
+    seed.onState(this);
+  }
+
+  void replace(ServiceBundle services, Workspace workspace) => setState(() {
+    _services = services;
+    _workspace = workspace;
+  });
+
+  @override
+  Seed build(TreeContext context) => InheritedSeed<ServiceBundle>(
+    value: _services,
+    child: InheritedSeed<Workspace>(
+      value: _workspace,
+      child: LifecycleProvider<Allocation>.value(
+        seed.allocation,
+        child: const Idle(),
+      ),
+    ),
+  );
+}
+
 /// The ambient values the old CapabilityContext threaded, now read from the
 /// tree (the context rip-out): the workspace the spawn runs in.
 FakeTreeContext _treeCtx() => FakeTreeContext(
@@ -139,13 +235,12 @@ FakeTreeContext _treeCtx() => FakeTreeContext(
   },
 );
 
-AllocationContext _allocCtx(
+AllocationInputs _inputs(
   RuntimeProvider transport, {
   StepKind kind = StepKind.daemon,
   bool live = true,
   AdoptFence fence = const AdoptFence(pgid: 1, pid: 2, token: 't'),
-}) => AllocationContext(
-  treeContext: _treeCtx(),
+}) => AllocationInputs(
   args: stepArgs('tg-1/n'),
   transport: transport,
   address: const AllocationAddress('s', 'tg-1/n'),
@@ -155,6 +250,29 @@ AllocationContext _allocCtx(
   kind: kind,
   liveness: (_) => live,
 );
+
+Future<void> _mountAndStart(Allocation allocation, TreeContext treeContext) {
+  final owner = TreeOwner();
+  Seed child = LifecycleProvider<Allocation>.value(
+    allocation,
+    child: const Idle(),
+  );
+  if (treeContext.getInheritedSeedOfExactType<Workspace>() case final value?) {
+    child = InheritedSeed<Workspace>(value: value, child: child);
+  }
+  if (treeContext.getInheritedSeedOfExactType<ServiceBundle>()
+      case final value?) {
+    child = InheritedSeed<ServiceBundle>(value: value, child: child);
+  }
+  owner.mountRoot(ProviderScope(child: child));
+  addTearDown(owner.dispose);
+  return allocation.startOrAdopt(treeContext);
+}
+
+extension on Allocation {
+  Future<void> startMounted(TreeContext treeContext) =>
+      _mountAndStart(this, treeContext);
+}
 
 /// The circuit the mounted `agent` step belongs to (`StepMount.circuit`, tg-o90).
 const _circuit = Circuit(
@@ -207,17 +325,38 @@ void main() {
     );
 
     test(
-      'AllocationContext exposes only the effect-layer shape (no writer field)',
-      () {
-        final ctx = _allocCtx(FakeRuntimeProvider());
+      'AllocationInputs contains no TreeContext and sdk Allocations store no tree handle',
+      () async {
+        final allocationSource = await _readEngineSource(
+          'src/sdk/allocation.dart',
+        );
+        final leaseSource = await _readEngineSource('src/sdk/lease.dart');
+        final routeSource = await _readEngineSource('src/sdk/route.dart');
+        final inputsDeclaration = allocationSource.substring(
+          allocationSource.indexOf('class AllocationInputs {'),
+          allocationSource.indexOf('abstract class Allocation '),
+        );
+        expect(inputsDeclaration, isNot(contains('TreeContext')));
+        final storedTreeHandle = RegExp(
+          r'\b(?:final|late(?:\s+final)?)\s+TreeContext\s+\w+\s*;',
+        );
+        for (final source in [allocationSource, leaseSource, routeSource]) {
+          expect(storedTreeHandle.hasMatch(source), isFalse);
+        }
+        expect(
+          allocationSource,
+          contains('startOrAdopt(TreeContext treeContext)'),
+          reason: 'call-scoped TreeContext parameters are the positive control',
+        );
+
+        final inputs = _inputs(FakeRuntimeProvider());
         // Compile-time shape: the effect gets transport (process), a report sink,
-        // the host's tree context + the per-step args, address, env, fence, kind,
-        // liveness — and NO writer/notifier. Reading these proves the shape.
-        expect(ctx.transport, isA<RuntimeProvider>());
-        expect(ctx.sink, isA<AllocationSink>());
-        expect(ctx.treeContext, isA<TreeContext>());
-        expect(ctx.args, isA<StepArgs>());
-        expect(ctx.address.providerName, 's/tg-1/n');
+        // per-step args, address, env, fence, kind, liveness — and NO tree
+        // handle/writer/notifier. Reading these proves the positive shape.
+        expect(inputs.transport, isA<RuntimeProvider>());
+        expect(inputs.sink, isA<AllocationSink>());
+        expect(inputs.args, isA<StepArgs>());
+        expect(inputs.address.providerName, 's/tg-1/n');
       },
     );
   });
@@ -229,7 +368,7 @@ void main() {
           'overloaded dispose)', () {
         final svc = ServiceAllocation(
           _NoopService(),
-          _allocCtx(FakeRuntimeProvider(), kind: StepKind.job),
+          _inputs(FakeRuntimeProvider(), kind: StepKind.job),
         );
         expect(svc.isDetachable, isFalse);
         expect(svc.detach, throwsA(isA<UnsupportedError>()));
@@ -240,9 +379,9 @@ void main() {
         final p1 = FakeRuntimeProvider();
         final left = ProcessAllocation(
           _RecProcessCap([]),
-          _allocCtx(p1, live: false),
+          _inputs(p1, live: false),
         );
-        await left.startOrAdopt();
+        await left.startMounted(_treeCtx());
         await _pump();
         await left.detach();
         expect(p1.stopped, isEmpty, reason: 'detach must NOT stop the group');
@@ -250,9 +389,9 @@ void main() {
         final p2 = FakeRuntimeProvider();
         final killed = ProcessAllocation(
           _RecProcessCap([]),
-          _allocCtx(p2, live: false),
+          _inputs(p2, live: false),
         );
-        await killed.startOrAdopt();
+        await killed.startMounted(_treeCtx());
         await _pump();
         await killed.dispose();
         expect(p2.stopped, hasLength(1), reason: 'dispose MUST kill the group');
@@ -265,9 +404,9 @@ void main() {
       final provider = FakeRuntimeProvider();
       final alloc = ProcessAllocation(
         _DaemonCap(fresh: fresh),
-        _allocCtx(provider, live: live),
+        _inputs(provider, live: live),
       );
-      await alloc.startOrAdopt();
+      await alloc.startMounted(_treeCtx());
       await _pump();
       return alloc.adopted;
     }
@@ -289,6 +428,85 @@ void main() {
       expect(await didAdopt(live: true, fresh: true), isTrue);
     });
   });
+
+  test(
+    'ProcessAllocation uses the latest watched services and workspace',
+    () async {
+      final root = Directory.systemTemp.createTempSync(
+        'grid-allocation-watch-',
+      );
+      addTearDown(() => root.deleteSync(recursive: true));
+      final oldWorkspace = testWorkspace(
+        'tg-1',
+        workspaceDir: '${root.path}/old',
+      );
+      final newWorkspace = testWorkspace(
+        'tg-1',
+        workspaceDir: '${root.path}/new',
+      );
+      final provisions = <String>[];
+      final oldServices = ServiceBundle(
+        sourceControl: _WatchingSourceControl('old', provisions),
+      );
+      final newServices = ServiceBundle(
+        sourceControl: _WatchingSourceControl('new', provisions),
+      );
+      final probedWorkspaces = <String>[];
+      final reports = <AllocationReport>[];
+      final transport = FakeRuntimeProvider();
+      addTearDown(transport.close);
+      final allocation = ProcessAllocation(
+        const _LatestDependencyCap(),
+        AllocationInputs(
+          args: stepArgs('tg-1/agent'),
+          transport: transport,
+          address: const AllocationAddress('s', 'tg-1/agent'),
+          env: const {},
+          sink: reports.add,
+          workSignal: (workspaceDir) async {
+            probedWorkspaces.add(workspaceDir);
+            return GateOutcome.clear;
+          },
+        ),
+      );
+      late _MutableAllocationDependenciesState dependencyState;
+      final owner = TreeOwner()
+        ..mountRoot(
+          ProviderScope(
+            child: _MutableAllocationDependencies(
+              initialServices: oldServices,
+              initialWorkspace: oldWorkspace,
+              allocation: allocation,
+              onState: (state) => dependencyState = state,
+            ),
+          ),
+        );
+      addTearDown(owner.dispose);
+
+      dependencyState.replace(newServices, newWorkspace);
+      owner.flush();
+      await _pump();
+      owner.flush();
+
+      final treeContext = FakeTreeContext(
+        values: {ServiceBundle: newServices, Workspace: newWorkspace},
+      );
+      await allocation.startOrAdopt(treeContext);
+      allocation.deliverEventForTest(
+        const Exited(name: 's/tg-1/agent', exitCode: 0, inferred: true),
+        treeContext,
+      );
+      await _pump();
+
+      expect(provisions, ['new:${newWorkspace.workspaceDir}']);
+      expect(
+        transport.started.single.config.workDir,
+        newWorkspace.workspaceDir,
+      );
+      expect(probedWorkspaces, [newWorkspace.workspaceDir]);
+      expect(reports.whereType<AllocationCompleted>(), hasLength(1));
+    },
+  );
 
   group('Track G — the P0 Host juggling is GONE (cleanup fence)', () {
     test('capability_host.dart names no _capCtx / _stepName / _writeSignal / '
@@ -386,17 +604,17 @@ void main() {
         final provider = FakeRuntimeProvider();
         addTearDown(provider.close);
         final reports = <AllocationReport>[];
+        final treeContext = FakeTreeContext(
+          values: {
+            Workspace: testWorkspace(
+              'tg-1',
+              workspaceDir: '/grid/workspaces/tg-1',
+            ),
+          },
+        );
         final alloc = ProcessAllocation(
           const _WorkDirCap('/grid/main-checkout'),
-          AllocationContext(
-            treeContext: FakeTreeContext(
-              values: {
-                Workspace: testWorkspace(
-                  'tg-1',
-                  workspaceDir: '/grid/workspaces/tg-1',
-                ),
-              },
-            ),
+          AllocationInputs(
             args: stepArgs('tg-1/critic'),
             transport: provider,
             address: const AllocationAddress('sess-1', 'tg-1/critic'),
@@ -406,7 +624,7 @@ void main() {
           ),
         );
 
-        await alloc.startOrAdopt();
+        await alloc.startMounted(treeContext);
         await _pump();
 
         expect(provider.started, isEmpty);
@@ -432,17 +650,17 @@ void main() {
           final provider = FakeRuntimeProvider();
           addTearDown(provider.close);
           final reports = <AllocationReport>[];
+          final treeContext = FakeTreeContext(
+            values: {
+              Workspace: testWorkspace(
+                'tg-1',
+                workspaceDir: '/grid/workspaces/tg-1',
+              ),
+            },
+          );
           final alloc = ProcessAllocation(
             _WorkDirCap(workDir),
-            AllocationContext(
-              treeContext: FakeTreeContext(
-                values: {
-                  Workspace: testWorkspace(
-                    'tg-1',
-                    workspaceDir: '/grid/workspaces/tg-1',
-                  ),
-                },
-              ),
+            AllocationInputs(
               args: stepArgs('tg-1/critic'),
               transport: provider,
               address: AllocationAddress('sess-1', 'tg-1/critic-$workDir'),
@@ -452,7 +670,7 @@ void main() {
             ),
           );
 
-          await alloc.startOrAdopt();
+          await alloc.startMounted(treeContext);
           await _pump();
 
           expect(provider.started, hasLength(1));
