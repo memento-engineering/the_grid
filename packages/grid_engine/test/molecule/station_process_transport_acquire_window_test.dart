@@ -67,8 +67,7 @@ ProcessLeaseRequest _request({
 }) => ProcessLeaseRequest(
   stepBeadId: 'tgdog-step-window',
   capability: const _JobCap(),
-  allocation: AllocationContext(
-    treeContext: FakeTreeContext(),
+  inputs: AllocationInputs(
     args: args ?? stepArgs('tg-1/lease'),
     transport: transport,
     address: const AllocationAddress('tgdog-s', 'tg-1/lease'),
@@ -78,6 +77,24 @@ ProcessLeaseRequest _request({
 );
 
 void _ignoreReport(AllocationReport report) {}
+
+Future<void> _mountAndStart(Allocation allocation, TreeContext treeContext) {
+  final owner = TreeOwner();
+  Seed child = LifecycleProvider<Allocation>.value(
+    allocation,
+    child: const Idle(),
+  );
+  if (treeContext.getInheritedSeedOfExactType<Workspace>() case final value?) {
+    child = InheritedSeed<Workspace>(value: value, child: child);
+  }
+  if (treeContext.getInheritedSeedOfExactType<ServiceBundle>()
+      case final value?) {
+    child = InheritedSeed<ServiceBundle>(value: value, child: child);
+  }
+  owner.mountRoot(ProviderScope(child: child));
+  addTearDown(owner.dispose);
+  return allocation.startOrAdopt(treeContext);
+}
 
 /// A [BdRunner] whose `update` calls PARK until [releaseUpdates] — the
 /// serialized `StationBeadWriter` queue "holding pending writes" (the
@@ -187,10 +204,11 @@ void main() {
         args: args,
       );
       final alloc =
-          vendor.leaseFor(request).createAllocation(request.allocation)
+          vendor.leaseFor(request).createAllocation(request.inputs)
               as LeaseAllocation<ProcessHandle>;
 
-      final done = alloc.startOrAdopt();
+      final tree = FakeTreeContext();
+      final done = _mountAndStart(alloc, tree);
       await pumpEventQueue();
       expect(transport.started, hasLength(1));
       transport.emit(const SessionStarted(name: _name, pid: 9, pgid: 9));

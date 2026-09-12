@@ -13,7 +13,7 @@
 //    establishes — proving daemon adopt-on-proveFresh-true with no re-spawn,
 //    a job never adopting, and release stopping the group + clearing the
 //    breadcrumb. Every leaseFor call constructs a LITERAL ProcessLeaseRequest
-//    (the fake ProcessCapability + AllocationContext shown in full — the
+//    (the fake ProcessCapability + AllocationInputs shown in full — the
 //    round-3 committee's binding fix).
 //  - the single-writer STRUCTURAL FALSIFIER: no lib/ file outside
 //    process_lease_vendor.dart may combine a chokepoint write with the
@@ -136,7 +136,7 @@ class _ProvisionSourceControl implements SourceControl {
 }
 
 /// The LITERAL [ProcessLeaseRequest] construction (the round-3 committee's
-/// binding fix: the fake AllocationContext/ProcessCapability shown in full,
+/// binding fix: the fake AllocationInputs/ProcessCapability shown in full,
 /// never prose). [transport] defaults to a fresh [FakeRuntimeProvider]; pass
 /// one in to assert release stopped the group on it.
 ProcessLeaseRequest _request(
@@ -146,8 +146,7 @@ ProcessLeaseRequest _request(
 }) => ProcessLeaseRequest(
   stepBeadId: stepBeadId,
   capability: const _FakeProcessCap(),
-  allocation: AllocationContext(
-    treeContext: FakeTreeContext(),
+  inputs: AllocationInputs(
     args: stepArgs('tg-1/lease'),
     transport: transport ?? FakeRuntimeProvider(),
     address: const AllocationAddress('tgdog-s', 'tg-1/lease'),
@@ -164,6 +163,29 @@ FakeTreeContext _stationCtx({
   ..provide<Workspace>(
     testWorkspace('tg-1', workspaceDir: workspaceDir, branch: 'grid/tg-1'),
   );
+
+Future<void> _mountAndStart(Allocation allocation, TreeContext treeContext) {
+  final owner = TreeOwner();
+  Seed child = LifecycleProvider<Allocation>.value(
+    allocation,
+    child: const Idle(),
+  );
+  if (treeContext.getInheritedSeedOfExactType<Workspace>() case final value?) {
+    child = InheritedSeed<Workspace>(value: value, child: child);
+  }
+  if (treeContext.getInheritedSeedOfExactType<ServiceBundle>()
+      case final value?) {
+    child = InheritedSeed<ServiceBundle>(value: value, child: child);
+  }
+  owner.mountRoot(ProviderScope(child: child));
+  addTearDown(owner.dispose);
+  return allocation.startOrAdopt(treeContext);
+}
+
+extension on Allocation {
+  Future<void> startMounted(TreeContext treeContext) =>
+      _mountAndStart(this, treeContext);
+}
 
 Future<ProcessHandle> _neverSpawn(
   ProcessLeaseRequest request,
@@ -186,8 +208,7 @@ LeaseAllocation<ProcessHandle> _alloc(
   StepKind kind = StepKind.daemon,
 }) =>
     cap.createAllocation(
-          AllocationContext(
-            treeContext: FakeTreeContext(),
+          AllocationInputs(
             args: stepArgs('tg-1/lease'),
             transport: FakeRuntimeProvider(),
             address: const AllocationAddress('tgdog-s', 'tg-1/lease'),
@@ -226,8 +247,7 @@ void main() {
       final request = ProcessLeaseRequest(
         stepBeadId: 'tgdog-step-channel',
         capability: _ChannelProcessCap(session),
-        allocation: AllocationContext(
-          treeContext: FakeTreeContext(),
+        inputs: AllocationInputs(
           args: stepArgs('tg-1/lease'),
           transport: runtime,
           address: const AllocationAddress('tgdog-s', 'tg-1/lease'),
@@ -253,8 +273,7 @@ void main() {
       final allocation = vendor
           .leaseFor(request)
           .createAllocation(
-            AllocationContext(
-              treeContext: FakeTreeContext(),
+            AllocationInputs(
               args: stepArgs('tg-1/lease'),
               transport: runtime,
               address: const AllocationAddress('tgdog-s', 'tg-1/lease'),
@@ -267,7 +286,7 @@ void main() {
         const ProcessSessionUpdate.completed(result: <String, String>{}).signal,
         StepSignal.complete,
       );
-      await allocation.startOrAdopt();
+      await allocation.startMounted(FakeTreeContext());
       await Future<void>.delayed(Duration.zero);
 
       expect(legacyDispatches, 0);
@@ -298,8 +317,7 @@ void main() {
     final request = ProcessLeaseRequest(
       stepBeadId: 'tgdog-step-channel-production',
       capability: capability,
-      allocation: AllocationContext(
-        treeContext: FakeTreeContext(),
+      inputs: AllocationInputs(
         args: stepArgs('tg-1/lease'),
         transport: runtime,
         address: const AllocationAddress('tgdog-s', 'tg-1/lease'),
@@ -329,7 +347,7 @@ void main() {
       kind: StepKind.job,
     );
 
-    await allocation.startOrAdopt();
+    await allocation.startMounted(FakeTreeContext());
     await Future<void>.delayed(Duration.zero);
 
     expect(spawns, 1);
@@ -504,7 +522,7 @@ void main() {
           vendor.leaseFor(_request('tgdog-step-1')),
           sink: reports.add,
         );
-        await alloc.startOrAdopt();
+        await alloc.startMounted(FakeTreeContext());
 
         expect(alloc.adopted, isTrue);
         expect(alloc.handle, prior);
@@ -550,7 +568,7 @@ void main() {
           vendor.leaseFor(_request('tgdog-step-1')),
           sink: reports.add,
         );
-        await alloc.startOrAdopt();
+        await alloc.startMounted(FakeTreeContext());
 
         expect(alloc.adopted, isFalse);
         expect(alloc.handle, fresh);
@@ -579,7 +597,7 @@ void main() {
         vendor.leaseFor(_request('tgdog-step-1')),
         sink: (_) {},
       );
-      await alloc.startOrAdopt();
+      await alloc.startMounted(FakeTreeContext());
 
       expect(alloc.adopted, isFalse);
       expect(alloc.handle, fresh);
@@ -606,7 +624,7 @@ void main() {
         vendor.leaseFor(_request('tgdog-step-1')),
         sink: (_) {},
       );
-      await alloc.startOrAdopt();
+      await alloc.startMounted(FakeTreeContext());
 
       expect(alloc.adopted, isFalse);
       expect(alloc.handle, fresh);
@@ -647,7 +665,7 @@ void main() {
         sink: reports.add,
         kind: StepKind.job,
       );
-      await alloc.startOrAdopt();
+      await alloc.startMounted(FakeTreeContext());
 
       expect(alloc.adopted, isFalse);
       expect(log, ['spawn', 'dispatch']);
@@ -674,7 +692,7 @@ void main() {
         vendor.leaseFor(_request('tgdog-step-1', transport: requestTransport)),
         sink: (_) {},
       );
-      await alloc.startOrAdopt();
+      await alloc.startMounted(FakeTreeContext());
       await alloc.dispose();
 
       final updates = fakes.runner.callsFor('update');
@@ -731,7 +749,7 @@ void main() {
         vendor.leaseFor(_request('tgdog-step-3')),
         sink: reports.add,
       );
-      await alloc.startOrAdopt();
+      await alloc.startMounted(FakeTreeContext());
 
       expect(alloc.adopted, isFalse);
       expect(log, ['spawn', 'dispatch']);
@@ -750,7 +768,7 @@ void main() {
         vendor.leaseFor(_request('tgdog-step-3', transport: requestTransport)),
         sink: (_) {},
       );
-      await alloc.startOrAdopt();
+      await alloc.startMounted(FakeTreeContext());
       await alloc.dispose(); // must not throw
       expect(alloc.state, AllocationState.gone);
       expect(requestTransport.stopped, ['tgdog-s/tg-1/lease']);

@@ -38,6 +38,25 @@ class _ThrowingResultCap extends ProcessCapability {
   }
 }
 
+Future<void> _mountAndStart(Allocation allocation, TreeContext treeContext) {
+  final owner = TreeOwner()
+    ..mountRoot(
+      ProviderScope(
+        child: LifecycleProvider<Allocation>.value(
+          allocation,
+          child: const Idle(),
+        ),
+      ),
+    );
+  addTearDown(owner.dispose);
+  return allocation.startOrAdopt(treeContext);
+}
+
+extension on Allocation {
+  Future<void> startMounted(TreeContext treeContext) =>
+      _mountAndStart(this, treeContext);
+}
+
 void main() {
   test('a throwing result() reports AllocationFailed (supervision), '
       'never completes and never leaks an unhandled error', () async {
@@ -46,8 +65,7 @@ void main() {
     final reports = <AllocationReport>[];
     final alloc = ProcessAllocation(
       const _ThrowingResultCap(),
-      AllocationContext(
-        treeContext: FakeTreeContext(),
+      AllocationInputs(
         args: stepArgs('tg-1/agent'),
         transport: provider,
         address: const AllocationAddress('sess-1', 'tg-1/agent'),
@@ -58,9 +76,10 @@ void main() {
 
     // The whole test body runs in a guarded zone: an unhandled async error
     // from the completion path would fail the test loudly (the OLD bug).
-    await alloc.startOrAdopt();
+    await alloc.startMounted(FakeTreeContext());
     alloc.deliverEventForTest(
       const Exited(name: 'sess-1/tg-1/agent', exitCode: 0),
+      FakeTreeContext(),
     );
     // Drain the unawaited _reportComplete.
     await Future<void>.delayed(Duration.zero);
@@ -88,8 +107,7 @@ void main() {
       final reports = <AllocationReport>[];
       final alloc = ProcessAllocation(
         const _OkResultCap(),
-        AllocationContext(
-          treeContext: FakeTreeContext(),
+        AllocationInputs(
           args: stepArgs('tg-1/agent'),
           transport: provider,
           address: const AllocationAddress('sess-1', 'tg-1/agent'),
@@ -97,9 +115,10 @@ void main() {
           sink: reports.add,
         ),
       );
-      await alloc.startOrAdopt();
+      await alloc.startMounted(FakeTreeContext());
       alloc.deliverEventForTest(
         const Exited(name: 'sess-1/tg-1/agent', exitCode: 0),
+        FakeTreeContext(),
       );
       // The capability boundary holds a successful result for one turn so an
       // immediate detached rejection can fail the allocation instead.

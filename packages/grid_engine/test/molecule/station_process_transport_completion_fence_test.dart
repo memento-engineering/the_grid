@@ -69,8 +69,7 @@ Future<({StepOutcome outcome, int probes})> _dispatchWith({
       ServiceBundle: const ServiceBundle(sourceControl: _FakeSourceControl()),
     },
   );
-  final ctx = AllocationContext(
-    treeContext: tree,
+  final inputs = AllocationInputs(
     args: stepArgs('tg-1/build'),
     transport: transport,
     address: const AllocationAddress('tgdog-sess1', 'tg-1/build'),
@@ -84,13 +83,13 @@ Future<({StepOutcome outcome, int probes})> _dispatchWith({
   final request = ProcessLeaseRequest(
     stepBeadId: 'tgdog-step-build',
     capability: const _CommittedProcessCap(payload: {'ok': 'true'}),
-    allocation: ctx,
+    inputs: inputs,
   );
   final future = stationProcessDispatcher(
     const ProcessHandle(pgid: 44, pid: 44, token: 'tok'),
     request,
     tree,
-    ctx.args,
+    inputs.args,
   );
   transport.emit(event);
   return (outcome: await future, probes: probes);

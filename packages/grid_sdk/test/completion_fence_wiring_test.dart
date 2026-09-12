@@ -166,29 +166,47 @@ void main() {
       ),
     );
 
-    ProcessAllocation drive(
+    void drive(
       ProcessCapability cap,
       List<AllocationReport> reports,
-    ) =>
-        cap.createAllocation(
-              AllocationContext(
-                treeContext: FakeTreeContext(
-                  values: {
-                    ServiceBundle: ServiceBundle(
-                      sourceControl: _RepoSourceControl(repo),
-                    ),
-                    Workspace: testWorkspace('tg-1', workspaceDir: repo),
-                  },
+      RuntimeEvent event,
+    ) {
+      final treeContext = FakeTreeContext(
+        values: {
+          ServiceBundle: ServiceBundle(sourceControl: _RepoSourceControl(repo)),
+          Workspace: testWorkspace('tg-1', workspaceDir: repo),
+        },
+      );
+      final allocation =
+          cap.createAllocation(
+                AllocationInputs(
+                  args: stepArgs('tg-1/agent'),
+                  transport: FakeRuntimeProvider(),
+                  address: const AllocationAddress('tgdog-s', 'tg-1/agent'),
+                  env: const {},
+                  sink: reports.add,
+                  workSignal: probe(),
                 ),
-                args: stepArgs('tg-1/agent'),
-                transport: FakeRuntimeProvider(),
-                address: const AllocationAddress('tgdog-s', 'tg-1/agent'),
-                env: const {},
-                sink: reports.add,
-                workSignal: probe(),
+              )
+              as ProcessAllocation;
+      final owner = TreeOwner()
+        ..mountRoot(
+          ProviderScope(
+            child: InheritedSeed<ServiceBundle>(
+              value: treeContext.getInheritedSeedOfExactType<ServiceBundle>()!,
+              child: InheritedSeed<Workspace>(
+                value: treeContext.getInheritedSeedOfExactType<Workspace>()!,
+                child: LifecycleProvider<Allocation>.value(
+                  allocation,
+                  child: const Idle(),
+                ),
               ),
-            )
-            as ProcessAllocation;
+            ),
+          ),
+        );
+      addTearDown(owner.dispose);
+      allocation.deliverEventForTest(event, treeContext);
+    }
 
     /// Waits for the REAL `git status` probe to settle (each test expects exactly
     /// one report) — a deadline, not a fixed pump, so a slow git is never flaky.
@@ -208,7 +226,9 @@ void main() {
       await git(const ['add', 'lib']);
       await git(const ['commit', '-q', '-m', 'the agent committed']);
 
-      drive(const _AgentCap(), reports).deliverEventForTest(
+      drive(
+        const _AgentCap(),
+        reports,
         const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0, inferred: true),
       );
       await settle(reports);
@@ -224,7 +244,9 @@ void main() {
         final reports = <AllocationReport>[];
         write('lib/work.dart', 'void main() { // killed mid-\n');
 
-        drive(const _AgentCap(), reports).deliverEventForTest(
+        drive(
+          const _AgentCap(),
+          reports,
           const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0, inferred: true),
         );
         await settle(reports);
@@ -243,7 +265,9 @@ void main() {
         final reports = <AllocationReport>[];
         write('lib/work.dart', 'void main() { // dirty\n');
 
-        drive(const _CriticCap(), reports).deliverEventForTest(
+        drive(
+          const _CriticCap(),
+          reports,
           const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0, inferred: true),
         );
         await settle(reports);

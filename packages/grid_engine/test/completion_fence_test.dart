@@ -155,7 +155,7 @@ Future<void> _pump() async {
   }
 }
 
-AllocationContext _ctx({
+AllocationInputs _inputs({
   required AllocationSink sink,
   required CancelToken cancel,
   WorkSignalProbe? workSignal,
@@ -163,16 +163,7 @@ AllocationContext _ctx({
   bool withSourceControl = true,
   StepKind kind = StepKind.job,
   Duration workSignalTimeout = kWorkSignalTimeout,
-}) => AllocationContext(
-  treeContext: FakeTreeContext(
-    values: {
-      ServiceBundle: withSourceControl
-          ? ServiceBundle(sourceControl: _FakeSourceControl('/w'))
-          : const ServiceBundle(),
-      if (withWorkspace)
-        Workspace: testWorkspace('tg-1', workspaceDir: '/w/tg-1'),
-    },
-  ),
+}) => AllocationInputs(
   args: stepArgs('tg-1/agent', cancel: cancel),
   transport: FakeRuntimeProvider(),
   address: const AllocationAddress('tgdog-s', 'tg-1/agent'),
@@ -182,6 +173,51 @@ AllocationContext _ctx({
   workSignal: workSignal ?? noWorkSignal,
   workSignalTimeout: workSignalTimeout,
 );
+
+TreeContext _mountAllocation(
+  ProcessAllocation allocation, {
+  bool withWorkspace = true,
+  bool withSourceControl = true,
+}) {
+  final treeContext = FakeTreeContext(
+    values: {
+      ServiceBundle: withSourceControl
+          ? ServiceBundle(sourceControl: _FakeSourceControl('/w'))
+          : const ServiceBundle(),
+      if (withWorkspace)
+        Workspace: testWorkspace('tg-1', workspaceDir: '/w/tg-1'),
+    },
+  );
+  Seed child = LifecycleProvider<Allocation>.value(
+    allocation,
+    child: const Idle(),
+  );
+  if (treeContext.getInheritedSeedOfExactType<Workspace>()
+      case final workspace?) {
+    child = InheritedSeed<Workspace>(value: workspace, child: child);
+  }
+  child = InheritedSeed<ServiceBundle>(
+    value: treeContext.getInheritedSeedOfExactType<ServiceBundle>()!,
+    child: child,
+  );
+  final owner = TreeOwner()..mountRoot(ProviderScope(child: child));
+  addTearDown(owner.dispose);
+  return treeContext;
+}
+
+void _deliverMounted(
+  ProcessAllocation allocation,
+  RuntimeEvent event, {
+  bool withWorkspace = true,
+  bool withSourceControl = true,
+}) {
+  final treeContext = _mountAllocation(
+    allocation,
+    withWorkspace: withWorkspace,
+    withSourceControl: withSourceControl,
+  );
+  allocation.deliverEventForTest(event, treeContext);
+}
 
 void main() {
   group('the completion fence — an INFERRED exit is proven, never assumed', () {
@@ -193,7 +229,7 @@ void main() {
       final probe = _Probe(GateOutcome.present);
       final alloc =
           _AgentCap(log).createAllocation(
-                _ctx(
+                _inputs(
                   sink: reports.add,
                   cancel: CancelToken(),
                   workSignal: probe.call,
@@ -201,7 +237,7 @@ void main() {
               )
               as ProcessAllocation;
 
-      alloc.deliverEventForTest(_inferredExit);
+      _deliverMounted(alloc, _inferredExit);
       await _pump();
 
       expect(probe.calls, [
@@ -231,7 +267,7 @@ void main() {
       final probe = _Probe(GateOutcome.clear);
       final alloc =
           _AgentCap(log).createAllocation(
-                _ctx(
+                _inputs(
                   sink: reports.add,
                   cancel: CancelToken(),
                   workSignal: probe.call,
@@ -239,7 +275,7 @@ void main() {
               )
               as ProcessAllocation;
 
-      alloc.deliverEventForTest(_inferredExit);
+      _deliverMounted(alloc, _inferredExit);
       await _pump();
 
       expect(probe.calls, hasLength(1));
@@ -255,7 +291,7 @@ void main() {
       final reports = <AllocationReport>[];
       final alloc =
           _AgentCap([]).createAllocation(
-                _ctx(
+                _inputs(
                   sink: reports.add,
                   cancel: CancelToken(),
                   workSignal: _Probe(GateOutcome.probeError).call,
@@ -263,7 +299,7 @@ void main() {
               )
               as ProcessAllocation;
 
-      alloc.deliverEventForTest(_inferredExit);
+      _deliverMounted(alloc, _inferredExit);
       await _pump();
 
       expect(reports.whereType<AllocationCompleted>(), isEmpty);
@@ -278,7 +314,7 @@ void main() {
       final reports = <AllocationReport>[];
       final alloc =
           _AgentCap([]).createAllocation(
-                _ctx(
+                _inputs(
                   sink: reports.add,
                   cancel: CancelToken(),
                   workSignal: _Probe(GateOutcome.clear, throws: true).call,
@@ -286,7 +322,7 @@ void main() {
               )
               as ProcessAllocation;
 
-      alloc.deliverEventForTest(_inferredExit);
+      _deliverMounted(alloc, _inferredExit);
       await _pump();
 
       expect(reports.whereType<AllocationCompleted>(), isEmpty);
@@ -304,7 +340,7 @@ void main() {
       // reports NOTHING, forever: supervision cannot see it, and the work is lost.
       final alloc =
           _AgentCap([]).createAllocation(
-                _ctx(
+                _inputs(
                   sink: reports.add,
                   cancel: CancelToken(),
                   workSignal: (_) => Completer<GateOutcome>().future,
@@ -313,7 +349,7 @@ void main() {
               )
               as ProcessAllocation;
 
-      alloc.deliverEventForTest(_inferredExit);
+      _deliverMounted(alloc, _inferredExit);
       await Future<void>.delayed(const Duration(milliseconds: 80));
 
       expect(reports.whereType<AllocationCompleted>(), isEmpty);
@@ -328,8 +364,7 @@ void main() {
     test('the production timeout default is armed (a fence with no explicit '
         'timeout is still bounded)', () {
       expect(
-        AllocationContext(
-          treeContext: FakeTreeContext(),
+        AllocationInputs(
           args: stepArgs('tg-1/agent'),
           transport: FakeRuntimeProvider(),
           address: const AllocationAddress('tgdog-s', 'tg-1/agent'),
@@ -347,7 +382,7 @@ void main() {
         final probe = _Probe(GateOutcome.clear);
         final alloc =
             _AgentCap([]).createAllocation(
-                  _ctx(
+                  _inputs(
                     sink: reports.add,
                     cancel: CancelToken(),
                     workSignal: probe.call,
@@ -355,8 +390,12 @@ void main() {
                 )
                 as ProcessAllocation;
 
-        alloc.deliverEventForTest(_inferredExit);
-        alloc.deliverEventForTest(_inferredExit); // the stream re-fires
+        final treeContext = _mountAllocation(alloc);
+        alloc.deliverEventForTest(_inferredExit, treeContext);
+        alloc.deliverEventForTest(
+          _inferredExit,
+          treeContext,
+        ); // the stream re-fires
         await _pump();
 
         expect(
@@ -376,7 +415,7 @@ void main() {
       final probe = _Probe(GateOutcome.present);
       final alloc =
           _CriticCap().createAllocation(
-                _ctx(
+                _inputs(
                   sink: reports.add,
                   cancel: CancelToken(),
                   workSignal: probe.call,
@@ -384,7 +423,7 @@ void main() {
               )
               as ProcessAllocation;
 
-      alloc.deliverEventForTest(_inferredExit);
+      _deliverMounted(alloc, _inferredExit);
       await _pump();
 
       expect(
@@ -414,7 +453,7 @@ void main() {
       final probe = _Probe(GateOutcome.present);
       final alloc =
           _AgentCap([]).createAllocation(
-                _ctx(
+                _inputs(
                   sink: reports.add,
                   cancel: CancelToken(),
                   workSignal: probe.call,
@@ -423,7 +462,7 @@ void main() {
               )
               as ProcessAllocation;
 
-      alloc.deliverEventForTest(_inferredExit);
+      _deliverMounted(alloc, _inferredExit, withSourceControl: false);
       await _pump();
 
       expect(
@@ -439,7 +478,7 @@ void main() {
       final probe = _Probe(GateOutcome.present);
       final alloc =
           _AgentCap([]).createAllocation(
-                _ctx(
+                _inputs(
                   sink: reports.add,
                   cancel: CancelToken(),
                   workSignal: probe.call,
@@ -448,7 +487,7 @@ void main() {
               )
               as ProcessAllocation;
 
-      alloc.deliverEventForTest(_inferredExit);
+      _deliverMounted(alloc, _inferredExit, withWorkspace: false);
       await _pump();
 
       expect(probe.calls, isEmpty);
@@ -459,12 +498,12 @@ void main() {
         'behaves exactly as today', () async {
       final reports = <AllocationReport>[];
       final alloc =
-          _AgentCap(
-                [],
-              ).createAllocation(_ctx(sink: reports.add, cancel: CancelToken()))
+          _AgentCap([]).createAllocation(
+                _inputs(sink: reports.add, cancel: CancelToken()),
+              )
               as ProcessAllocation;
 
-      alloc.deliverEventForTest(_inferredExit);
+      _deliverMounted(alloc, _inferredExit);
       await _pump();
 
       expect(reports.whereType<AllocationCompleted>(), hasLength(1));
@@ -478,7 +517,7 @@ void main() {
       final probe = _Probe(GateOutcome.present);
       final alloc =
           _AgentCap([]).createAllocation(
-                _ctx(
+                _inputs(
                   sink: reports.add,
                   cancel: CancelToken(),
                   workSignal: probe.call,
@@ -486,7 +525,7 @@ void main() {
               )
               as ProcessAllocation;
 
-      alloc.deliverEventForTest(_observedExit);
+      _deliverMounted(alloc, _observedExit);
       await _pump();
 
       expect(probe.calls, isEmpty, reason: 'an observed exit needs no proof');
@@ -501,7 +540,7 @@ void main() {
         final probe = _Probe(GateOutcome.present);
         final alloc =
             _DaemonCap().createAllocation(
-                  _ctx(
+                  _inputs(
                     sink: reports.add,
                     cancel: CancelToken(),
                     workSignal: probe.call,
@@ -510,7 +549,7 @@ void main() {
                 )
                 as ProcessAllocation;
 
-        alloc.deliverEventForTest(_inferredExit);
+        _deliverMounted(alloc, _inferredExit);
         await _pump();
 
         expect(probe.calls, isEmpty);
@@ -526,12 +565,16 @@ void main() {
       final probe = _Probe(GateOutcome.present);
       final alloc =
           _AgentCap([]).createAllocation(
-                _ctx(sink: reports.add, cancel: cancel, workSignal: probe.call),
+                _inputs(
+                  sink: reports.add,
+                  cancel: cancel,
+                  workSignal: probe.call,
+                ),
               )
               as ProcessAllocation;
 
       cancel.cancel();
-      alloc.deliverEventForTest(_inferredExit);
+      _deliverMounted(alloc, _inferredExit);
       await _pump();
 
       expect(probe.calls, isEmpty);
@@ -544,11 +587,15 @@ void main() {
       final probe = _Probe(GateOutcome.present, onCall: cancel.cancel);
       final alloc =
           _AgentCap([]).createAllocation(
-                _ctx(sink: reports.add, cancel: cancel, workSignal: probe.call),
+                _inputs(
+                  sink: reports.add,
+                  cancel: cancel,
+                  workSignal: probe.call,
+                ),
               )
               as ProcessAllocation;
 
-      alloc.deliverEventForTest(_inferredExit);
+      _deliverMounted(alloc, _inferredExit);
       await _pump();
 
       expect(probe.calls, hasLength(1));
@@ -565,11 +612,15 @@ void main() {
       );
       final alloc =
           _AgentCap([]).createAllocation(
-                _ctx(sink: reports.add, cancel: cancel, workSignal: probe.call),
+                _inputs(
+                  sink: reports.add,
+                  cancel: cancel,
+                  workSignal: probe.call,
+                ),
               )
               as ProcessAllocation;
 
-      alloc.deliverEventForTest(_inferredExit);
+      _deliverMounted(alloc, _inferredExit);
       await _pump();
 
       expect(reports, isEmpty);

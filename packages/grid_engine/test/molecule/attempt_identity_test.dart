@@ -79,8 +79,7 @@ ProcessLeaseRequest _request({
 }) => ProcessLeaseRequest(
   stepBeadId: _stepBeadId,
   capability: const _JobCap(),
-  allocation: AllocationContext(
-    treeContext: FakeTreeContext(),
+  inputs: AllocationInputs(
     args: args,
     transport: transport,
     address: const AllocationAddress('tgdog-s', 'tg-1/lease'),
@@ -92,6 +91,25 @@ ProcessLeaseRequest _request({
     kind: kind,
   ),
 );
+
+Future<void> _mountAndStart(Allocation allocation, TreeContext treeContext) {
+  final owner = TreeOwner()
+    ..mountRoot(
+      ProviderScope(
+        child: LifecycleProvider<Allocation>.value(
+          allocation,
+          child: const Idle(),
+        ),
+      ),
+    );
+  addTearDown(owner.dispose);
+  return allocation.startOrAdopt(treeContext);
+}
+
+extension on Allocation {
+  Future<void> startMounted(TreeContext treeContext) =>
+      _mountAndStart(this, treeContext);
+}
 
 void main() {
   group('the breadcrumb carrier — grid.lease.attempt_id', () {
@@ -248,11 +266,9 @@ void main() {
 
       final args = stepArgs('tg-1/lease');
       final request = _request(transport: transport, args: args);
-      final alloc = vendor
-          .leaseFor(request)
-          .createAllocation(request.allocation);
+      final alloc = vendor.leaseFor(request).createAllocation(request.inputs);
 
-      final done = alloc.startOrAdopt();
+      final done = alloc.startMounted(FakeTreeContext());
       await pumpEventQueue();
       transport.emit(const SessionStarted(name: _name, pid: 9, pgid: 9));
       await pumpEventQueue();
@@ -331,9 +347,9 @@ void main() {
         kind: StepKind.daemon,
       );
       final alloc =
-          vendor.leaseFor(request).createAllocation(request.allocation)
+          vendor.leaseFor(request).createAllocation(request.inputs)
               as LeaseAllocation<ProcessHandle>;
-      await alloc.startOrAdopt();
+      await alloc.startMounted(FakeTreeContext());
 
       expect(alloc.adopted, isTrue);
       expect(
@@ -375,9 +391,9 @@ void main() {
         kind: StepKind.daemon,
       );
       final alloc =
-          vendor.leaseFor(request).createAllocation(request.allocation)
+          vendor.leaseFor(request).createAllocation(request.inputs)
               as LeaseAllocation<ProcessHandle>;
-      await alloc.startOrAdopt();
+      await alloc.startMounted(FakeTreeContext());
 
       expect(alloc.adopted, isTrue);
       expect(alloc.handle!.attemptId, isEmpty);

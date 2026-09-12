@@ -53,8 +53,7 @@ class _JobCap extends ProcessCapability {
 ProcessLeaseRequest _request(RuntimeProvider transport) => ProcessLeaseRequest(
   stepBeadId: 'tgdog-step-midspawn',
   capability: const _JobCap(),
-  allocation: AllocationContext(
-    treeContext: FakeTreeContext(),
+  inputs: AllocationInputs(
     args: stepArgs('tg-1/lease'),
     transport: transport,
     address: const AllocationAddress('tgdog-s', 'tg-1/lease'),

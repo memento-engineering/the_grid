@@ -39,8 +39,7 @@ ProcessLeaseRequest _request(
 ) => ProcessLeaseRequest(
   stepBeadId: 'tgdog-step-exists',
   capability: const _JobCap(),
-  allocation: AllocationContext(
-    treeContext: FakeTreeContext(),
+  inputs: AllocationInputs(
     args: stepArgs('tg-1/lease'),
     transport: transport,
     address: const AllocationAddress('tgdog-s', 'tg-1/lease'),

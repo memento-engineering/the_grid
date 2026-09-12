@@ -94,9 +94,27 @@ FakeTreeContext _treeCtx() => FakeTreeContext(
   },
 );
 
-AllocationContext _allocCtx(RuntimeProvider transport, AllocationSink sink) =>
-    AllocationContext(
-      treeContext: _treeCtx(),
+Future<void> _mountAndStart(Allocation allocation, TreeContext treeContext) {
+  final owner = TreeOwner();
+  Seed child = LifecycleProvider<Allocation>.value(
+    allocation,
+    child: const Idle(),
+  );
+  if (treeContext.getInheritedSeedOfExactType<Workspace>() case final value?) {
+    child = InheritedSeed<Workspace>(value: value, child: child);
+  }
+  owner.mountRoot(ProviderScope(child: child));
+  addTearDown(owner.dispose);
+  return allocation.startOrAdopt(treeContext);
+}
+
+extension on Allocation {
+  Future<void> startMounted(TreeContext treeContext) =>
+      _mountAndStart(this, treeContext);
+}
+
+AllocationInputs _inputs(RuntimeProvider transport, AllocationSink sink) =>
+    AllocationInputs(
       args: stepArgs('tg-1/agent'),
       transport: transport,
       address: const AllocationAddress('s', 'tg-1/agent'),
@@ -243,17 +261,19 @@ void main() {
       final reports = <AllocationReport>[];
       final provider = FakeRuntimeProvider();
       final cap = _ResultCountingCap();
-      final alloc = ProcessAllocation(cap, _allocCtx(provider, reports.add));
-      await alloc.startOrAdopt();
+      final alloc = ProcessAllocation(cap, _inputs(provider, reports.add));
+      await alloc.startMounted(_treeCtx());
       await _pump();
 
       // Two terminal events straight to the allocation's handler (bypassing the
       // Host entirely, so ONLY the allocation `_terminal` latch is under test).
       alloc.deliverEventForTest(
         const Exited(name: 's/tg-1/agent', exitCode: 0),
+        _treeCtx(),
       );
       alloc.deliverEventForTest(
         const Exited(name: 's/tg-1/agent', exitCode: 0),
+        _treeCtx(),
       );
       await _pump();
 

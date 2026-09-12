@@ -47,6 +47,25 @@ Future<void> _pump() async {
   }
 }
 
+Future<void> _mountAndStart(Allocation allocation, TreeContext treeContext) {
+  final owner = TreeOwner()
+    ..mountRoot(
+      ProviderScope(
+        child: LifecycleProvider<Allocation>.value(
+          allocation,
+          child: const Idle(),
+        ),
+      ),
+    );
+  addTearDown(owner.dispose);
+  return allocation.startOrAdopt(treeContext);
+}
+
+extension on Allocation {
+  Future<void> startMounted(TreeContext treeContext) =>
+      _mountAndStart(this, treeContext);
+}
+
 /// The circuit the mounted `route` node belongs to (`StepMount.circuit` — the
 /// graph a Rewind would (formerly) resolve its siblings against).
 const _specReview = Circuit(
@@ -231,8 +250,7 @@ void main() {
         addTearDown(provider.close);
         final alloc = RouteAllocation(
           const FixedRouteCapability(Rewind({'specify'}, 'respec')),
-          AllocationContext(
-            treeContext: FakeTreeContext(),
+          AllocationInputs(
             args: stepArgs('tg-1/spec_review/route'),
             transport: provider,
             address: const AllocationAddress(
@@ -243,7 +261,7 @@ void main() {
             sink: reports.add,
           ),
         );
-        await alloc.startOrAdopt();
+        await alloc.startMounted(FakeTreeContext());
 
         expect(reports, hasLength(1));
         final report = reports.single;
