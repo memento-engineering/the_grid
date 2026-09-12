@@ -1,3 +1,9 @@
+## 0.6.0-dev.1
+
+- Breaking: rides the genesis_tree 0.4.0 adoption wave — floors `grid_engine` at `^0.4.0-dev.1`,
+  `grid_sdk` at `^0.4.0-dev.1` and `genesis_tree` at `^0.4.0` (tg-ofpn, #414). No CLI surface
+  change of its own. Migration: a consumer resolving grid_cli must accept genesis_tree 0.4.x.
+
 ## 0.5.0
 
 - PROMOTED from 0.5.0-rc.23. This is the stable release of the 0.5.0 line; the code is the

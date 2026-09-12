@@ -1,3 +1,12 @@
+## 0.4.0-dev.1
+
+- Breaking: the explicit `show Provider, ProviderCreate, ProviderDispose, ProviderScope,
+  ProviderTreeContext` re-export from grid_engine's private provider path is gone; those names
+  now arrive through the existing wholesale `package:genesis_tree/genesis_tree.dart` export, so
+  `genesis_tree ^0.4.0` is required (tg-ofpn, #414). Floors `grid_engine` at `^0.4.0-dev.1`.
+  Migration: pin `genesis_tree: ^0.4.0`; code that named those types through grid_sdk keeps
+  compiling unchanged.
+
 ## 0.3.0
 
 - PROMOTED from 0.3.0-rc.22. This is the stable release of the 0.3.0 line; the code is the
