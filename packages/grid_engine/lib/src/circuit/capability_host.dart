@@ -931,6 +931,7 @@ class CapabilityHostState extends State<CapabilityHost>
               ),
               silentExits: attempts,
               exitOutputHead: _exitOutputHead(),
+              underlying: reason,
             )
           : nonResultGateReason(
               failureClass: failureClass,

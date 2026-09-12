@@ -1007,6 +1007,37 @@ void main() {
         expect(flares.named('step.gated'), isEmpty);
       },
     );
+
+    test(
+      'an exhausted infra failure persists its diagnostic in the gate reason',
+      () async {
+        const diagnostic = 'api_error_status 400: Prompt is too long';
+        const outcome = Failed.noResult(diagnostic);
+        expect(outcome.kind, CapabilityFailureKind.noResult);
+
+        final log = <String>[];
+        final cap = _ServiceCap(outcome, log);
+        final h = _host(cap, mount: _mount(cap, restartCount: 2));
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _pump();
+
+        final gated = h.fakes.runner.metadataOfUpdate(0);
+        expect(gated[MoleculeStepKeys.state], 'gated');
+        expect(gated[MoleculeStepKeys.restartCount], '3');
+
+        final creates = h.fakes.runner.callsFor('create');
+        expect(creates, hasLength(1));
+        expect(creates.single, containsAllInOrder(['--type', 'gate']));
+        final gate = [
+          for (var i = 0; i < h.fakes.runner.callsFor('update').length; i++)
+            h.fakes.runner.metadataOfUpdate(i),
+        ].singleWhere((metadata) => metadata.containsKey('reason'));
+        expect(gate['reason'], contains(diagnostic));
+      },
+    );
   });
 
   group('Track E — the daemon ready→death path (no latch on ready, OQ-5)', () {
