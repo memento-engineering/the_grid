@@ -1,7 +1,5 @@
 import 'package:genesis_tree/genesis_tree.dart';
 
-import 'provider.dart';
-
 import '../diagnostics/diagnosable.dart';
 import '../domain/substation_config.dart';
 import 'work_list.dart';

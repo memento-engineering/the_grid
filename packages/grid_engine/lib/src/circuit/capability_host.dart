@@ -35,7 +35,6 @@ import 'dart:async';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 
-import '../seeds/provider.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../diagnostics/diagnosable.dart';

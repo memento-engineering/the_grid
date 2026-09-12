@@ -6,7 +6,6 @@ import 'package:beads_dart/beads_dart.dart';
 import '../domain/session_projection.dart';
 import '../kernel/station_admission_authority.dart';
 import '../kernel/session_resolver.dart';
-import 'provider.dart';
 
 /// One unit of work as a persistent tree node (ADR-0007: a Branch IS the work
 /// lifecycle — mount = spawn, unmount = kill; progress is the per-node reentrant

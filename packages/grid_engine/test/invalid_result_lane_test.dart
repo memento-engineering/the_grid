@@ -5,7 +5,6 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/src/molecule/bead_path_key.dart';
 import 'package:grid_engine/src/molecule/inherited_circuit.dart';
-import 'package:grid_engine/src/seeds/provider.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:test/test.dart';
 

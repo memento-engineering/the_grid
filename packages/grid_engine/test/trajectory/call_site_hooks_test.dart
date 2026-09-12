@@ -28,7 +28,6 @@ import 'package:grid_engine/src/molecule/bead_path_key.dart';
 import 'package:grid_engine/src/molecule/inherited_circuit.dart';
 import 'package:grid_engine/src/molecule/molecule_schema.dart';
 import 'package:grid_engine/src/molecule/process_lease_vendor.dart';
-import 'package:grid_engine/src/seeds/provider.dart' as provider;
 import 'package:grid_engine/src/seeds/substation_scope.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
@@ -412,7 +411,7 @@ TreeOwner _mountFull({
 }) {
   final owner = TreeOwner();
   owner.mountRoot(
-    provider.ProviderScope(
+    ProviderScope(
       child: InheritedSeed<JoinedSnapshotNotifier>(
         value: joined,
         child: InheritedSeed<StationServices>(

@@ -6,7 +6,6 @@ import '../domain/substation_config.dart';
 import '../notifiers/substation_config_notifier.dart';
 import '../sdk/capability.dart';
 import 'substation.dart';
-import 'provider.dart';
 
 /// The per-substation **config scope** — an ancestor of the substation's work nodes
 /// (ADR-0007: config nodes are ancestors of work nodes).

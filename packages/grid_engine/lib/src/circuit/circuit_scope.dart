@@ -23,8 +23,6 @@ library;
 
 import 'package:genesis_tree/genesis_tree.dart';
 
-import '../seeds/provider.dart';
-
 import '../diagnostics/diagnosable.dart';
 import '../molecule/inherited_circuit.dart';
 import '../sdk/cursor.dart';

@@ -15,10 +15,9 @@ dependencies:
   beads_dart: ^0.2.0
   freezed_annotation: ^3.0.0
   genesis_foundation: ^0.2.0
-  # The engine. Pinned (^0.1.5) — the composition layer is EXPERIMENTAL and
-  # the_grid is its triggering 2nd consumer (ADR-0007 / A34 precedent). A
-  # workspace-root dependency_overrides path dep supplies it during dev.
-  genesis_tree: ^0.3.0
+  # The published engine substrate. Version 0.4.0 owns the Provider
+  # composition layer that the_grid consumes instead of carrying privately.
+  genesis_tree: ^0.4.0
   grid_runtime: ^0.2.0
   json_annotation: ^4.9.0
   meta: ^1.16.0

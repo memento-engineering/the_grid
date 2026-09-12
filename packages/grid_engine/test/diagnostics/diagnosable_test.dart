@@ -9,7 +9,6 @@ import 'package:grid_engine/src/molecule/bead_path_key.dart';
 import 'package:grid_engine/src/molecule/inherited_circuit.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:test/test.dart';
-import 'package:grid_engine/src/seeds/provider.dart';
 
 enum _Mode { active }
 

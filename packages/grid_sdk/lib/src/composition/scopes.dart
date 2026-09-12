@@ -1,6 +1,5 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:genesis_tree/genesis_tree.dart';
-import 'package:grid_engine/src/seeds/provider.dart';
 
 part 'scopes.freezed.dart';
 

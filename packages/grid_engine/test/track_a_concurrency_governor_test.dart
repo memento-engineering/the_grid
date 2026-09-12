@@ -11,7 +11,6 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
-import 'package:grid_engine/src/seeds/provider.dart';
 
 class _Recorder {
   final List<String> events = [];

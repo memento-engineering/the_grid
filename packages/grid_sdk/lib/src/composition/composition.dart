@@ -1,6 +1,5 @@
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:path/path.dart' as p;
-import 'package:grid_engine/src/seeds/provider.dart';
 
 import 'scopes.dart';
 

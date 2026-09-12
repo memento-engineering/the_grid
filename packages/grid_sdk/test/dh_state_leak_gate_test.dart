@@ -51,37 +51,34 @@ String _code(String source) => source
     .join('\n');
 
 void main() {
-  test(
-    'provider API is curated and raw inherited construction stays private',
-    () {
-      final sources = _libSources().toList();
-      final all = sources.map((file) => file.readAsStringSync()).join('\n');
-      final barrel = sources.singleWhere(
-        (file) => file.path.endsWith('${Platform.pathSeparator}grid_sdk.dart'),
+  test('provider API comes from genesis and raw inherited construction stays '
+      'private', () {
+    final sources = _libSources().toList();
+    final all = sources.map((file) => file.readAsStringSync()).join('\n');
+    final barrel = sources.singleWhere(
+      (file) => file.path.endsWith('${Platform.pathSeparator}grid_sdk.dart'),
+    );
+    final barrelSource = barrel.readAsStringSync();
+    expect(
+      barrelSource,
+      contains("export 'package:genesis_tree/genesis_tree.dart';"),
+    );
+    expect(
+      _code(barrelSource),
+      isNot(contains("export 'package:grid_engine/src/")),
+    );
+    expect(all, contains('Provider<GridConfiguration>.value('));
+    expect(all, contains('watch<GridConfiguration>()'));
+    for (final file in sources) {
+      expect(
+        _code(file.readAsStringSync()),
+        isNot(contains('InheritedSeed<')),
+        reason:
+            '${file.path}: raw inherited construction belongs to the '
+            'engine provider layer',
       );
-      final barrelSource = barrel.readAsStringSync();
-      for (final symbol in [
-        'Provider',
-        'ProviderCreate',
-        'ProviderDispose',
-        'ProviderScope',
-        'ProviderTreeContext',
-      ]) {
-        expect(barrelSource, contains(symbol));
-      }
-      expect(all, contains('Provider<GridConfiguration>.value('));
-      expect(all, contains('watch<GridConfiguration>()'));
-      for (final file in sources) {
-        expect(
-          _code(file.readAsStringSync()),
-          isNot(contains('InheritedSeed<')),
-          reason:
-              '${file.path}: raw inherited construction belongs to the '
-              'engine provider layer',
-        );
-      }
-    },
-  );
+    }
+  });
 
   group('D-H fence: no public sync accessor over StateNotifier state (grid_sdk)', () {
     test('positive control: the scan sees real source AND the sanctioned '

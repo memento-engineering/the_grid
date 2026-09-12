@@ -10,8 +10,6 @@ import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
-import 'package:grid_engine/src/seeds/provider.dart';
-
 class _NoopPrOpener implements PrOpener {
   const _NoopPrOpener();
 
