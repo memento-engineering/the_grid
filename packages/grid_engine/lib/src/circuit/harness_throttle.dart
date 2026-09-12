@@ -57,8 +57,11 @@ String harnessThrottleGateReason({
   required DateTime since,
   required int silentExits,
   required String exitOutputHead,
-}) =>
-    'harness throttled: $silentExits model steps exited without artifacts '
-    'since ${since.toUtc().toIso8601String()} — session $sessionId, step '
-    '$nodePath'
-    '${exitOutputHead.isEmpty ? '' : ' — $exitOutputHead'}';
+  required String underlying,
+}) {
+  final diagnostic = exitOutputHead.isEmpty ? underlying : exitOutputHead;
+  return 'harness throttled: $silentExits model steps exited without artifacts '
+      'since ${since.toUtc().toIso8601String()} — session $sessionId, step '
+      '$nodePath'
+      '${diagnostic.isEmpty ? '' : ' — $diagnostic'}';
+}

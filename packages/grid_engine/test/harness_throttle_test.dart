@@ -18,6 +18,7 @@ const _nodePath = 'tg-1/agent';
 const _providerName = 'tgdog-s/$_nodePath';
 const _usageLine = 'Claude usage limit reached; resets at 09:00Z';
 const _artifactless = 'unresolved: declared completion artifact is not durable';
+const _apiError = 'api_error_status 400: Prompt is too long';
 final _clock = DateTime.utc(2026);
 
 const _circuit = Circuit(
@@ -195,17 +196,51 @@ void main() {
       );
     });
 
-    test('a reason without captured output names the underlying failure', () {
-      expect(
-        harnessThrottleReason(
-          since: DateTime.utc(2026),
+    test(
+      'both reasons prefer output and fall back to the underlying failure',
+      () {
+        final since = DateTime.utc(2026);
+        expect(
+          harnessThrottleReason(
+            since: since,
+            silentExits: 2,
+            exitOutputHead: '',
+            underlying: _apiError,
+          ),
+          contains(_apiError),
+        );
+        expect(
+          harnessThrottleGateReason(
+            sessionId: 'tranquility-ltkod1',
+            nodePath: _nodePath,
+            since: since,
+            silentExits: 3,
+            exitOutputHead: '',
+            underlying: _apiError,
+          ),
+          contains(_apiError),
+        );
+
+        final failure = harnessThrottleReason(
+          since: since,
           silentExits: 2,
-          exitOutputHead: '',
-          underlying: _artifactless,
-        ),
-        contains(_artifactless),
-      );
-    });
+          exitOutputHead: _usageLine,
+          underlying: _apiError,
+        );
+        final gate = harnessThrottleGateReason(
+          sessionId: 'tranquility-ltkod1',
+          nodePath: _nodePath,
+          since: since,
+          silentExits: 3,
+          exitOutputHead: _usageLine,
+          underlying: _apiError,
+        );
+        expect(failure, contains(_usageLine));
+        expect(failure, isNot(contains(_apiError)));
+        expect(gate, contains(_usageLine));
+        expect(gate, isNot(contains(_apiError)));
+      },
+    );
 
     test('the throttle backoff lands at +5, +15, and +30 minutes', () {
       expect(Backoff.harnessThrottle.delayFor(1), const Duration(minutes: 5));
@@ -221,6 +256,7 @@ void main() {
         since: DateTime.utc(2026, 9, 3, 5, 43),
         silentExits: 3,
         exitOutputHead: _usageLine,
+        underlying: _artifactless,
       );
       expect(gate, contains('tranquility-ltkod1'));
       expect(gate, contains('3 model steps'));
