@@ -9,6 +9,7 @@
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
@@ -82,6 +83,7 @@ JoinedSnapshot _joined(
   List<Bead> additionalBeads = const [],
   List<BeadDependency> dependencies = const [],
   Set<String> readyIds = const {'tg-1'},
+  DateTime? stateCapturedAt,
 }) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
     beads: [workBead ?? _task('tg-1'), ...additionalBeads],
@@ -89,7 +91,19 @@ JoinedSnapshot _joined(
     readyIds: readyIds,
     capturedAt: DateTime(2026),
   ),
+  stateCapturedAt: stateCapturedAt,
   sessionsByWorkBead: sessions,
+);
+
+GraphSnapshot _graphSnapshot({
+  required List<Bead> beads,
+  required Set<String> readyIds,
+  required DateTime capturedAt,
+}) => GraphSnapshot.fromParts(
+  beads: beads,
+  dependencies: const [],
+  readyIds: readyIds,
+  capturedAt: capturedAt,
 );
 
 List<WorkBead> _workBeads(Branch root) {
@@ -212,6 +226,211 @@ List<Map<String, dynamic>> _updatesFor(RecordingBdRunner runner, String id) {
 void main() {
   group('tg-4rw / I-10 — a dead session key mints fresh instead of wedging', () {
     test(
+      'a lagging state snapshot refuses before the authored cross-link is projected',
+      () async {
+        final approvalAt = DateTime.utc(2026, 9, 10, 0, 30, 41);
+        final approved = Bead(
+          id: 'tg-1',
+          issueType: IssueType.task,
+          status: BeadStatus.open,
+          labels: const ['grid.approved'],
+          metadata: const {
+            'grid.approved_at': '2026-09-10T00:30:41Z',
+            'grid.approved_by': 'operator',
+            'grid.approved_rev': '0123456789abcdef',
+          },
+        );
+        const target = Bead(
+          id: 'genesis-7ob',
+          issueType: IssueType.bug,
+          status: BeadStatus.open,
+        );
+        const link = Bead(
+          id: 'tranquility-haqlif',
+          issueType: GridIssueTypes.link,
+          status: BeadStatus.open,
+          metadata: {
+            CrossLinkKeys.from: 'tg-1',
+            CrossLinkKeys.to: 'genesis-7ob',
+            CrossLinkKeys.type: kCrossLinkBlocks,
+          },
+        );
+        final workSource = FakeSnapshotSource(
+          _graphSnapshot(
+            beads: [approved, target],
+            readyIds: const {'tg-1'},
+            capturedAt: approvalAt.add(const Duration(seconds: 1)),
+          ),
+        );
+        final stateSource = FakeSnapshotSource(
+          _graphSnapshot(
+            beads: const [],
+            readyIds: const {},
+            capturedAt: approvalAt.subtract(const Duration(seconds: 13)),
+          ),
+        );
+        final bridge = StationJoinBridge(work: workSource, state: stateSource)
+          ..start();
+        final f = buildFakes();
+        final transport = _RecordingTransport();
+        final ctx = StationServices(
+          provider: f.provider,
+          writer: StationBeadWriter(
+            bd: BdCliService(f.runner),
+            reader: f.runner,
+            ownership: BeadOwnershipPredicate(const {stateSubstation}),
+            onFlare: transport.flare,
+          ),
+          stateSubstation: stateSubstation,
+        );
+        final mounted = _mount(
+          joined: bridge.notifier,
+          ctx: ctx,
+          registry: RecordingCapabilityRegistry(circuits: const {}),
+          transport: transport,
+        );
+        addTearDown(() async {
+          mounted.owner.dispose();
+          bridge.dispose();
+          ctx.dispose();
+          f.ctx.dispose();
+          await workSource.close();
+          await stateSource.close();
+        });
+
+        expect(_workBeads(mounted.root), isEmpty);
+        final pending = transport.named('work.mountEligibilityRefused');
+        expect(pending, hasLength(1));
+        expect(pending.single.data, {
+          'beadId': 'tg-1',
+          'clause': 'fresh cross-link read pending: tg-1',
+        });
+        expect(transport.named('session.minted'), isEmpty);
+        expect(f.runner.workCreates, isEmpty);
+        expect(f.runner.graphApplyCalls, isEmpty);
+
+        stateSource.push(
+          _graphSnapshot(
+            beads: const [link],
+            readyIds: const {},
+            capturedAt: approvalAt.add(const Duration(seconds: 2)),
+          ),
+        );
+        await _pump();
+        mounted.owner.flush();
+
+        final expectedCrossLinkClause =
+            'frontier cross-link: link bead tranquility-haqlif blocks tg-1 '
+            'on open target "genesis-7ob". $kCrossLinkTargetCloseRule';
+        final refusals = transport.named('work.mountEligibilityRefused');
+        expect(refusals, hasLength(2));
+        expect(refusals.last.data, {
+          'beadId': 'tg-1',
+          'clause': expectedCrossLinkClause,
+        });
+        expect(transport.named('session.minted'), isEmpty);
+        expect(f.runner.workCreates, isEmpty);
+        expect(f.runner.graphApplyCalls, isEmpty);
+      },
+    );
+
+    test('one fresh empty state tick releases the hold and mints exactly one '
+        'session', () async {
+      final approvalAt = DateTime.utc(2026, 9, 10, 0, 30, 41);
+      final approved = Bead(
+        id: 'tg-1',
+        issueType: IssueType.task,
+        status: BeadStatus.open,
+        labels: const ['grid.approved'],
+        metadata: const {
+          'grid.approved_at': '2026-09-10T00:30:41Z',
+          'grid.approved_by': 'operator',
+          'grid.approved_rev': '0123456789abcdef',
+        },
+      );
+      final workSource = FakeSnapshotSource(
+        _graphSnapshot(
+          beads: [approved],
+          readyIds: const {'tg-1'},
+          capturedAt: approvalAt.add(const Duration(seconds: 1)),
+        ),
+      );
+      final stateSource = FakeSnapshotSource(
+        _graphSnapshot(
+          beads: const [],
+          readyIds: const {},
+          capturedAt: approvalAt.subtract(const Duration(seconds: 13)),
+        ),
+      );
+      final bridge = StationJoinBridge(work: workSource, state: stateSource)
+        ..start();
+      final f = buildFakes();
+      final transport = _RecordingTransport();
+      final ctx = StationServices(
+        provider: f.provider,
+        writer: StationBeadWriter(
+          bd: BdCliService(f.runner),
+          reader: f.runner,
+          ownership: BeadOwnershipPredicate(const {stateSubstation}),
+          onFlare: transport.flare,
+        ),
+        stateSubstation: stateSubstation,
+      );
+      final mounted = _mount(
+        joined: bridge.notifier,
+        ctx: ctx,
+        registry: RecordingCapabilityRegistry(circuits: const {}),
+        transport: transport,
+      );
+      addTearDown(() async {
+        mounted.owner.dispose();
+        bridge.dispose();
+        ctx.dispose();
+        f.ctx.dispose();
+        await workSource.close();
+        await stateSource.close();
+      });
+
+      expect(_workBeads(mounted.root), isEmpty);
+      expect(transport.named('work.mountEligibilityRefused'), hasLength(1));
+      expect(transport.named('work.mountEligibilityRefused').single.data, {
+        'beadId': 'tg-1',
+        'clause': 'fresh cross-link read pending: tg-1',
+      });
+      expect(f.runner.workCreates, isEmpty);
+
+      var statePushes = 0;
+      statePushes += 1;
+      stateSource.push(
+        _graphSnapshot(
+          beads: const [],
+          readyIds: const {},
+          capturedAt: approvalAt,
+        ),
+      );
+      await _pumpUntil(
+        mounted.owner,
+        () =>
+            transport.named('session.minted').length == 1 &&
+            f.runner.graphApplyCalls.length == 1,
+      );
+
+      expect(statePushes, 1);
+      expect(
+        f.runner.workCreates.where((call) => !call.contains('--graph')),
+        hasLength(1),
+      );
+      expect(f.runner.graphApplyCalls, hasLength(1));
+      expect(transport.named('session.minted'), hasLength(1));
+      final restored = transport.named('work.mountEligibilityRestored');
+      expect(restored, hasLength(1));
+      expect(restored.single.data, {
+        'beadId': 'tg-1',
+        'clause': 'fresh cross-link read pending: tg-1',
+      });
+    });
+
+    test(
       'an open same-store blocker added after eligibility refuses remint until close restores it',
       () async {
         final approved = Bead(
@@ -243,7 +462,11 @@ void main() {
         final transport = _RecordingTransport();
         final reg = RecordingCapabilityRegistry(circuits: const {});
         final joined = JoinedSnapshotNotifier(
-          _joined(const {'tg-1': _deadKey}, workBead: approved),
+          _joined(
+            const {'tg-1': _deadKey},
+            workBead: approved,
+            stateCapturedAt: DateTime.utc(2026, 9, 10),
+          ),
         );
         final m = _mount(
           joined: joined,
@@ -261,6 +484,7 @@ void main() {
             additionalBeads: const [openBlocker],
             dependencies: const [edge],
             readyIds: const {},
+            stateCapturedAt: DateTime.utc(2026, 9, 10),
           ),
         );
         m.owner.flush();
@@ -279,6 +503,7 @@ void main() {
             workBead: approved,
             additionalBeads: const [closedBlocker],
             dependencies: const [edge],
+            stateCapturedAt: DateTime.utc(2026, 9, 10),
           ),
         );
         m.owner.flush();

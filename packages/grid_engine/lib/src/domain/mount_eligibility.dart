@@ -9,6 +9,8 @@ import 'session_projection.dart';
 
 part 'mount_eligibility.freezed.dart';
 
+const _approvalCapturedAtKey = 'grid.approved_at';
+
 /// Decides whether [bead] is fit to mount at this reconciliation.
 ///
 /// [IssueTypeDriveability] asks whether this KIND of bead may ever mount;
@@ -57,6 +59,38 @@ MountEligibilityPredicate driveListClause(Set<String> driveList) => (bead) {
     clause: 'bead is not selected by the substation drive list',
   );
 };
+
+/// Refuses a valid approval until the joined STATE read is at least as fresh.
+///
+/// Cross-store links live on the STATE axis while approval lives on the WORK
+/// bead. A first eligible WORK pass can therefore observe the approval before
+/// it observes a link authored immediately beforehand. [stateCapturedAt] is
+/// the capture instant of the exact STATE snapshot used by the join; `null`
+/// fails closed for a valid approval because no link-set read has been
+/// observed. Absent, blank, non-string, and unparseable approval values remain
+/// the vended approval policy's responsibility.
+MountEligibilityPredicate freshCrossLinkReadClause(DateTime? stateCapturedAt) =>
+    (bead) {
+      final wireApproval = bead.metadata[_approvalCapturedAtKey];
+      if (wireApproval is! String) {
+        return const MountEligibilityDecision.eligible();
+      }
+      final approvalText = wireApproval.trim();
+      if (approvalText.isEmpty) {
+        return const MountEligibilityDecision.eligible();
+      }
+      final approval = DateTime.tryParse(approvalText);
+      if (approval == null) {
+        return const MountEligibilityDecision.eligible();
+      }
+      final stateCapture = stateCapturedAt?.toUtc();
+      if (stateCapture == null || stateCapture.isBefore(approval.toUtc())) {
+        return MountEligibilityDecision.refused(
+          clause: 'fresh cross-link read pending: ${bead.id}',
+        );
+      }
+      return const MountEligibilityDecision.eligible();
+    };
 
 /// Refuses a fresh bead held out by the join's active cross-link projection.
 ///

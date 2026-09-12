@@ -814,6 +814,10 @@ final class StationAdmissionAuthority {
       ),
       dispatchableWorkClause(resident: config.resident),
       driveListClause(config.driveList),
+      // This per-candidate refusal does not perturb `ordered` above. Terminal
+      // state also remains classified before pause, and neither disposition
+      // can be resurrected by an eligible freshness result.
+      freshCrossLinkReadClause(snapshot.stateCapturedAt),
       crossLinkExclusionClause(
         snapshot.frontierExclusionsByBeadId,
         snapshot.sessionsByWorkBead,
