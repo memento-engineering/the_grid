@@ -883,12 +883,7 @@ final class StationAdmissionAuthority {
       driveListClause(config.driveList),
       // This per-candidate refusal does not perturb `ordered` above. Terminal
       // state also remains classified before pause, and neither disposition
-      // can be resurrected by an eligible freshness result.
-      freshCrossLinkReadClause(snapshot.stateCapturedAt),
-      crossLinkExclusionClause(
-        snapshot.frontierExclusionsByBeadId,
-        snapshot.sessionsByWorkBead,
-      ),
+      // can be resurrected by an eligible dependency result.
       sameStoreDependencyExclusionClause(
         snapshot.graph,
         BeadOwnershipPredicate(config.ownedSubstations),

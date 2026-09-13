@@ -5,10 +5,11 @@
 /// [GraphSnapshot] per work store and this file turns it into rows. Nothing
 /// here opens a store, spawns `bd`, or writes.
 ///
-/// Ordinary blocking edges are read inside one store's snapshot. Active
-/// cross-store blockers arrive already enforced by the resident through
-/// [linkBlockersByBeadId]. They originate only from OPEN `type=link` beads,
-/// never raw cross-store dependency rows.
+/// Every blocking edge is read inside one store's snapshot — an ordinary
+/// same-store row and a cross-store `external:<project>:<capability>` row
+/// alike, because bd stores both on the consumer's own bead (tg-xh5d). The
+/// state store carries no edges (tg-6t0h), so this projection needs nothing
+/// but the store it is given.
 library;
 
 import 'package:beads_dart/beads_dart.dart';
@@ -81,7 +82,6 @@ List<BoardRow> projectBoard({
   required String root,
   required GraphSnapshot snapshot,
   BoardFilter filter = const BoardFilter(),
-  Map<String, Iterable<String>> linkBlockersByBeadId = const {},
 }) {
   if (filter.stores.isNotEmpty && !filter.stores.contains(store)) {
     return const <BoardRow>[];
@@ -100,10 +100,7 @@ List<BoardRow> projectBoard({
         !filter.statuses.contains(bead.status.wire)) {
       continue;
     }
-    final blockedBy = <String>{
-      ...?blockers[bead.id],
-      ...?linkBlockersByBeadId[bead.id],
-    }.toList()..sort();
+    final blockedBy = <String>{...?blockers[bead.id]}.toList()..sort();
     if (filter.blockedOnly && blockedBy.isEmpty) continue;
     final approvedAt = beadMetadataText(bead, WorkBeadKeys.approvedAt);
     if (filter.approved != null && (approvedAt != null) != filter.approved) {

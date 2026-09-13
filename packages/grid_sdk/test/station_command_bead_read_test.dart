@@ -18,12 +18,25 @@ void main() {
       name: 'alpha',
       root: '/alpha',
       source: _Source(
-        _snapshot(const [
-          Bead(id: 'a-1', title: 'round work'),
-          Bead(id: 'a-2', title: 'between rounds'),
-          Bead(id: 'tg-5kb', title: 'cross-link dependent'),
-          Bead(id: 'butane_flutter-41eh', title: 'closed-target dependent'),
-        ]),
+        _snapshot(
+          const [
+            Bead(id: 'a-1', title: 'round work'),
+            Bead(id: 'a-2', title: 'between rounds'),
+            Bead(id: 'tg-5kb', title: 'cross-store dependent'),
+            Bead(id: 'a-3', title: 'same-store dependent'),
+          ],
+          // The ONE cross-store edge shape after tg-6t0h: a bd `external:`
+          // dependency row on the CONSUMER's own bead, inside the consumer's
+          // own store snapshot. Nothing about an edge lives in the state
+          // store any more, so the board never reads it.
+          dependencies: const [
+            BeadDependency(
+              issueId: 'tg-5kb',
+              dependsOnId: 'external:beta:genesis-7ob',
+            ),
+            BeadDependency(issueId: 'a-3', dependsOnId: 'a-closed'),
+          ],
+        ),
       ),
       runner: alphaRunner,
     );
@@ -33,12 +46,7 @@ void main() {
       source: _Source(
         _snapshot(const [
           Bead(id: 'b-1', title: 'beta'),
-          Bead(id: 'genesis-7ob', title: 'open cross-link target'),
-          Bead(
-            id: 'butane_flutter-t9y',
-            title: 'closed cross-link target',
-            status: BeadStatus.closed,
-          ),
+          Bead(id: 'genesis-7ob', title: 'the capability exporter'),
         ]),
       ),
       runner: betaRunner,
@@ -64,22 +72,15 @@ void main() {
             issueType: GridIssueTypes.session,
             metadata: {SessionBeadKeys.workBead: 'a-1'},
           ),
+          // An OPEN link bead left behind by a store the migration has not
+          // reached. It is INERT data (tg-6t0h) — the board must not read it.
           Bead(
             id: 'tranquility-awgj18',
             issueType: GridIssueTypes.link,
             metadata: {
-              CrossLinkKeys.from: 'tg-5kb',
-              CrossLinkKeys.to: 'genesis-7ob',
-              CrossLinkKeys.type: kCrossLinkBlocks,
-            },
-          ),
-          Bead(
-            id: 'tranquility-closed-target',
-            issueType: GridIssueTypes.link,
-            metadata: {
-              CrossLinkKeys.from: 'butane_flutter-41eh',
-              CrossLinkKeys.to: 'butane_flutter-t9y',
-              CrossLinkKeys.type: kCrossLinkBlocks,
+              'grid.link.from': 'a-2',
+              'grid.link.to': 'genesis-7ob',
+              'grid.link.type': 'blocks',
             },
           ),
         ]),
@@ -111,7 +112,7 @@ void main() {
     expect(decoded.whereType<BoardBeadRow>().map((row) => row.id), [
       'a-1',
       'a-2',
-      'butane_flutter-41eh',
+      'a-3',
       'tg-5kb',
       'b-1',
       'genesis-7ob',
@@ -121,16 +122,31 @@ void main() {
           .whereType<BoardBeadRow>()
           .singleWhere((row) => row.id == 'tg-5kb')
           .blockedBy,
-      ['genesis-7ob'],
+      ['external:beta:genesis-7ob'],
     );
     expect(
       decoded
           .whereType<BoardBeadRow>()
-          .singleWhere((row) => row.id == 'butane_flutter-41eh')
+          .singleWhere((row) => row.id == 'a-3')
+          .blockedBy,
+      ['a-closed'],
+      reason: 'a same-store row still rides the consumer own snapshot',
+    );
+    expect(
+      decoded
+          .whereType<BoardBeadRow>()
+          .singleWhere((row) => row.id == 'a-2')
           .blockedBy,
       isEmpty,
+      reason: 'an OPEN state-store link bead is inert data (tg-6t0h)',
     );
-    expect(stateRefreshCount, 1);
+    expect(
+      stateRefreshCount,
+      0,
+      reason:
+          'the board reads no state store: cross-store edges ride the '
+          'consumer own snapshot',
+    );
     expect(
       decoded.whereType<BoardStoreUnreadableRow>().map((row) => row.store),
       ['broken', 'missing'],
@@ -184,9 +200,12 @@ void main() {
   });
 }
 
-GraphSnapshot _snapshot(Iterable<Bead> beads) => GraphSnapshot.fromParts(
+GraphSnapshot _snapshot(
+  Iterable<Bead> beads, {
+  List<BeadDependency> dependencies = const [],
+}) => GraphSnapshot.fromParts(
   beads: beads,
-  dependencies: const [],
+  dependencies: dependencies,
   readyIds: const [],
   capturedAt: DateTime(2026, 9, 3),
 );

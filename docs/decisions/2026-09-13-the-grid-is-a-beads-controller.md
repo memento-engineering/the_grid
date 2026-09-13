@@ -8,8 +8,8 @@ register:
   spec: 1
   slug: the-grid-is-a-beads-controller
   surfaces:
-    - "packages/grid_engine/lib/src/domain/cross_link.dart"
-    - "packages/grid_engine/lib/src/bridge/block_guard.dart"
+    - "packages/grid_engine/lib/src/domain/external_dep.dart"
+    - "packages/grid_engine/lib/src/bridge/federated_snapshot_source.dart"
     - "packages/grid_cli/lib/src/link_command.dart"
     - "packages/beads_dart/lib/beads_dart.dart"
   obsoletes: []
@@ -18,6 +18,7 @@ register:
   obsoleted-by: null
   updated-by:
     - capability-edges-are-bd-native-and-link-is-sugar
+    - link-beads-retire-in-one-hard-cut
   bead: tg-6vfb
   legacy-id: null
 ---

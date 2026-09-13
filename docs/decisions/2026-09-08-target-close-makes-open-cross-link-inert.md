@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by link-beads-retire-in-one-hard-cut
 date: 2026-09-08
 decision-makers: ["Nico Spencer"]
 consulted: ["governor (agent seat)"]
@@ -8,14 +8,12 @@ register:
   spec: 1
   slug: target-close-makes-open-cross-link-inert
   surfaces:
-    - "packages/grid_engine/lib/src/bridge/block_guard.dart"
-    - "packages/grid_engine/lib/src/domain/cross_link.dart"
     - "packages/grid_engine/lib/src/bridge/station_join_bridge.dart"
     - "packages/grid_cli/lib/src/link_command.dart"
   obsoletes: []
   updates:
     - "a55-where-the-state-store-s-link-set-enters-the-pipeline-and"
-  obsoleted-by: null
+  obsoleted-by: link-beads-retire-in-one-hard-cut
   updated-by:
     - the-grid-is-a-beads-controller
   bead: tg-93u9

@@ -36,22 +36,18 @@ void main() {
 
   test('the link verb registers only the flags it still honours', () {
     // tg-xh5d: `link` is sugar over `bd dep add`, so the link-bead flags
-    // (--prefix, --grid-root, --reason, --actor) are GONE — the roster
-    // resolves prefixes, bd owns the audit trail, and nothing is minted.
+    // (--prefix, --reason, --actor) are GONE — the roster resolves prefixes,
+    // bd owns the audit trail, and nothing is minted. tg-6t0h retires `unlink`
+    // with the link bead it closed, and keeps --grid-root for the ONE-PASS
+    // `link migrate` that reads the retired receipts out of the state store.
     final link = LinkCommand(endpoints: _endpointRoster());
     expect(link.argParser.options.keys.toSet()..remove('help'), {
       'blocked-by',
       'json',
+      'grid-root',
+      'dry-run',
     });
     expect(link.description, contains('bd dep add'));
-    expect(
-      UnlinkCommand(
-        stateStorePrefix: 'state',
-        endpoints: _endpointRoster(),
-      ).argParser.options['prefix']!.help,
-      'Repeatable; must include the state prefix and, for <from> <to>, '
-      'every endpoint prefix.',
-    );
   });
 
   test(

@@ -1307,10 +1307,9 @@ Future<StationWorkRuntime> _acquireStationWork({
 }) async {
   // ONE sink for EVERY cross-store report — the union's UNARMED-project
   // refusals (tg-xh5d: an `external:` row naming a substation this station
-  // does not arm blocks fail-closed and says so), the CLI read path's
+  // does not arm blocks fail-closed and says so) and the CLI read path's
   // external-row refusal (a store bd cannot be read for cross-project rows
-  // publishes no snapshot, and says which store), and the join's state-owned
-  // link beads, authoritative until the migration retires them.
+  // publishes no snapshot, and says which store).
   final unresolvedSink =
       onUnresolvedExternalDep ?? (String m) => stdout.writeln(m);
 
@@ -1860,7 +1859,6 @@ Future<StationWorkRuntime> _acquireStationWork({
   StationJoinBridge buildJoinBridgeDefault() => StationJoinBridge(
     work: work,
     state: stateSource,
-    onUnresolvedCrossLink: unresolvedSink,
     // The DUAL READ's third input (cut-wiring §0.2/§0.3): a PRE-FETCHED,
     // immutable P1 mirror read — `_join` is pure and synchronous, and a P1 SQL
     // read is async, so nothing here awaits. `onHeadChanges` is the re-join

@@ -42,7 +42,6 @@ final class EligibilityBasis {
   factory EligibilityBasis.of({
     required Bead bead,
     required bool ready,
-    String? frontierExclusion,
     MountAttemptRecord? attempt,
     Iterable<SessionProjection> linkedSessions = const <SessionProjection>[],
     WorktreeOutstandingFinding? worktree,
@@ -63,7 +62,6 @@ final class EligibilityBasis {
         '${bead.isClosed}',
         '${bead.metadata[kEligibilityApprovalKey] ?? ''}',
         'ready=$ready',
-        'exclusion=${frontierExclusion ?? ''}',
         'attempts=${attempt?.count ?? 0}',
         'wedged=${worktree?.wedged ?? false}',
         'sessions=${sessions.join(',')}',

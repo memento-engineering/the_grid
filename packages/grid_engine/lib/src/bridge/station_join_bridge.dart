@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart' show GridIssueTypes;
 
-import '../domain/cross_link.dart';
 import '../domain/eligibility_basis_revision.dart';
 import '../domain/joined_snapshot.dart';
 import '../domain/linked_sessions.dart';
@@ -15,7 +14,6 @@ import '../domain/worktree_outstanding.dart';
 import '../molecule/molecule_codec.dart';
 import '../molecule/molecule_schema.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
-import 'block_guard.dart';
 import 'dual_read_pass.dart';
 import 'snapshot_source.dart';
 import 'step_dual_read_pass.dart';
@@ -57,8 +55,6 @@ class StationJoinBridge {
   /// lifecycle (it is left undisposed on [dispose]); otherwise the bridge
   /// creates one, seeded with the current join, and disposes it itself.
   ///
-  /// [onUnresolvedCrossLink] is the LOUD sink an unenforceable cross-link is
-  /// reported through (see [_applyCrossLinks]).
   /// [headSnapshot] and [dualRead] are the DUAL READ's third input (cut-wiring
   /// C2): a pre-fetched, immutable P1 mirror read and the comparator that
   /// observes it. Both are optional — an offline or trajectory-less
@@ -69,7 +65,6 @@ class StationJoinBridge {
     required SnapshotSource work,
     required SnapshotSource state,
     JoinedSnapshotNotifier? notifier,
-    void Function(String message)? onUnresolvedCrossLink,
     TrajectoryHeadSnapshot Function()? headSnapshot,
     HeadSnapshotSubscribe? onHeadChanges,
     DualReadSessionObserver? dualRead,
@@ -78,8 +73,6 @@ class StationJoinBridge {
     DualReadStepObserver? stepDualRead,
     TrajectoryProcessIdentitySnapshot Function()? processIdentitySnapshot,
   }) {
-    final reportedTargetClosedCrossLinks =
-        <({String linkBeadId, String targetId})>{};
     final revisions = EligibilityBasisRevisions();
     final seed = _join(
       work.current,
@@ -87,8 +80,6 @@ class StationJoinBridge {
       headSnapshot?.call(),
       stepSnapshot?.call(),
       processIdentitySnapshot?.call(),
-      onUnresolvedCrossLink: onUnresolvedCrossLink,
-      reportedTargetClosedCrossLinks: reportedTargetClosedCrossLinks,
       dualRead: dualRead,
       stepDualRead: stepDualRead,
       revisions: revisions,
@@ -99,8 +90,6 @@ class StationJoinBridge {
       ownsNotifier: notifier == null,
       notifier: notifier ?? JoinedSnapshotNotifier(seed),
       latest: seed,
-      onUnresolvedCrossLink: onUnresolvedCrossLink,
-      reportedTargetClosedCrossLinks: reportedTargetClosedCrossLinks,
       headSnapshot: headSnapshot,
       onHeadChanges: onHeadChanges,
       dualRead: dualRead,
@@ -118,9 +107,6 @@ class StationJoinBridge {
     required bool ownsNotifier,
     required this.notifier,
     required JoinedSnapshot latest,
-    required void Function(String message)? onUnresolvedCrossLink,
-    required Set<({String linkBeadId, String targetId})>
-    reportedTargetClosedCrossLinks,
     required TrajectoryHeadSnapshot Function()? headSnapshot,
     required HeadSnapshotSubscribe? onHeadChanges,
     required DualReadSessionObserver? dualRead,
@@ -134,8 +120,6 @@ class StationJoinBridge {
        _state = state,
        _ownsNotifier = ownsNotifier,
        _latest = latest,
-       _onUnresolvedCrossLink = onUnresolvedCrossLink,
-       _reportedTargetClosedCrossLinks = reportedTargetClosedCrossLinks,
        _headSnapshot = headSnapshot,
        _onHeadChanges = onHeadChanges,
        _dualRead = dualRead,
@@ -183,21 +167,6 @@ class StationJoinBridge {
   /// the join is the one producer of every input it hashes, and MONOTONE
   /// across joins — which is exactly why it is a field rather than a local.
   final EligibilityBasisRevisions _revisions;
-
-  /// The existing LOUD sink for cross-link enforcement and lifecycle signals:
-  /// a malformed link bead, an unobserved `to` target, or the first observation
-  /// that an OPEN link's target has CLOSED. Emit-only; a null sink is the
-  /// offline/no-op default and never changes what the guard DOES.
-  final void Function(String message)? _onUnresolvedCrossLink;
-
-  /// Pairs whose target-close transition this bridge has already reported.
-  ///
-  /// This is emit-only bridge-lifetime memory, distinct from the joined
-  /// snapshot's durable session selection and surplus-row projection. A
-  /// retargeted link gets a new pair; repeated joins of the same pair stay
-  /// quiet until this bridge is disposed.
-  final Set<({String linkBeadId, String targetId})>
-  _reportedTargetClosedCrossLinks;
 
   JoinedSnapshot _latest;
 
@@ -272,8 +241,6 @@ class StationJoinBridge {
     _headSnapshot?.call(),
     _stepSnapshot?.call(),
     _processIdentitySnapshot?.call(),
-    onUnresolvedCrossLink: _onUnresolvedCrossLink,
-    reportedTargetClosedCrossLinks: _reportedTargetClosedCrossLinks,
     dualRead: _dualRead,
     stepDualRead: _stepDualRead,
     revisions: _revisions,
@@ -291,7 +258,6 @@ class StationJoinBridge {
         sessionsByWorkBead: _latest.sessionsByWorkBead,
         surplusSessionsByWorkBead: _latest.surplusSessionsByWorkBead,
         mountAttemptsByWorkBead: _latest.mountAttemptsByWorkBead,
-        frontierExclusionsByBeadId: _latest.frontierExclusionsByBeadId,
         worktreeOutstanding: _latest.worktreeOutstanding,
         eligibilityBasisRevisionsByBeadId:
             _latest.eligibilityBasisRevisionsByBeadId,
@@ -343,11 +309,11 @@ class StationJoinBridge {
   /// to [JoinedSnapshot.empty] — sessions have nothing to mount against until a
   /// work graph exists, so they are held until the work baseline arrives.
   ///
-  /// Finally, the state store's OPEN `type=link` beads are folded into the work
-  /// frontier by [_applyCrossLinks] — the state-owned CROSS-REPO blocking
-  /// edges. This is where the link set enters the pipeline: the state axis
-  /// already reaches here, so the fold adds NO new subscription and the bridge
-  /// still pushes exactly once per real change.
+  /// The state axis carries NO blocking edges. A cross-store blocker is a bd
+  /// `external:<project>:<capability>` dependency row on the consumer's own
+  /// work bead, resolved a layer earlier by the federated union (tg-xh5d), so
+  /// the join reads the work frontier exactly as the union computed it. The
+  /// state store's legacy `type=link` beads are inert data (tg-6t0h).
   ///
   /// [head] is the DUAL READ's third input (cut-wiring §0.2/§0.3): a
   /// pre-fetched, immutable P1 mirror snapshot. It is PURE here — the join
@@ -362,19 +328,15 @@ class StationJoinBridge {
     TrajectoryHeadSnapshot? head,
     TrajectoryStepSnapshot? steps,
     TrajectoryProcessIdentitySnapshot? processIdentities, {
-    void Function(String message)? onUnresolvedCrossLink,
-    required Set<({String linkBeadId, String targetId})>
-    reportedTargetClosedCrossLinks,
     DualReadSessionObserver? dualRead,
     DualReadStepObserver? stepDualRead,
     EligibilityBasisRevisions? revisions,
   }) {
     if (work == null) return JoinedSnapshot.empty();
-    var graph = work;
+    final graph = work;
     final sessions = <String, SessionProjection>{};
     final surplus = <String, List<SessionProjection>>{};
     final attempts = <String, MountAttemptRecord>{};
-    var frontierExclusionsByBeadId = const <String, String>{};
     if (state != null) {
       final linkedRows = <String, List<SessionProjection>>{};
       for (final bead in state.beadsById.values) {
@@ -412,14 +374,6 @@ class StationJoinBridge {
       }
       _attachMoleculeBeads(state, sessions);
       _attachGateState(state, sessions);
-      final crossLinks = _applyCrossLinks(
-        work,
-        state,
-        onUnresolvedCrossLink,
-        reportedTargetClosedCrossLinks,
-      );
-      graph = crossLinks.graph;
-      frontierExclusionsByBeadId = crossLinks.frontierExclusionsByBeadId;
     }
     // The comparator pass runs over the FINISHED sessions map — after the
     // molecule/gate attachments, so it compares what a decision would actually
@@ -475,7 +429,6 @@ class StationJoinBridge {
       sessionsByWorkBead: sessions,
       surplusSessionsByWorkBead: surplus,
       mountAttemptsByWorkBead: attempts,
-      frontierExclusionsByBeadId: frontierExclusionsByBeadId,
       worktreeOutstanding: worktreeOutstanding,
     );
     if (revisions == null) return joined;
@@ -488,7 +441,6 @@ class StationJoinBridge {
         EligibilityBasis.of(
           bead: bead,
           ready: graph.readyIds.contains(bead.id),
-          frontierExclusion: frontierExclusionsByBeadId[bead.id],
           attempt: attempts[bead.id],
           linkedSessions: linked,
           worktree: evaluateWorktreeOutstanding(
@@ -507,99 +459,10 @@ class StationJoinBridge {
       sessionsByWorkBead: sessions,
       surplusSessionsByWorkBead: surplus,
       mountAttemptsByWorkBead: attempts,
-      frontierExclusionsByBeadId: frontierExclusionsByBeadId,
       worktreeOutstanding: worktreeOutstanding,
       eligibilityBasisRevisionsByBeadId: Map<String, String>.unmodifiable(
         revisionsByBeadId,
       ),
-    );
-  }
-
-  /// Re-applies the state store's CROSS-REPO blocking edges over [work]'s ready
-  /// set and returns the frontier the tree sees.
-  ///
-  /// An OPEN `type=link` bead in [state] carries its edge in its own metadata
-  /// (`grid.link.from`/`to`/`type` — [CrossLinkKeys]), never as a dependency
-  /// row, so no store holds a dangling reference for `bd doctor --fix` to
-  /// classify orphaned and sever, and no work store is written to at all. This
-  /// is the same shape [_attachGateState] already uses one level down: an OPEN
-  /// state bead narrows what the tree sees; a CLOSED one retires the narrowing.
-  ///
-  /// The ENFORCEMENT is [applyBlockGuard]'s, and since tg-mspw this is its ONE
-  /// edge source: the federated union no longer authors dependency-row edges,
-  /// it refuses cross-store rows loudly. A link bead applies whether or not
-  /// the two ids share a store prefix — it is an operator-authored edge no
-  /// store's `is_blocked` knows about, so there is no origin `bd ready` to
-  /// defer a same-store link to.
-  ///
-  /// Returns the [work] INSTANCE unchanged when nothing is excluded — the
-  /// common case (no links at all, or every blocker closed) costs one scan and
-  /// zero copies. A [GraphSnapshot] copies its maps on construction, so the
-  /// copy is paid only when a link genuinely blocks.
-  ///
-  /// Note what this does NOT do: it narrows the READY set, so it gates which
-  /// beads may newly mount. A bead already carrying a live session stays
-  /// mounted (`work_list.dart`'s stays-mounted rule) — authoring a link never
-  /// kills a running agent.
-  static ({GraphSnapshot graph, Map<String, String> frontierExclusionsByBeadId})
-  _applyCrossLinks(
-    GraphSnapshot work,
-    GraphSnapshot state,
-    void Function(String message)? onUnresolved,
-    Set<({String linkBeadId, String targetId})> reportedTargetClosedCrossLinks,
-  ) {
-    final links = projectCrossLinks(state, onMalformed: onUnresolved)
-      ..sort((left, right) => left.beadId.compareTo(right.beadId));
-    if (links.isEmpty) {
-      return (
-        graph: work,
-        frontierExclusionsByBeadId: const <String, String>{},
-      );
-    }
-    final exclusions = <String, String>{};
-    final guarded = applyBlockGuard(
-      candidates: work.readyIds,
-      beadsById: work.beadsById,
-      edges: crossLinkEdges(
-        links.map((link) {
-          final target = work.beadsById[link.to];
-          final pair = (linkBeadId: link.beadId, targetId: link.to);
-          if (target?.isClosed == true &&
-              reportedTargetClosedCrossLinks.add(pair)) {
-            onUnresolved?.call(
-              'crossLink.targetClosed: linkBeadId="${link.beadId}" '
-              'fromId="${link.from}" toId="${link.to}". '
-              '$kCrossLinkTargetCloseRule',
-            );
-          }
-          return link;
-        }),
-      ),
-      onUnresolved: onUnresolved,
-      onBlocked: (beadId, edge, target) {
-        final targetState = target == null ? 'unobserved' : 'open';
-        final failClosed = target == null ? ' (fail-closed)' : '';
-        exclusions.putIfAbsent(
-          beadId,
-          () =>
-              'frontier cross-link: ${edge.origin} blocks $beadId on '
-              '$targetState target "${edge.to}"$failClosed. '
-              '$kCrossLinkTargetCloseRule',
-        );
-      },
-    );
-    final carried = Map<String, String>.unmodifiable(exclusions);
-    if (guarded.length == work.readyIds.length) {
-      return (graph: work, frontierExclusionsByBeadId: carried);
-    }
-    return (
-      graph: GraphSnapshot(
-        beadsById: work.beadsById,
-        dependencies: work.dependencies,
-        readyIds: guarded,
-        capturedAt: work.capturedAt,
-      ),
-      frontierExclusionsByBeadId: carried,
     );
   }
 

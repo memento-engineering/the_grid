@@ -99,7 +99,6 @@ final class _Harness {
   void pushAndFlush({
     Set<String>? readyIds,
     DateTime? stateCapturedAt,
-    Map<String, String> frontierExclusionsByBeadId = const {},
     Map<String, SessionProjection> sessionsByWorkBead = const {},
   }) {
     joined.push(
@@ -108,7 +107,6 @@ final class _Harness {
         _second++,
         readyIds: readyIds,
         stateCapturedAt: stateCapturedAt,
-        frontierExclusionsByBeadId: frontierExclusionsByBeadId,
         sessionsByWorkBead: sessionsByWorkBead,
       ),
     );
@@ -127,7 +125,6 @@ JoinedSnapshot _snapshot(
   Set<String>? readyIds,
   DateTime? stateCapturedAt,
   List<Bead> additionalBeads = const [],
-  Map<String, String> frontierExclusionsByBeadId = const {},
   Map<String, SessionProjection> sessionsByWorkBead = const {},
 }) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
@@ -138,7 +135,6 @@ JoinedSnapshot _snapshot(
   ),
   stateCapturedAt: stateCapturedAt,
   sessionsByWorkBead: sessionsByWorkBead,
-  frontierExclusionsByBeadId: frontierExclusionsByBeadId,
 );
 
 List<WorkBead> _workBeads(Branch root) {
@@ -166,7 +162,6 @@ _Harness _mountHarness({
   Set<String>? readyIds,
   DateTime? stateCapturedAt,
   List<Bead> additionalBeads = const [],
-  Map<String, String> frontierExclusionsByBeadId = const {},
   Map<String, SessionProjection> sessionsByWorkBead = const {},
   SessionResolver? resolver,
   bool includeStationServices = true,
@@ -180,7 +175,6 @@ _Harness _mountHarness({
       readyIds: readyIds,
       stateCapturedAt: stateCapturedAt,
       additionalBeads: additionalBeads,
-      frontierExclusionsByBeadId: frontierExclusionsByBeadId,
       sessionsByWorkBead: sessionsByWorkBead,
     ),
   );
@@ -231,103 +225,6 @@ _Harness _mountHarness({
 }
 
 void main() {
-  test(
-    'fresh cross-link clause gates valid approvals until the state read catches up',
-    () async {
-      final approval = DateTime.utc(2026, 9, 10, 5, 30, 41);
-      final approved = Bead(
-        id: 'tg-1',
-        issueType: IssueType.task,
-        status: BeadStatus.open,
-        metadata: const {'grid.approved_at': '2026-09-10T00:30:41-05:00'},
-      );
-      const clause = 'fresh cross-link read pending: tg-1';
-
-      MountEligibilityDecision evaluate(Bead bead, DateTime? capturedAt) =>
-          freshCrossLinkReadClause(capturedAt)(bead);
-
-      expect(
-        evaluate(approved, null),
-        const MountEligibilityDecision.refused(clause: clause),
-      );
-      expect(
-        evaluate(approved, approval.subtract(const Duration(microseconds: 1))),
-        const MountEligibilityDecision.refused(clause: clause),
-      );
-      expect(
-        evaluate(approved, approval),
-        const MountEligibilityDecision.eligible(),
-      );
-      expect(
-        evaluate(approved, approval.add(const Duration(microseconds: 1))),
-        const MountEligibilityDecision.eligible(),
-      );
-
-      for (final bead in <Bead>[
-        _task(),
-        const Bead(
-          id: 'tg-1',
-          issueType: IssueType.task,
-          metadata: {'grid.approved_at': ''},
-        ),
-        const Bead(
-          id: 'tg-1',
-          issueType: IssueType.task,
-          metadata: {'grid.approved_at': 41},
-        ),
-        const Bead(
-          id: 'tg-1',
-          issueType: IssueType.task,
-          metadata: {'grid.approved_at': 'not-an-instant'},
-        ),
-      ]) {
-        expect(
-          evaluate(bead, null),
-          const MountEligibilityDecision.eligible(),
-          reason: 'the vended approval policy owns malformed or absent values',
-        );
-      }
-
-      final stale = approval.subtract(const Duration(seconds: 13));
-      final authorityTransport = _RecordingTransport();
-      final authority = _mountHarness(
-        bead: approved,
-        stateCapturedAt: stale,
-        transport: authorityTransport,
-      );
-      expect(authority.workBeads(), isEmpty);
-      expect(
-        authorityTransport.flares.single.name,
-        'work.mountEligibilityRefused',
-      );
-      expect(authorityTransport.flares.single.data, {
-        'beadId': 'tg-1',
-        'clause': clause,
-      });
-
-      authority.pushAndFlush(stateCapturedAt: approval);
-      await _settleAdmissions(authority);
-      expect(authority.workBeads().map((work) => work.bead.id), ['tg-1']);
-      expect(
-        authorityTransport.flares.last.name,
-        'work.mountEligibilityRestored',
-      );
-      expect(authorityTransport.flares.last.data, {
-        'beadId': 'tg-1',
-        'clause': clause,
-      });
-
-      final offline = _mountHarness(
-        bead: approved,
-        stateCapturedAt: stale,
-        includeStationServices: false,
-      );
-      expect(offline.workBeads(), isEmpty);
-      offline.pushAndFlush(stateCapturedAt: approval);
-      expect(offline.workBeads().map((work) => work.bead.id), ['tg-1']);
-    },
-  );
-
   test(
     'offline fallback refuses fresh work after the shared trajectory halt',
     () {
@@ -760,61 +657,6 @@ void main() {
       transport.flares.single.data['clause'],
       'mount eligibility evaluation failed: Bad state: asset unavailable',
     );
-  });
-
-  test('frontier exclusion uses existing refusal edges and preserves live '
-      'sessions', () async {
-    const clause =
-        'frontier cross-link: link bead tranquility-awgj18 blocks tg-1 '
-        'on open target "genesis-7ob"';
-
-    final transport = _RecordingTransport();
-    final fresh = _mountHarness(
-      readyIds: const {},
-      frontierExclusionsByBeadId: const {'tg-1': clause},
-      transport: transport,
-    );
-    expect(fresh.workBeads(), isEmpty);
-    expect(transport.flares.single.name, 'work.mountEligibilityRefused');
-    expect(transport.flares.single.data, {'beadId': 'tg-1', 'clause': clause});
-
-    fresh.pushAndFlush(
-      readyIds: const {},
-      frontierExclusionsByBeadId: const {'tg-1': clause},
-    );
-    expect(transport.flares, hasLength(1));
-
-    fresh.pushAndFlush(
-      readyIds: const {},
-      frontierExclusionsByBeadId: const {
-        'tg-1':
-            'frontier cross-link: link bead tranquility-new blocks tg-1 '
-            'on unobserved target "genesis-new" (fail-closed)',
-      },
-    );
-    expect(transport.flares, hasLength(2));
-    expect(transport.flares.last.name, 'work.mountEligibilityRefused');
-
-    fresh.pushAndFlush();
-    await _settleAdmissions(fresh);
-    expect(fresh.workBeads().map((work) => work.bead.id), ['tg-1']);
-    expect(transport.flares.last.name, 'work.mountEligibilityRestored');
-
-    final liveTransport = _RecordingTransport();
-    final live = _mountHarness(
-      readyIds: const {},
-      frontierExclusionsByBeadId: const {'tg-1': clause},
-      sessionsByWorkBead: const {
-        'tg-1': SessionProjection(
-          workBeadId: 'tg-1',
-          sessionId: 'tgdog-live',
-          isTerminal: false,
-        ),
-      },
-      transport: liveTransport,
-    );
-    expect(live.workBeads().map((work) => work.bead.id), ['tg-1']);
-    expect(liveTransport.flares, isEmpty);
   });
 
   test(

@@ -1,7 +1,10 @@
 // tg-xh5d (`the_grid#the-grid-is-a-beads-controller`): `link` is SUGAR over
 // `bd dep add <from> external:<project>:<capability>` — it labels the target
-// `export:<target>`, writes the row, and mints NOTHING. `unlink` still retires
-// the authored link beads that exist until the one-pass migration (tg-6t0h).
+// `export:<target>`, writes the row, and mints NOTHING.
+//
+// tg-6t0h: `link migrate` is the ONE PASS that converts every authored link
+// bead into that row and closes the receipt, and `unlink` is GONE with the
+// bead it used to close.
 import 'dart:convert';
 import 'dart:io';
 
@@ -432,97 +435,312 @@ void main() {
     );
   });
 
-  test(
-    'unlink by id refuses wrong type and closes an owned open link',
-    () async {
-      state.beads.add(_bead('houston-task1'));
-      final before = state.mutationCalls.length;
-      expect(
-        await runUnlink(
-          arguments: _unlinkArgs([
-            'houston-task1',
-            '--grid-root',
-            temp.path,
-            '--prefix',
-            'houston',
-            '--actor',
-            'operator',
-            '--reason',
-            'done',
-          ]),
-          stateStorePrefix: 'houston',
-          endpoints: endpoints,
-          bdFactory: factory,
-        ),
-        1,
-      );
-      expect(state.mutationCalls, hasLength(before));
+  group('link migrate — the ONE PASS (tg-6t0h)', () {
+    setUp(() {
+      tg.beads.add(_bead('tg-second'));
+      pow.beads.add(_bead('pow-closed', status: BeadStatus.closed));
+      state.beads.addAll([
+        _link('houston-l1', 'tg-q9k', 'pow-60g'),
+        _link('houston-l2', 'tg-second', 'pow-closed'),
+        _link('houston-l3', 'pow-60g', 'tg-q9k'),
+      ]);
+    });
 
-      state.beads.add(_link('houston-link1', 'tg-q9k', 'pow-60g'));
+    test('three open links become three external rows, three export labels '
+        'and three closed link beads, in ONE command', () async {
+      final written = <String>[];
+      final errors = <String>[];
       expect(
-        await runUnlink(
-          arguments: _unlinkArgs([
-            'houston-link1',
-            '--grid-root',
-            temp.path,
-            '--prefix',
-            'houston',
-            '--actor',
-            'operator',
-            '--reason',
-            'done',
-          ]),
-          stateStorePrefix: 'houston',
+        await runLink(
+          arguments: _migrateArgs(['migrate', '--grid-root', temp.path]),
           endpoints: endpoints,
           bdFactory: factory,
+          out: written.add,
+          err: errors.add,
+        ),
+        0,
+      );
+      expect(errors, isEmpty);
+
+      expect(
+        tg.calls
+            .where((call) => call.first == 'dep' && call[1] == 'add')
+            .map((call) => call.sublist(2, 4)),
+        [
+          ['tg-q9k', 'external:power_station:pow-60g'],
+          ['tg-second', 'external:power_station:pow-closed'],
+        ],
+      );
+      expect(
+        pow.calls
+            .where((call) => call.first == 'dep' && call[1] == 'add')
+            .map((call) => call.sublist(2, 4)),
+        [
+          ['pow-60g', 'external:the_grid:tg-q9k'],
+        ],
+      );
+      expect(
+        {
+          for (final bead in [...tg.beads, ...pow.beads])
+            if (bead.labels.isNotEmpty) bead.id: bead.labels,
+        },
+        {
+          'tg-q9k': ['export:tg-q9k'],
+          'pow-60g': ['export:pow-60g'],
+          'pow-closed': ['export:pow-closed', 'provides:pow-closed'],
+        },
+      );
+      expect(state.beads.every((bead) => bead.isClosed), isTrue);
+      expect(written.last, contains('3 link bead(s) migrated'));
+
+      // The existing-row read is scoped PER STORE, not per LINK: a bd spawn
+      // per link per surface is the CLI-spawn loop this repo refuses, and the
+      // pass runs over a hundred receipts. Two calls at most — this pass's own
+      // scoped read, plus `externalDepRows`' control, which spawns only on a
+      // store whose record surface returned no rows at all.
+      for (final store in [tg, pow]) {
+        expect(
+          store.calls
+              .where((call) => call.first == 'dep' && call[1] == 'list')
+              .length,
+          lessThanOrEqualTo(2),
+        );
+      }
+    });
+
+    test('each close reason NAMES the row the link became', () async {
+      expect(
+        await runLink(
+          arguments: _migrateArgs(['migrate', '--grid-root', temp.path]),
+          endpoints: endpoints,
+          bdFactory: factory,
+          out: (_) {},
+        ),
+        0,
+      );
+      final closes = state.calls.where((call) => call.first == 'close');
+      expect(closes, hasLength(3));
+      final first = closes.first;
+      expect(first[1], 'houston-l1');
+      final reason = first[first.indexOf('--reason') + 1];
+      expect(reason, contains('tg-q9k'));
+      expect(reason, contains('external:power_station:pow-60g'));
+    });
+
+    test('a CLOSED target is SHIPPED so the consumer unblocks', () async {
+      expect(
+        await runLink(
+          arguments: _migrateArgs(['migrate', '--grid-root', temp.path]),
+          endpoints: endpoints,
+          bdFactory: factory,
+          out: (_) {},
         ),
         0,
       );
       expect(
-        state.beads.firstWhere((bead) => bead.id == 'houston-task1').isClosed,
-        isFalse,
+        pow.calls.where((call) => call.first == 'ship').map((call) => call[1]),
+        ['pow-closed'],
+        reason: 'only the CLOSED target is shippable; bd refuses an open one',
+      );
+    });
+
+    test(
+      '--dry-run prints the plan and leaves every store byte-identical',
+      () async {
+        final before = {
+          for (final entry in stores.entries)
+            entry.key: [...entry.value.beads, ...entry.value.dependencies],
+        };
+        final written = <String>[];
+        expect(
+          await runLink(
+            arguments: _migrateArgs([
+              'migrate',
+              '--grid-root',
+              temp.path,
+              '--dry-run',
+            ]),
+            endpoints: endpoints,
+            bdFactory: factory,
+            out: written.add,
+          ),
+          0,
+        );
+        expect(written.last, contains('DRY RUN'));
+        expect(written.last, contains('3 link bead(s) planned'));
+        expect(
+          written.where((line) => line.contains('external:')),
+          isNotEmpty,
+          reason: 'the plan names each row it would write',
+        );
+        for (final store in stores.values) {
+          expect(store.mutationCalls, isEmpty);
+        }
+        expect({
+          for (final entry in stores.entries)
+            entry.key: [...entry.value.beads, ...entry.value.dependencies],
+        }, before);
+      },
+    );
+
+    test('a SECOND run reports zero links and writes nothing', () async {
+      expect(
+        await runLink(
+          arguments: _migrateArgs(['migrate', '--grid-root', temp.path]),
+          endpoints: endpoints,
+          bdFactory: factory,
+          out: (_) {},
+        ),
+        0,
+      );
+      for (final store in stores.values) {
+        store.calls.clear();
+      }
+      final written = <String>[];
+      expect(
+        await runLink(
+          arguments: _migrateArgs(['migrate', '--grid-root', temp.path]),
+          endpoints: endpoints,
+          bdFactory: factory,
+          out: written.add,
+        ),
+        0,
+      );
+      expect(written.single, contains('0 open link beads'));
+      for (final store in stores.values) {
+        expect(store.mutationCalls, isEmpty);
+      }
+    });
+
+    test('an INTERRUPTED pass finishes on a re-run without duplicating a row '
+        'or a label', () async {
+      // The shape a crash between the row write and the close leaves behind.
+      tg.beads[0] = tg.beads[0].copyWith(labels: const []);
+      pow.beads[0] = pow.beads[0].copyWith(labels: const ['export:pow-60g']);
+      tg.dependencies.add(
+        const BeadDependency(
+          issueId: 'tg-q9k',
+          dependsOnId: 'external:power_station:pow-60g',
+        ),
       );
       expect(
-        state.beads.firstWhere((bead) => bead.id == 'houston-link1').isClosed,
-        isTrue,
+        await runLink(
+          arguments: _migrateArgs(['migrate', '--grid-root', temp.path]),
+          endpoints: endpoints,
+          bdFactory: factory,
+          out: (_) {},
+        ),
+        0,
       );
-    },
-  );
+      expect(
+        tg.dependencies
+            .where((dep) => dep.dependsOnId == 'external:power_station:pow-60g')
+            .length,
+        1,
+      );
+      expect(
+        pow.calls.where(
+          (call) => call.first == 'label' && call[2] == 'pow-60g',
+        ),
+        isEmpty,
+      );
+      expect(state.beads.every((bead) => bead.isClosed), isTrue);
+    });
 
-  test('unlink by pair closes the one matching open link', () async {
-    state.beads.add(_link('houston-link1', 'tg-q9k', 'pow-60g'));
-    expect(
-      await runUnlink(
-        arguments: _unlinkArgs([
-          'tg-q9k',
-          'pow-60g',
-          '--grid-root',
-          temp.path,
-          '--prefix',
-          'houston',
-          '--prefix',
-          'tg',
-          '--prefix',
-          'pow',
-          '--actor',
-          'operator',
-          '--reason',
-          'superseded by the external row',
-        ]),
-        stateStorePrefix: 'houston',
-        endpoints: endpoints,
-        bdFactory: factory,
-      ),
-      0,
-    );
-    expect(state.beads.single.isClosed, isTrue);
+    test('a link this pass cannot author is left OPEN and reported, and the '
+        'verb exits 1', () async {
+      state.beads
+        ..add(_bead('houston-l4', type: GridIssueTypes.link))
+        ..add(_link('houston-l5', 'tg-q9k', 'dashboard-1'))
+        ..add(_link('houston-l6', 'tg-q9k', 'pow-999'));
+      final errors = <String>[];
+      expect(
+        await runLink(
+          arguments: _migrateArgs(['migrate', '--grid-root', temp.path]),
+          endpoints: endpoints,
+          bdFactory: factory,
+          out: (_) {},
+          err: errors.add,
+        ),
+        1,
+      );
+      expect(errors.length, 4);
+      expect(errors[0], contains('houston-l4'));
+      expect(errors[1], contains('dashboard-1'));
+      expect(errors[2], contains('pow-999'));
+      expect(errors.last, contains('3 link bead(s) left OPEN'));
+      for (final id in ['houston-l4', 'houston-l5', 'houston-l6']) {
+        expect(
+          state.beads.firstWhere((bead) => bead.id == id).isClosed,
+          isFalse,
+        );
+      }
+      // The three WELL-FORMED links still migrated in the same pass.
+      for (final id in ['houston-l1', 'houston-l2', 'houston-l3']) {
+        expect(
+          state.beads.firstWhere((bead) => bead.id == id).isClosed,
+          isTrue,
+        );
+      }
+    });
+
+    test('a SAME-STORE link becomes a plain local dep row, no capability '
+        'at all', () async {
+      state.beads.clear();
+      state.beads.add(_link('houston-l9', 'tg-q9k', 'tg-second'));
+      expect(
+        await runLink(
+          arguments: _migrateArgs(['migrate', '--grid-root', temp.path]),
+          endpoints: endpoints,
+          bdFactory: factory,
+          out: (_) {},
+        ),
+        0,
+      );
+      expect(tg.dependencies.single.dependsOnId, 'tg-second');
+      expect(tg.calls.where((call) => call.first == 'label'), isEmpty);
+      expect(state.beads.single.isClosed, isTrue);
+    });
+
+    test('--grid-root is required', () async {
+      final errors = <String>[];
+      expect(
+        await runLink(
+          arguments: _migrateArgs(['migrate']),
+          endpoints: endpoints,
+          bdFactory: factory,
+          err: errors.add,
+        ),
+        64,
+      );
+      expect(errors.single, contains('--grid-root'));
+      for (final store in stores.values) {
+        expect(store.calls, isEmpty);
+      }
+    });
+
+    test('a state store without the link type migrates nothing', () async {
+      state.customTypes = const [];
+      final written = <String>[];
+      expect(
+        await runLink(
+          arguments: _migrateArgs(['migrate', '--grid-root', temp.path]),
+          endpoints: endpoints,
+          bdFactory: factory,
+          out: written.add,
+        ),
+        0,
+      );
+      expect(written.single, contains('0 open link beads'));
+      expect(state.mutationCalls, isEmpty);
+    });
   });
 
   test('the link verb centralizes its bd surface — no bead writes at all', () {
     final source = File('lib/src/link_command.dart').readAsStringSync();
     final link = source.substring(
       source.indexOf('Future<int> runLink('),
-      source.indexOf('Future<int> runUnlink('),
+      source.indexOf('class _StoreProbes {'),
     );
     expect(link, isNot(contains('.create(')));
     expect(link, isNot(contains('createLink(')));
@@ -531,22 +749,41 @@ void main() {
     expect(link, contains('.depAdd('));
     expect(link, contains('.addLabels('));
   });
+
+  test('the HARD CUT: unlink and the link-bead enforcement it served are '
+      'gone from the tree (tg-6t0h)', () {
+    final source = File('lib/src/link_command.dart').readAsStringSync();
+    expect(source, isNot(contains('UnlinkCommand')));
+    expect(source, isNot(contains('runUnlink')));
+    expect(source, isNot(contains('StationBeadWriter')));
+    expect(
+      File('lib/grid_cli.dart').readAsStringSync(),
+      isNot(contains('nlink')),
+    );
+    for (final path in const [
+      '../grid_engine/lib/src/domain/cross_link.dart',
+      '../grid_engine/lib/src/bridge/block_guard.dart',
+    ]) {
+      expect(
+        File(path).existsSync(),
+        isFalse,
+        reason: '$path is the retired link-bead enforcement',
+      );
+    }
+  });
 }
 
-ArgResults _linkArgs(List<String> args) =>
-    (ArgParser()
-          ..addOption('blocked-by')
-          ..addFlag('json', negatable: false))
-        .parse(args);
+ArgResults _linkArgs(List<String> args) => _parser().parse(args);
 
-ArgResults _unlinkArgs(List<String> args) =>
-    (ArgParser()
-          ..addOption('grid-root')
-          ..addMultiOption('prefix')
-          ..addOption('reason')
-          ..addOption('reason-file')
-          ..addOption('actor'))
-        .parse(args);
+ArgResults _migrateArgs(List<String> args) => _parser().parse(args);
+
+/// The EXACT parser `LinkCommand` registers — one spelling, so a test can
+/// never exercise a flag surface the composed verb does not have.
+ArgParser _parser() => ArgParser()
+  ..addOption('blocked-by')
+  ..addFlag('json', negatable: false)
+  ..addOption('grid-root')
+  ..addFlag('dry-run', negatable: false);
 
 Bead _bead(
   String id, {
@@ -596,16 +833,20 @@ class _FakeStore implements BdRunner {
   String externalProjects;
   final List<List<String>> calls = [];
 
+  /// Every call that WRITES. `dep list` is a READ that happens to share bd's
+  /// `dep` verb, so it is excluded — a dry run reads freely and writes never.
   List<List<String>> get mutationCalls => calls
       .where(
-        (call) => const {
-          'create',
-          'update',
-          'close',
-          'label',
-          'dep',
-          'ship',
-        }.contains(call.first),
+        (call) =>
+            const {
+              'create',
+              'update',
+              'close',
+              'label',
+              'dep',
+              'ship',
+            }.contains(call.first) &&
+            !(call.first == 'dep' && call[1] == 'list'),
       )
       .toList();
 
@@ -712,6 +953,19 @@ class _FakeStore implements BdRunner {
         final index = beads.indexWhere((bead) => bead.id == args[1]);
         beads[index] = beads[index].copyWith(status: BeadStatus.closed);
         return _envelope({'id': args[1]});
+      case 'ship':
+        // bd finds the issue carrying `export:<capability>`, validates that it
+        // is CLOSED, and adds `provides:<capability>`.
+        final index = beads.indexWhere(
+          (bead) => bead.labels.contains('export:${args[1]}'),
+        );
+        if (index < 0 || !beads[index].isClosed) {
+          throw StateError('bd ship: nothing shippable for ${args[1]}');
+        }
+        beads[index] = beads[index].copyWith(
+          labels: [...beads[index].labels, 'provides:${args[1]}'],
+        );
+        return _envelope({'id': beads[index].id});
       default:
         throw StateError('unexpected bd call: $args');
     }

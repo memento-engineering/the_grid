@@ -34,9 +34,6 @@ export 'src/bridge/snapshot_source.dart';
 // The federated work-source union (tg-nsj) — fans N LOCAL beads workspaces
 // into the ONE SnapshotSource the bridge's `work` axis observes.
 export 'src/bridge/federated_snapshot_source.dart';
-// The join's block enforcement over the state-owned link beads that stay
-// authoritative until the one-pass migration retires them.
-export 'src/bridge/block_guard.dart';
 export 'src/bridge/trust_guard.dart';
 
 // The reentrant authoring SDK surface (ADR-0008 D2/D4 / M4-P1 Track A/E): the
@@ -89,11 +86,9 @@ export 'src/molecule/molecule_schema.dart'
     show MoleculeCircuitKeys, MoleculeStepKeys;
 
 // Domain (value types).
-// The state-owned CROSS-REPO link bead: the metadata schema, the read
-// projection, and the arming refusal for an unseeded `link` type. Exported
-// because the authoring verbs mint and close these beads and must name the ONE
-// definition of the wire keys.
-export 'src/domain/cross_link.dart';
+// bd's `types --json` discovery — the type set a scoped bd read must be
+// narrowed to. Exported because the operator verbs scope their own reads.
+export 'src/domain/bd_type_discovery.dart';
 // bd's NATIVE cross-project edge (tg-xh5d): the `external:` row's reading, the
 // capability-shipped test, and the roster/`external_projects` diagnostic.
 export 'src/domain/external_dep.dart';

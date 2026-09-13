@@ -1,9 +1,9 @@
-// tg-xh5d — the production-shaped proof. Every armed seat's NAME differs from
-// its bead-id PREFIX (the real roster shape), and the SAME two ids are
-// expressed twice: once as bd's native `external:` dependency row (BLOCKS,
-// exactly like a link bead) and once as a state-store link bead (BLOCKS). A
-// project the roster does not arm is the LOUD hard refusal. Pure-Dart, Fakes
-// only, no I/O.
+// tg-xh5d / tg-6t0h — the production-shaped proof. Every armed seat's NAME
+// differs from its bead-id PREFIX (the real roster shape), and a cross-store
+// blocker is expressed ONCE: as bd's native `external:` dependency row on the
+// consumer's own bead. A project the roster does not arm is the LOUD hard
+// refusal; a state-store `type=link` bead is inert data nothing reads.
+// Pure-Dart, Fakes only, no I/O.
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart';
@@ -31,18 +31,17 @@ GraphSnapshot graphOf(
   capturedAt: DateTime.fromMillisecondsSinceEpoch(tick),
 );
 
-/// A state-store `type=link` bead — the authored edge that stays authoritative
-/// until the one-pass migration (tg-6t0h) deletes it.
+/// A RETIRED state-store `type=link` bead (tg-6t0h): the one-pass migration
+/// converted every authored edge to a bd row and closed the receipt, and the
+/// engine deleted the reader. One left OPEN by hand is inert data.
 Bead linkBead(String id, {required String from, required String to}) => Bead(
   id: id,
   issueType: GridIssueTypes.link,
   status: BeadStatus.open,
   metadata: <String, dynamic>{
-    CrossLinkKeys.from: from,
-    CrossLinkKeys.to: to,
-    CrossLinkKeys.type: kCrossLinkBlocks,
-    CrossLinkKeys.reason: 'waits on the upstream port',
-    CrossLinkKeys.actor: 'governor',
+    'grid.link.from': from,
+    'grid.link.to': to,
+    'grid.link.type': 'blocks',
   },
 );
 
@@ -55,8 +54,7 @@ Bead shipped(String id) => Bead(
 );
 
 /// Reads the notifier the consumer way (ADR-0008 D-H rule 2: no public sync
-/// accessor over reactive state) — subscribe, capture, unsubscribe. The same
-/// helper `cross_link_guard_test.dart` uses.
+/// accessor over reactive state) — subscribe, capture, unsubscribe.
 JoinedSnapshot read(JoinedSnapshotNotifier notifier) {
   late JoinedSnapshot value;
   final remove = notifier.addListener((s) => value = s);
@@ -178,8 +176,11 @@ void main() {
     expect(loud.single, contains('power_station(pow)'));
   });
 
-  test('a LINK bead between the SAME two ids blocks through the join, exactly '
-      'as the external row blocks through the union', () {
+  test('an OPEN link bead in the state store is INERT — the join reads the '
+      'frontier the union computed and nothing else (tg-6t0h)', () {
+    // The capability IS shipped, so the union admits tg-mspw. An OPEN link
+    // bead naming the SAME pair would have held it out before the hard cut;
+    // after it, the state axis authors no edges at all.
     power = FakeSnapshotSource(
       graphOf([shipped('pow-18')], readyIds: const {}),
     );
@@ -190,46 +191,30 @@ void main() {
         linkBead('houston-l1', from: 'tg-mspw', to: 'pow-18'),
       ], readyIds: const {}),
     );
-    final bridge = StationJoinBridge(
-      work: union,
-      state: state,
-      onUnresolvedCrossLink: loud.add,
-    )..start();
+    final bridge = StationJoinBridge(work: union, state: state)..start();
     addTearDown(bridge.dispose);
 
-    // pow-18 is CLOSED, so the link edge is inert; the sanity control is that
-    // the join changes nothing the union already decided.
-    expect(read(bridge.notifier).graph.readyIds, contains('tg-mspw'));
+    final joined = read(bridge.notifier).graph;
+    expect(joined.readyIds, contains('tg-mspw'));
+    expect(joined.readyIds, contains('tg-safe'));
+    expect(loud, isEmpty);
   });
 
-  test('an OPEN link target still blocks through the join while the external '
-      'capability is shipped — both readers run until the migration', () {
-    power = FakeSnapshotSource(
-      graphOf([
-        Bead(
-          id: 'pow-18',
-          issueType: IssueType.task,
-          status: BeadStatus.open,
-          labels: [exportLabel('pow-18'), providesLabel('pow-18')],
-        ),
-      ], readyIds: const {}),
-    );
+  test('an UNSHIPPED capability keeps holding its consumer out THROUGH the '
+      'join — the union is the one edge source', () {
     final union = unionOf();
     addTearDown(union.dispose);
     final state = FakeSnapshotSource(
       graphOf([
-        linkBead('houston-l1', from: 'tg-mspw', to: 'pow-18'),
+        linkBead('houston-l1', from: 'tg-safe', to: 'pow-18'),
       ], readyIds: const {}),
     );
-    final bridge = StationJoinBridge(
-      work: union,
-      state: state,
-      onUnresolvedCrossLink: loud.add,
-    )..start();
+    final bridge = StationJoinBridge(work: union, state: state)..start();
     addTearDown(bridge.dispose);
 
     final joined = read(bridge.notifier).graph;
     expect(joined.readyIds, isNot(contains('tg-mspw')));
+    // tg-safe carries NO external row; the link bead naming it is inert.
     expect(joined.readyIds, contains('tg-safe'));
   });
 }
