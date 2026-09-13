@@ -74,13 +74,13 @@ report the round number. Refuses LOUD (zero writes) on a live session that is
 open and not parked at a gate, and beyond the round cap the engine's rework
 contract defines (a human decides past it).
 
-Flags: `--grid-root <dir>` (state store home), `--prefix <name>` (the state
-store's owned id-prefix), `--note-root <dir>` (the WORK bead's substation
-root — REQUIRED, the spec clear writes there), `--note <finding>` (optional).
+Flags: required absolute `--grid-root <dir>` (the grid home); optional
+`--note <finding>` or `--note-file <path|->` (mutually exclusive);
+`--beyond-cap` authorizes a round past the normal cap and requires both
+`--actor <name>` and a note.
 
 ```sh
-grid rework tg-abc --grid-root /path/to/grid-home --prefix tg \
-  --note-root /path/to/substation --note "committee missed the flaky test"
+grid rework tg-abc --grid-root /path/to/grid-home --note committee-missed-the-flaky-test
 ```
 
 ## `grid demo`

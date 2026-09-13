@@ -30,7 +30,12 @@ class LinkCommand extends Command<int> {
        _input = input {
     argParser
       ..addOption('grid-root')
-      ..addMultiOption('prefix')
+      ..addMultiOption(
+        'prefix',
+        help:
+            'Repeatable; must include every endpoint prefix named by '
+            '<from-bead> and --blocked-by.',
+      )
       ..addOption('blocked-by')
       ..addOption('reason')
       ..addOption('reason-file')
@@ -67,7 +72,12 @@ class UnlinkCommand extends Command<int> {
        _input = input {
     argParser
       ..addOption('grid-root')
-      ..addMultiOption('prefix')
+      ..addMultiOption(
+        'prefix',
+        help:
+            'Repeatable; must include the state prefix and, for <from> <to>, '
+            'every endpoint prefix.',
+      )
       ..addOption('reason')
       ..addOption('reason-file')
       ..addOption('actor');
@@ -484,13 +494,28 @@ bool _endpointsArmed(
   String verb,
 ) {
   for (final id in [from, to]) {
-    final prefix = BeadOwnershipPredicate.ownedPrefixOf(id, roster.keys);
-    if (prefix == null ||
-        !roster.containsKey(prefix) ||
-        !armed.contains(prefix)) {
+    final prefix = BeadOwnershipPredicate.ownedPrefixOf(id, {
+      ...roster.keys,
+      ...armed,
+    });
+    if (prefix == null) {
       err(
-        'grid $verb: endpoint "$id" has an absent, unrostered, or unarmed '
-        'prefix; refusing before opening the state store.',
+        'grid $verb: endpoint "$id" has no prefix matching the configured '
+        'endpoint roster or any supplied --prefix.',
+      );
+      return false;
+    }
+    if (!roster.containsKey(prefix)) {
+      err(
+        'grid $verb: endpoint "$id" uses supplied --prefix "$prefix", but '
+        '"$prefix" is not in the configured endpoint roster.',
+      );
+      return false;
+    }
+    if (!armed.contains(prefix)) {
+      err(
+        'grid $verb: endpoint "$id" uses configured prefix "$prefix"; '
+        'pass another --prefix $prefix.',
       );
       return false;
     }
