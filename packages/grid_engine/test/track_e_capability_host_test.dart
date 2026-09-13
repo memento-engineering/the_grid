@@ -176,6 +176,37 @@ final class _MutableWatchedValueState extends State<_MutableWatchedValue> {
       InheritedSeed<_WatchedValue>(value: _value, child: seed.child);
 }
 
+final class _MutableServiceBundle extends StatefulSeed {
+  const _MutableServiceBundle({
+    required this.initial,
+    required this.onState,
+    required this.child,
+  });
+
+  final ServiceBundle initial;
+  final void Function(_MutableServiceBundleState state) onState;
+  final Seed child;
+
+  @override
+  State<_MutableServiceBundle> createState() => _MutableServiceBundleState();
+}
+
+final class _MutableServiceBundleState extends State<_MutableServiceBundle> {
+  late ServiceBundle _value;
+
+  @override
+  void initState() {
+    _value = seed.initial;
+    seed.onState(this);
+  }
+
+  void replace(ServiceBundle value) => setState(() => _value = value);
+
+  @override
+  Seed build(TreeContext context) =>
+      InheritedSeed<ServiceBundle>(value: _value, child: seed.child);
+}
+
 final class _LifecycleCapability extends Capability {
   _LifecycleCapability(this.events);
 
@@ -913,7 +944,11 @@ void main() {
           Uri.parse('package:grid_engine/src/circuit/capability_host.dart'),
         );
         final source = File(uri!.toFilePath()).readAsStringSync();
-        expect(source, contains('bool _cancelled = false;'));
+        expect(
+          source,
+          isNot(contains('_cancelled')),
+          reason: 'the invalidated dependency scope owns stale-work rejection',
+        );
       },
     );
 
@@ -928,21 +963,176 @@ void main() {
             (_hostBranch(h.root) as StatefulBranch).state
                 as CapabilityHostState;
         h.fakes.runner.calls.clear();
-        h.owner.dispose(); // _cancelled = true FIRST
-        // Deliver a terminal straight to the handler (the subscription is gone).
-        state.deliverEventForTest(
-          const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0),
-        );
+        // Teardown invalidates the allocation's captured dependency scope
+        // BEFORE the owning lifecycle disposes the allocation.
+        h.owner.dispose();
+        // Deliver through that allocation's captured sink after teardown.
+        state.deliverReportForTest(const AllocationCompleted());
         await _pump();
         unawaited(h.fakes.provider.close());
 
         expect(
           h.fakes.runner.callsFor('update'),
           isEmpty,
-          reason: 'a post-dispose completion is dropped (the _cancelled guard)',
+          reason: 'a post-dispose completion is dropped by scope invalidation',
         );
       },
     );
+
+    test(
+      'dependency supersession drops an in-flight completion while the Host stays mounted',
+      () async {
+        final runGate = Completer<void>();
+        final log = <String>[];
+        final capability = _ServiceCap(const Ok(), log, runGate: runGate);
+        late _MutableServiceBundleState bundleState;
+        final h = _host(
+          capability,
+          wrap: (child) => _MutableServiceBundle(
+            initial: ServiceBundle(transport: RecordingExplorationTransport()),
+            onState: (state) => bundleState = state,
+            child: child,
+          ),
+        );
+        addTearDown(() async {
+          h.owner.dispose();
+          if (!runGate.isCompleted) runGate.complete();
+          await _pump();
+          await h.fakes.provider.close();
+        });
+
+        await _pump();
+        expect(log, contains('run(tg-1)'));
+        final hostBranch = _hostBranch(h.root);
+        expect(hostBranch.mounted, isTrue);
+
+        bundleState.replace(
+          ServiceBundle(transport: RecordingExplorationTransport()),
+        );
+        h.owner.flush();
+        await _pump();
+        h.owner.flush();
+
+        expect(_hostBranch(h.root), same(hostBranch));
+        expect(hostBranch.mounted, isTrue);
+
+        runGate.complete();
+        await _pump();
+
+        expect(h.fakes.runner.callsFor('update'), isEmpty);
+      },
+    );
+
+    test(
+      'every Host continuation pairs dependency scope with mountedness',
+      () async {
+        final uri = await Isolate.resolvePackageUri(
+          Uri.parse('package:grid_engine/src/circuit/capability_host.dart'),
+        );
+        final source = File(uri!.toFilePath()).readAsStringSync();
+
+        expect(source, isNot(contains('_cancelled')));
+        expect(
+          RegExp(
+            r'!scope\.isCurrent \|\| !context\.mounted',
+          ).allMatches(source),
+          hasLength(9),
+        );
+        expect(
+          RegExp(r'scope\.isCurrent && context\.mounted').allMatches(source),
+          hasLength(2),
+        );
+        expect(
+          RegExp(r'\bcontext\.mounted\b').allMatches(source),
+          hasLength(11),
+        );
+      },
+    );
+
+    // Decision alignment: `the_grid#wave-2-kept-set-includes-gated-and-ready`.
+    // "No second carrier is designed": the exhaustion park alone carries its
+    // restartCount, the route park alone carries its verdict, and ready alone
+    // merges its rendezvous payload. A current scope must preserve all three.
+    group('the current scope preserves the wave-2 sole carriers', () {
+      test('exhaustion park carries restartCount', () async {
+        final runGate = Completer<void>();
+        final log = <String>[];
+        final capability = _ServiceCap(const Ok(), log, runGate: runGate);
+        final h = _host(capability, mount: _mount(capability, restartCount: 2));
+        addTearDown(() async {
+          h.owner.dispose();
+          if (!runGate.isCompleted) runGate.complete();
+          await _pump();
+          await h.fakes.provider.close();
+        });
+        await _pump();
+
+        final state =
+            (_hostBranch(h.root) as StatefulBranch).state
+                as CapabilityHostState;
+        state.deliverReportForTest(
+          const AllocationFailed.noResult('no gradeable result'),
+        );
+        await _pump();
+
+        final gated = h.fakes.runner.metadataOfUpdate(0);
+        expect(gated[MoleculeStepKeys.state], 'gated');
+        expect(gated[MoleculeStepKeys.restartCount], '3');
+      });
+
+      test('route park carries the route verdict', () async {
+        final runGate = Completer<void>();
+        final log = <String>[];
+        final capability = _ServiceCap(const Ok(), log, runGate: runGate);
+        final h = _host(capability);
+        addTearDown(() async {
+          h.owner.dispose();
+          if (!runGate.isCompleted) runGate.complete();
+          await _pump();
+          await h.fakes.provider.close();
+        });
+        await _pump();
+
+        final state =
+            (_hostBranch(h.root) as StatefulBranch).state
+                as CapabilityHostState;
+        state.deliverReportForTest(const AllocationEscalated('route held'));
+        await _pump();
+
+        final gated = h.fakes.runner.metadataOfUpdate(0);
+        expect(gated[MoleculeStepKeys.state], 'gated');
+        expect(
+          gated['grid.result.tg_h1_sagent.${ResultKeys.routeVerdict}'],
+          kRouteVerdictEscalate,
+        );
+      });
+
+      test('ready carries the rendezvous payload', () async {
+        final runGate = Completer<void>();
+        final log = <String>[];
+        final capability = _ServiceCap(const Ok(), log, runGate: runGate);
+        final h = _host(capability);
+        addTearDown(() async {
+          h.owner.dispose();
+          if (!runGate.isCompleted) runGate.complete();
+          await _pump();
+          await h.fakes.provider.close();
+        });
+        await _pump();
+
+        final state =
+            (_hostBranch(h.root) as StatefulBranch).state
+                as CapabilityHostState;
+        state.deliverReportForTest(
+          const AllocationReady({'endpoint': 'ws://station.test'}),
+        );
+        await _pump();
+
+        final ready = h.fakes.runner.metadataOfUpdate(0);
+        expect(ready[MoleculeStepKeys.state], 'ready');
+        expect(ready['grid.result.tg_h1_sagent.endpoint'], 'ws://station.test');
+      });
+    });
 
     test('dispose BEFORE any spawn is reached leaves the transport untouched '
         '(the pre-acquire cancel-token guard: finding #1 restated for the '
