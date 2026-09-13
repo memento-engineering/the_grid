@@ -355,6 +355,59 @@ TrajectoryAppendRequest _stepTransition({
   ),
 );
 
+typedef _DecisionBearingRecorderCall =
+    Future<TrajectoryAppendResult> Function(StationTrajectoryRecorder recorder);
+
+List<({String name, String recordType, _DecisionBearingRecorderCall invoke})>
+_decisionBearingRecorderCalls() => [
+  (
+    name: 'stepRunning',
+    recordType: 'step.transition',
+    invoke: (recorder) => recorder.stepRunning(
+      sessionId: 'tranquility-s1',
+      stepPath: 'code/build',
+      stepRound: 0,
+      incarnation: 0,
+    ),
+  ),
+  (
+    name: 'stepRearmed',
+    recordType: 'step.transition',
+    invoke: (recorder) => recorder.stepRearmed(
+      sessionId: 'tranquility-s1',
+      stepPath: 'code/build',
+      fromStepRound: 0,
+      incarnation: 0,
+    ),
+  ),
+  (
+    name: 'sessionCompleted',
+    recordType: 'attempt.terminal',
+    invoke: (recorder) => recorder.sessionCompleted(
+      sessionId: 'tranquility-s1',
+      workBeadId: 'tg-1',
+    ),
+  ),
+  (
+    name: 'sessionEscalated',
+    recordType: 'attempt.terminal',
+    invoke: (recorder) => recorder.sessionEscalated(
+      sessionId: 'tranquility-s1',
+      workBeadId: 'tg-1',
+      reason: 'review exhausted',
+    ),
+  ),
+  (
+    name: 'sessionVoided',
+    recordType: 'attempt.terminal',
+    invoke: (recorder) => recorder.sessionVoided(
+      sessionId: 'tranquility-s1',
+      workBeadId: 'tg-1',
+      reason: 'dead key',
+    ),
+  ),
+];
+
 void main() {
   late Directory tmp;
   late List<(String, Map<String, String>)> flares;
@@ -2163,6 +2216,113 @@ void main() {
   });
 
   group('recorder wiring (W3 — §2 handoff to the queue)', () {
+    test(
+      'shadow decision-bearing recorder methods do not await the append',
+      () async {
+        for (final call in _decisionBearingRecorderCalls()) {
+          appender = _FakeAppender(_FakeDb());
+          final blocked = Completer<AppendOutcome>();
+          appender.appendFutures.add(blocked.future);
+          final h = await harness();
+          await h.start();
+          final timerCount = timers.length;
+          var settled = false;
+          TrajectoryAppendResult? disposition;
+
+          final result = call.invoke(h.recorder);
+          unawaited(
+            result.then((value) {
+              disposition = value;
+              settled = true;
+            }),
+          );
+          await pumpEventQueue();
+
+          expect(settled, isTrue, reason: call.name);
+          expect(disposition, isA<Acked>(), reason: call.name);
+          expect(
+            appender.calls,
+            contains('append:${call.recordType}'),
+            reason: call.name,
+          );
+          expect(appender.records, hasLength(1), reason: call.name);
+          expect(
+            timers,
+            hasLength(timerCount),
+            reason: '${call.name} must not arm an acknowledgement deadline',
+          );
+          expect(h.status.appended, 0, reason: 'append remains in flight');
+
+          blocked.complete(
+            Appended(
+              recordId: 'shadow-${call.name}',
+              seq: 1,
+              epochSeq: 1,
+              envelope: committedEnvelope(
+                appender.records.single,
+                recordId: 'shadow-${call.name}',
+              ),
+            ),
+          );
+          await h.runToFixpoint();
+          expect(h.status.appended, 1, reason: call.name);
+        }
+      },
+    );
+
+    test(
+      'cut decision-bearing recorder methods await the append disposition',
+      () async {
+        for (final call in _decisionBearingRecorderCalls()) {
+          appender = _FakeAppender(_FakeDb());
+          final blocked = Completer<AppendOutcome>();
+          appender.appendFutures.add(blocked.future);
+          final h = await harness(
+            config: const TrajectoryConfig(
+              discipline: TrajectoryDiscipline.cut,
+            ),
+          );
+          await h.start();
+          final timerCount = timers.length;
+          var settled = false;
+
+          final result = call.invoke(h.recorder);
+          unawaited(result.then((_) => settled = true));
+          await pumpEventQueue();
+
+          expect(settled, isFalse, reason: call.name);
+          expect(
+            appender.calls,
+            contains('append:${call.recordType}'),
+            reason: call.name,
+          );
+          expect(appender.records, hasLength(1), reason: call.name);
+          expect(timers, hasLength(timerCount + 1), reason: call.name);
+          expect(
+            timers.last.$3.cancelled,
+            isTrue,
+            reason: '${call.name} dequeued before its append began',
+          );
+
+          blocked.complete(
+            Appended(
+              recordId: 'cut-${call.name}',
+              seq: 1,
+              epochSeq: 1,
+              envelope: committedEnvelope(
+                appender.records.single,
+                recordId: 'cut-${call.name}',
+              ),
+            ),
+          );
+
+          expect(await result, isA<Acked>(), reason: call.name);
+          expect(settled, isTrue, reason: call.name);
+          expect(h.status.appended, 1, reason: call.name);
+        }
+      },
+    );
+
     test(
       'a recorder derivation rides the single writer into the appender',
       () async {

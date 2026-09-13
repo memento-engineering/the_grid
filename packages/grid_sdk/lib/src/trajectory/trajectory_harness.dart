@@ -11,9 +11,10 @@
 ///
 ///   * **Non-fatal with a narrow acknowledgement seam.** [enqueue] remains
 ///     synchronous for ordinary observations. The five decision-bearing
-///     recorder sites alone await [appendAcked], whose queue wait has a
-///     one-tick writer-stall detector, a 60-tick residence cap, and a sealed
-///     disposition. Boot and clean-down retain their existing awaits.
+///     recorder sites use one harness-owned policy: cut awaits [appendAcked],
+///     whose queue wait has a one-tick writer-stall detector and a 60-tick
+///     residence cap; shadow enqueues fire-and-forget and releases the caller
+///     immediately. Boot and clean-down retain their existing awaits.
 ///   * **The trajectory can degrade without crashing work** (§3). [start] and
 ///     [shutdown] catch everything: a failed connect, verify, or claim records
 ///     a mode + cause. Under cut, a lost decision record halts fresh admission
@@ -350,6 +351,15 @@ class TrajectoryHarness {
   /// Read it as ONE predicate everywhere so the arms can never drift apart:
   /// a mirror that seeds but never applies is worse than either posture.
   bool get _dualReadArmed => config.dualRead != DualReadMode.off;
+
+  /// The recorder sink's one accepting predicate. The shadow
+  /// decision-bearing policy snapshots this exact value before enqueue so its
+  /// immediate disposition cannot drift from
+  /// [TrajectoryAckRecordSink.accepting].
+  bool get _accepting => switch (_mode) {
+    TrajectoryHarnessMode.down || TrajectoryHarnessMode.live => !_isShutdown,
+    _ => false,
+  };
 
   /// The substation-derivation input (§2.2's substation row) — carried for the
   /// derivation layer; the harness itself never derives a substation.
@@ -1262,6 +1272,29 @@ class TrajectoryHarness {
     return completer.future;
   }
 
+  /// Resolves the acknowledgement policy for the recorder's five
+  /// decision-bearing observations at the harness boundary.
+  ///
+  /// Cut retains the bounded acknowledgement path unchanged. Shadow retains
+  /// the request's decision-bearing loss classification but never creates an
+  /// acknowledgement completer or timer and never waits for the append.
+  Future<TrajectoryAppendResult> _appendDecisionBearing(
+    TrajectoryAppendRequest request,
+  ) {
+    switch (config.discipline) {
+      case TrajectoryDiscipline.cut:
+        return appendAcked(request);
+      case TrajectoryDiscipline.shadow:
+        final accepted = _accepting;
+        enqueue(request);
+        return Future.value(
+          accepted
+              ? const TrajectoryAppendResult.acked()
+              : const TrajectoryAppendResult.suppressed(),
+        );
+    }
+  }
+
   void _submit(_TrajectoryQueueEntry entry) {
     switch (_mode) {
       case TrajectoryHarnessMode.disabled:
@@ -1991,11 +2024,7 @@ final class _HarnessRecordSink implements TrajectoryAckRecordSink {
   /// as accepting because records enqueued before the claim drain after it
   /// (§1.2 step 2's `_pump()`).
   @override
-  bool get accepting => switch (_harness._mode) {
-    TrajectoryHarnessMode.down ||
-    TrajectoryHarnessMode.live => !_harness._isShutdown,
-    _ => false,
-  };
+  bool get accepting => _harness._accepting;
 
   @override
   void enqueue(
@@ -2022,16 +2051,17 @@ final class _HarnessRecordSink implements TrajectoryAckRecordSink {
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
     required bool decisionBearing,
-  }) => _harness.appendAcked(
-    TrajectoryAppendRequest(
+  }) {
+    final request = TrajectoryAppendRequest(
       record,
       occurredAt: occurredAt,
       substation: substation,
       provenance: provenance,
       provenanceBasis: provenanceBasis,
       decisionBearing: decisionBearing,
-    ),
-  );
+    );
+    return _harness._appendDecisionBearing(request);
+  }
 }
 
 /// The tick's read path, serialized on the same lane — and resolved through
