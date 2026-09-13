@@ -760,9 +760,13 @@ void main() {
 
       final clear = admit(clearRead());
       expect(clear.refused, isEmpty);
-      expect({
-        for (final reservation in clear.admitted) reservation.candidate.bead.id,
-      }, {_workBead});
+      expect(
+        {
+          for (final reservation in clear.admitted)
+            reservation.candidate.bead.id,
+        },
+        {_workBead},
+      );
     });
 
     test('UNDER SHADOW the mount set is identical with and without it', () {
@@ -899,7 +903,8 @@ void main() {
       expect(
         [for (final work in mounted(clearRead())) work.bead.id],
         [_workBead],
-        reason: 'an EMPTY P6 mirror at the same beat mounts — so the refusal '
+        reason:
+            'an EMPTY P6 mirror at the same beat mounts — so the refusal '
             'above is the join, not the heartbeat',
       );
     });

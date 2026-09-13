@@ -52,7 +52,9 @@ void main() {
   setUpAll(() async {
     home = await HermeticGridHome.create();
     await home.provision();
-    db = await TrajectoryConnection.connect(home.adminEndpointFor('trajectory'));
+    db = await TrajectoryConnection.connect(
+      home.adminEndpointFor('trajectory'),
+    );
   });
 
   tearDownAll(() async {
