@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'molecule_spawn_semaphore.dart';
+
 final class _TestRun {
   const _TestRun({
     required this.exitCode,
@@ -57,11 +59,12 @@ void _reportFailure(_TestRun run) {
   stderr.write(run.stderr);
 }
 
-Future<void> main() async {
+Future<void> _runLane({required bool reportProbe}) async {
   final contenders = await Future.wait(
     List.generate(6, (_) => _startTest(const [])),
   );
   await Future.wait(contenders.map((contender) => contender.started));
+  final budget = reportProbe ? await MoleculeSpawnStartBudget.probe() : null;
   final drainRuns = <_TestRun>[];
   for (var run = 0; run < 10; run++) {
     final drain = await _startTest(const [
@@ -85,8 +88,33 @@ Future<void> main() async {
     return;
   }
 
+  if (budget != null) {
+    stdout.writeln(
+      'molecule spawn probe lane: '
+      'latency=${budget.probeLatency.inMilliseconds}ms; '
+      'budget=${budget.timeout.inMilliseconds}ms',
+    );
+  }
   stdout.writeln(
     'molecule spawn lane load: 10/10 drain runs passed; '
     '6/6 full-suite contenders passed',
   );
+}
+
+Future<void> main(List<String> arguments) async {
+  switch (arguments) {
+    case []:
+      await _runLane(reportProbe: false);
+    case ['--probe-only']:
+      final budget = await MoleculeSpawnStartBudget.probe();
+      stdout.writeln(
+        'molecule spawn probe alone: '
+        'latency=${budget.probeLatency.inMilliseconds}ms; '
+        'budget=${budget.timeout.inMilliseconds}ms',
+      );
+    case ['--report-probe']:
+      await _runLane(reportProbe: true);
+    default:
+      throw ArgumentError.value(arguments, 'arguments', 'unsupported mode');
+  }
 }

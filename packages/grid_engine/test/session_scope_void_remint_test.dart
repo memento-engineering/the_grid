@@ -18,7 +18,10 @@ import 'support/molecule_spawn_semaphore.dart';
 
 // The shared cross-process spawn semaphore covers only each state trigger
 // through verification of its exact START, never running/completion or a
-// timeout increase.
+// non-START wait. Its START budget is max(30 seconds, 20 x measured
+// first-output latency).
+
+late MoleculeSpawnStartBudget _spawnStartBudget;
 
 const _code = Circuit(
   id: 'code',
@@ -72,11 +75,31 @@ Future<void> _pumpUntil(
   TreeOwner owner,
   bool Function() condition, {
   int maxRounds = 500,
+  MoleculeSpawnStartBudget? startBudget,
+  String? what,
 }) async {
-  for (var i = 0; i < maxRounds && !condition(); i++) {
+  if (startBudget == null) {
+    for (var i = 0; i < maxRounds && !condition(); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+      owner.flush();
+    }
+    return;
+  }
+
+  final label = what;
+  if (label == null) throw ArgumentError.notNull('what');
+  final stopwatch = Stopwatch()..start();
+  while (stopwatch.elapsed < startBudget.timeout) {
+    if (condition()) return;
     await Future<void>.delayed(const Duration(milliseconds: 1));
     owner.flush();
   }
+  if (condition()) return;
+  stopwatch.stop();
+  throw TestFailure(
+    'Timed out waiting for $label after ${stopwatch.elapsed.inMilliseconds} '
+    'ms; ${startBudget.diagnostic}',
+  );
 }
 
 Bead _task(String id) =>
@@ -229,6 +252,10 @@ List<Map<String, dynamic>> _updatesFor(RecordingBdRunner runner, String id) {
 }
 
 void main() {
+  setUpAll(() async {
+    _spawnStartBudget = await MoleculeSpawnStartBudget.probe();
+  });
+
   group('tg-4rw / I-10 — a dead session key mints fresh instead of wedging', () {
     test(
       'a lagging state snapshot refuses before the authored cross-link is projected',
@@ -550,7 +577,12 @@ void main() {
           _joined({'tg-1': _moleculeProjection(sessionId: 'tgdog-sess1')}),
         );
         m.owner.flush();
-        await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
+        await _pumpUntil(
+          m.owner,
+          () => reg.events.isNotEmpty,
+          startBudget: _spawnStartBudget,
+          what: 'process tgdog-sess1/tg-1/agent to start',
+        );
         expect(reg.events, ['START agent(tgdog-sess1/tg-1/agent)']);
       });
 
@@ -643,7 +675,12 @@ void main() {
           }),
         );
         m.owner.flush();
-        await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
+        await _pumpUntil(
+          m.owner,
+          () => reg.events.isNotEmpty,
+          startBudget: _spawnStartBudget,
+          what: 'process tgdog-sess1/tg-1/verify to start',
+        );
         expect(reg.events, ['START verify(tgdog-sess1/tg-1/verify)']);
       });
       expect(f.runner.workCreates, hasLength(2));
@@ -906,7 +943,12 @@ void main() {
         addTearDown(m.owner.dispose);
         await _pump();
         m.owner.flush();
-        await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
+        await _pumpUntil(
+          m.owner,
+          () => reg.events.isNotEmpty,
+          startBudget: _spawnStartBudget,
+          what: 'process tgdog-live/tg-1/agent to start',
+        );
         expect(reg.events, ['START agent(tgdog-live/tg-1/agent)']);
       });
 

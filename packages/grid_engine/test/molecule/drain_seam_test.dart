@@ -22,7 +22,10 @@ import '../support/molecule_spawn_semaphore.dart';
 
 // The shared cross-process spawn semaphore covers only each state trigger
 // through verification of its exact START, never running/completion or a
-// timeout increase.
+// non-START wait. Its START budget is max(30 seconds, 20 x measured
+// first-output latency).
+
+late MoleculeSpawnStartBudget _spawnStartBudget;
 
 /// The `code` circuit `track_c_session_scope_test.dart` also drives
 /// (`agent → verify → land`) — reused so the flat-mode assertions here read
@@ -81,17 +84,21 @@ Future<void> _pumpUntil(
   bool Function() condition, {
   required String what,
   Duration timeout = _pumpUntilTimeout,
+  MoleculeSpawnStartBudget? startBudget,
 }) async {
+  final effectiveTimeout = startBudget?.timeout ?? timeout;
   final stopwatch = Stopwatch()..start();
-  while (stopwatch.elapsed < timeout) {
+  while (stopwatch.elapsed < effectiveTimeout) {
     if (condition()) return;
     await Future<void>.delayed(const Duration(milliseconds: 1));
   }
   if (condition()) return;
   stopwatch.stop();
   final elapsed = stopwatch.elapsed;
+  final diagnostic = startBudget == null ? '' : '; ${startBudget.diagnostic}';
   throw TestFailure(
-    'Timed out waiting for $what after ${elapsed.inMilliseconds} ms',
+    'Timed out waiting for $what after ${elapsed.inMilliseconds} ms'
+    '$diagnostic',
   );
 }
 
@@ -227,6 +234,10 @@ class _LiveArmProcessCap extends ProcessCapability {
 }
 
 void main() {
+  setUpAll(() async {
+    _spawnStartBudget = await MoleculeSpawnStartBudget.probe();
+  });
+
   test(
     '_pumpUntil fails loudly with its condition label on exhaustion',
     () async {
@@ -250,6 +261,58 @@ void main() {
       );
     },
   );
+
+  test(
+    'probe-derived START budget keeps the 30 second floor and scales at 20x',
+    () {
+      final floored = MoleculeSpawnStartBudget.derive(
+        const Duration(milliseconds: 1500),
+      );
+      final scaled = MoleculeSpawnStartBudget.derive(
+        const Duration(seconds: 5),
+      );
+
+      expect(floored.timeout, const Duration(seconds: 30));
+      expect(scaled.timeout, const Duration(seconds: 100));
+      expect(
+        scaled.diagnostic,
+        allOf(
+          contains('probe latency=5000ms'),
+          contains('derived START budget=100000ms'),
+          contains('minimum=30000ms'),
+          contains('multiplier=20x'),
+        ),
+      );
+    },
+  );
+
+  test('a START timeout appends the probe-derived budget diagnostic', () async {
+    const budget = MoleculeSpawnStartBudget(
+      probeLatency: Duration(milliseconds: 5),
+      timeout: Duration(milliseconds: 2),
+    );
+
+    await expectLater(
+      _pumpUntil(
+        () => false,
+        what: 'process sentinel to start',
+        startBudget: budget,
+      ),
+      throwsA(
+        isA<TestFailure>().having(
+          (failure) => failure.message,
+          'message',
+          matches(
+            RegExp(
+              r'^Timed out waiting for process sentinel to start after '
+              r'[0-9]+ ms; probe latency=5ms; derived START budget=2ms; '
+              r'minimum=30000ms; multiplier=20x$',
+            ),
+          ),
+        ),
+      ),
+    );
+  });
 
   test('_pumpUntil succeeds after 200 ms of busy microtasks', () async {
     var conditionMet = false;
@@ -521,12 +584,17 @@ void main() {
             };
             final expectedStarts = path == 'tg-9/build' ? priorStarts + 1 : 1;
             await _pumpUntil(
-              () =>
-                  f.provider.started
-                      .where((started) => started.name == name)
-                      .length ==
-                  expectedStarts,
+              () {
+                // A late async completion can dirty the tree after trigger's
+                // fixed microtask drain; render it while observing START.
+                m.owner.flush();
+                return f.provider.started
+                        .where((started) => started.name == name)
+                        .length ==
+                    expectedStarts;
+              },
               what: 'process $name to start',
+              startBudget: _spawnStartBudget,
             );
             expect(
               f.provider.started.where((started) => started.name == name),
