@@ -7,17 +7,33 @@
 /// then a `done` twin can outrank a `voided` one and strand a ready bead
 /// forever, silently.
 ///
-/// This file authors the ONE ordering and the ONE verdict both the join bridge
-/// and the mount boundary read, so the frontier and `grid rework` can never
-/// disagree about which row is current.
+/// This file authors the ONE membership key, ordering, and verdict that the
+/// join bridge, mount boundary, and resident verbs read, so the frontier,
+/// admission authority, and operator cannot disagree about which rows link a
+/// work bead or which one is current.
 library;
 
 import 'package:freezed_annotation/freezed_annotation.dart';
+import 'package:grid_runtime/grid_runtime.dart' show StationTrajectoryRecorder;
 
 import 'session_disposition.dart';
 import 'session_projection.dart';
 
 part 'linked_sessions.freezed.dart';
+
+/// The work-bead membership key for one session [row].
+///
+/// The unchanged `reworkKeyFor` and `voidKeyFor` writers author tombstone keys
+/// that retire a finished round from the bare-bead join. A tombstone on a
+/// terminal row therefore remains literal history. A non-terminal tombstone is
+/// anomalous — retirement closes the row — so it remains linked to the bare
+/// work bead through the trajectory recorder's existing legacy-key normalizer.
+String linkedWorkBeadKeyOf(SessionProjection row) {
+  if (row.isTerminal) return row.workBeadId;
+  return StationTrajectoryRecorder.parseLegacyWorkKey(
+    row.workBeadId,
+  ).workBeadId;
+}
 
 /// Orders [linked] so `.first` is the row the join publishes.
 ///

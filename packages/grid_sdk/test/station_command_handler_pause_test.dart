@@ -6,12 +6,16 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
 
-Bead _session({bool closed = false, String? pauseState}) => Bead(
+Bead _session({
+  bool closed = false,
+  String? pauseState,
+  String workBeadId = 'tg-1',
+}) => Bead(
   id: 'tgdog-s1',
   issueType: GridIssueTypes.session,
   status: closed ? BeadStatus.closed : BeadStatus.open,
   metadata: {
-    'work_bead': 'tg-1',
+    'work_bead': workBeadId,
     'rig': 'tgdog',
     if (pauseState != null) 'grid.session.pause_state': pauseState,
   },
@@ -149,6 +153,31 @@ void main() {
     );
     expect(stateRunner.calls.any((call) => call.first == 'close'), isFalse);
     expect(stateRunner.calls.join(' '), isNot(contains('work_bead')));
+  });
+
+  test('pause finds an OPEN round tombstone through the bare bead', () async {
+    final stateRunner = _RecordingRunner();
+    final handler = _handler(
+      state: _Source(_snapshot([_session(workBeadId: 'tg-1#r1')])),
+      work: _Source(_snapshot(const [])),
+      stateRunner: stateRunner,
+      workRunner: _RecordingRunner(),
+    );
+
+    final result = await handler(
+      const GridCommandRequest.pauseSession(beadId: 'tg-1'),
+    );
+
+    expect(result, isA<GridCommandCompleted>());
+    expect(
+      stateRunner.calls.single,
+      containsAllInOrder(<String>[
+        'update',
+        'tgdog-s1',
+        '--set-metadata',
+        'grid.session.pause_state=paused',
+      ]),
+    );
   });
 
   test('resume stamps resumed on a paused session', () async {

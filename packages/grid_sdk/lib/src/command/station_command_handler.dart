@@ -845,7 +845,7 @@ final class StationCommandHandler implements GridCommandHandler {
         .where(
           (bead) =>
               bead.issueType == GridIssueTypes.session &&
-              _meta(bead, SessionBeadKeys.workBead) == beadId,
+              linkedWorkBeadKeyOf(projectSession(bead)) == beadId,
         )
         .toList(growable: false);
     if (linked.isEmpty) {
@@ -969,7 +969,7 @@ final class StationCommandHandler implements GridCommandHandler {
         .where((bead) => bead.issueType == GridIssueTypes.session)
         .toList(growable: false);
     final linked = sessions
-        .where((bead) => _meta(bead, SessionBeadKeys.workBead) == beadId)
+        .where((bead) => linkedWorkBeadKeyOf(projectSession(bead)) == beadId)
         .toList(growable: false);
     if (linked.isEmpty) {
       return _refused(

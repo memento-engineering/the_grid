@@ -426,6 +426,12 @@ class SessionScopeState extends State<SessionScope>
   /// transient effect payload, never an eligibility cursor.
   String? _retiredReworkSessionId;
 
+  /// The retired session this scope has successfully closed through the
+  /// admission authority. A lagging joined snapshot may still project that
+  /// exact row OPEN; it cannot veto the successor freshness barrier after the
+  /// close has completed.
+  String? _causallyClosedRetiredSessionId;
+
   /// The round number the retiring `#rN` key names — captured beside
   /// [_retiredReworkSessionId] purely so the `attempt.round.retired` record
   /// can state the round it retires (§2.2's round row). Null when this scope
@@ -624,7 +630,11 @@ class SessionScopeState extends State<SessionScope>
         return;
       }
       final joined = snapshot.sessionsByWorkBead[seed.bead.id];
-      if (joined != null && !joined.isTerminal) return;
+      final isCausallyClosedRetired =
+          joined?.sessionId == _causallyClosedRetiredSessionId;
+      if (joined != null && !joined.isTerminal && !isCausallyClosedRetired) {
+        return;
+      }
     }
     if (!snapshot.graph.readyIds.contains(seed.bead.id)) {
       // This fresh frontier is a refusal decision. Record and flare it once,
@@ -707,6 +717,7 @@ class SessionScopeState extends State<SessionScope>
       _retiredReworkSessionId = null;
       try {
         await _closeRetiredReworkSession(retiredId);
+        _causallyClosedRetiredSessionId = retiredId;
       } on Object {
         if (await _stopAbandonedMint(
           stage: 'retired-gates-close-failed',
@@ -894,6 +905,7 @@ class SessionScopeState extends State<SessionScope>
           throw StateError('invalid session-attempt result');
       }
       _moleculeSessionId = id;
+      _causallyClosedRetiredSessionId = null;
       // §2.3's `attempt.session.started` row, derived at `createSession`'s SOLE
       // caller: rig and model are the same two values the birth-stamping merge
       // just wrote. Inside the null check on purpose — a retry that reuses the
@@ -2024,6 +2036,7 @@ class SessionScopeState extends State<SessionScope>
     _mintGraceTimer = null;
     _clearMoleculePourStall();
     _cancelled = true;
+    _causallyClosedRetiredSessionId = null;
     _mintingSuccessorForPath.clear();
   }
 

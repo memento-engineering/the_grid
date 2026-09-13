@@ -5,13 +5,14 @@ import 'package:test/test.dart';
 
 SessionProjection _row(
   String id, {
+  String workBeadId = 'tg-1',
   bool terminal = true,
   bool completed = false,
   bool humanHeld = false,
   DateTime? closedAt,
   DateTime? startedAt,
 }) => SessionProjection(
-  workBeadId: 'tg-1',
+  workBeadId: workBeadId,
   sessionId: id,
   isTerminal: terminal,
   completed: completed,
@@ -21,6 +22,26 @@ SessionProjection _row(
 );
 
 void main() {
+  group('linkedWorkBeadKeyOf', () {
+    test('normalizes only anomalous OPEN tombstones', () {
+      for (final entry in <(SessionProjection, String)>[
+        (_row('open-bare', terminal: false), 'tg-1'),
+        (_row('open-round', workBeadId: 'tg-1#r1', terminal: false), 'tg-1'),
+        (
+          _row('open-void', workBeadId: 'tg-1#void-open-void', terminal: false),
+          'tg-1',
+        ),
+        (_row('closed-round', workBeadId: 'tg-1#r1'), 'tg-1#r1'),
+        (
+          _row('closed-void', workBeadId: 'tg-1#void-closed-void'),
+          'tg-1#void-closed-void',
+        ),
+      ]) {
+        expect(linkedWorkBeadKeyOf(entry.$1), entry.$2);
+      }
+    });
+  });
+
   group('orderLinkedSessions', () {
     test('an OPEN row outranks every terminal one', () {
       final ordered = orderLinkedSessions([

@@ -356,8 +356,13 @@ class StationJoinBridge {
         }
         if (bead.issueType != GridIssueTypes.session) continue;
         final projection = projectSession(bead);
-        if (projection.workBeadId.isEmpty) continue; // no JOIN key — skip.
-        (linkedRows[projection.workBeadId] ??= <SessionProjection>[]).add(
+        // The membership key is shared with resident verbs. In particular, an
+        // anomalously OPEN tombstone must reach both WorkList and the admission
+        // authority's duplicate-live guard under the bare work bead, while a
+        // CLOSED tombstone remains retired literal history for round scans.
+        final linkedWorkBeadKey = linkedWorkBeadKeyOf(projection);
+        if (linkedWorkBeadKey.isEmpty) continue; // no JOIN key — skip.
+        (linkedRows[linkedWorkBeadKey] ??= <SessionProjection>[]).add(
           projection,
         );
       }
