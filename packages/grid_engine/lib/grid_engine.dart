@@ -40,6 +40,10 @@ export 'src/bridge/trust_guard.dart';
 export 'src/sdk/capability.dart';
 export 'src/sdk/sdk.dart';
 
+// Station-owned session liveness coordination. The public relay value/DI
+// contracts ride the SDK barrel above; these are engine assembly seams.
+export 'src/kernel/work_session_liveness.dart';
+
 // The reentrant engine (ENGINE-PRIVATE — never subclassed by an asset; the
 // public/private package split is deferred, D1): the SessionScope adopt-or-mint
 // lifecycle owner (D-2), the CircuitScope inflater + its registry/clock seam
