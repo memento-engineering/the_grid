@@ -182,6 +182,46 @@ void main() {
       expect(_read(bridge.notifier).mountAttemptsByWorkBead, isEmpty);
     });
 
+    test('an OPEN round tombstone joins its bare bead for adoption', () {
+      workSrc = FakeSnapshotSource(graphOf([work('w1')]));
+      stateSrc = FakeSnapshotSource(
+        graphOf([session('s1', workBeadId: 'w1#r1')]),
+      );
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
+      addTearDown(bridge.dispose);
+
+      final joined = _read(bridge.notifier);
+      final linked = joined.linkedSessions('w1');
+      expect(linked, hasLength(1));
+      expect(linked.single.sessionId, 's1');
+      expect(
+        linked.single.workBeadId,
+        'w1#r1',
+        reason: 'rebucketing must not rewrite the projected tombstone',
+      );
+      expect(
+        linkedSessionVerdictOf(linked),
+        isA<AdoptLinkedSession>()
+            .having((value) => value.session.sessionId, 'session', 's1')
+            .having((value) => value.rivals, 'rivals', isEmpty),
+      );
+    });
+
+    test('a CLOSED round tombstone remains literal retired history', () {
+      workSrc = FakeSnapshotSource(graphOf([work('w1')]));
+      stateSrc = FakeSnapshotSource(
+        graphOf([session('s1', workBeadId: 'w1#r1', closed: true)]),
+      );
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
+      addTearDown(bridge.dispose);
+
+      final joined = _read(bridge.notifier);
+      expect(joined.linkedSessions('w1'), isEmpty);
+      expect(joined.sessionsByWorkBead.containsKey('w1'), isFalse);
+      expect(joined.sessionsByWorkBead['w1#r1']?.sessionId, 's1');
+      expect(joined.sessionsByWorkBead['w1#r1']?.workBeadId, 'w1#r1');
+    });
+
     test(
       'one work change → exactly ONE push, new graph + unchanged sessions',
       () async {
