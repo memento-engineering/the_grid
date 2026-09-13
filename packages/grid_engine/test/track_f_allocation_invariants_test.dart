@@ -132,7 +132,9 @@ class _DaemonCap extends ProcessCapability {
 }
 
 final class _LatestDependencyCap extends ProcessCapability {
-  const _LatestDependencyCap();
+  const _LatestDependencyCap(this.workDir);
+
+  final String workDir;
 
   @override
   CompletionContract get completionContract =>
@@ -140,7 +142,7 @@ final class _LatestDependencyCap extends ProcessCapability {
 
   @override
   RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
-    workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
+    workDir: workDir,
     command: 'sh',
     args: const ['-c', 'echo hi'],
     lifecycle: Lifecycle.oneTurn,
@@ -444,6 +446,10 @@ void main() {
         'tg-1',
         workspaceDir: '${root.path}/new',
       );
+      final staleWorkspace = testWorkspace(
+        'tg-1',
+        workspaceDir: '${root.path}/stale',
+      );
       final provisions = <String>[];
       final oldServices = ServiceBundle(
         sourceControl: _WatchingSourceControl('old', provisions),
@@ -451,12 +457,15 @@ void main() {
       final newServices = ServiceBundle(
         sourceControl: _WatchingSourceControl('new', provisions),
       );
+      final staleServices = ServiceBundle(
+        sourceControl: _WatchingSourceControl('stale', provisions),
+      );
       final probedWorkspaces = <String>[];
       final reports = <AllocationReport>[];
       final transport = FakeRuntimeProvider();
       addTearDown(transport.close);
       final allocation = ProcessAllocation(
-        const _LatestDependencyCap(),
+        _LatestDependencyCap(newWorkspace.workspaceDir),
         AllocationInputs(
           args: stepArgs('tg-1/agent'),
           transport: transport,
@@ -489,7 +498,7 @@ void main() {
       owner.flush();
 
       final treeContext = FakeTreeContext(
-        values: {ServiceBundle: newServices, Workspace: newWorkspace},
+        values: {ServiceBundle: staleServices, Workspace: staleWorkspace},
       );
       await allocation.startOrAdopt(treeContext);
       allocation.deliverEventForTest(
@@ -498,12 +507,27 @@ void main() {
       );
       await _pump();
 
-      expect(provisions, ['new:${newWorkspace.workspaceDir}']);
+      expect(
+        provisions,
+        ['new:${newWorkspace.workspaceDir}'],
+        reason:
+            'the lifecycle-watched ServiceBundle and Workspace must win over '
+            'the stale call-scoped tree during provisioning',
+      );
       expect(
         transport.started.single.config.workDir,
         newWorkspace.workspaceDir,
+        reason:
+            'the spawn config must name the lifecycle-watched Workspace, not '
+            'the stale call-scoped tree Workspace',
       );
-      expect(probedWorkspaces, [newWorkspace.workspaceDir]);
+      expect(
+        probedWorkspaces,
+        [newWorkspace.workspaceDir],
+        reason:
+            'the work-signal probe must receive the lifecycle-watched '
+            'Workspace, not the stale call-scoped tree Workspace',
+      );
       expect(reports.whereType<AllocationCompleted>(), hasLength(1));
     },
   );
