@@ -717,6 +717,10 @@ class ProcessAllocation extends Allocation {
       final base = await runCapabilityGuarded(
         () => capability.spawn(treeContext, args),
       );
+      if (!treeContext.mounted) {
+        state = AllocationState.gone;
+        return;
+      }
       if (workspace != null &&
           !_isInsideWorkspace(workspace.workspaceDir, base.workDir)) {
         throw StateError(
@@ -899,6 +903,7 @@ class ProcessAllocation extends Allocation {
     }
     // PROVEN clean: a finished turn. Advance exactly as an unfenced completion
     // does (same result hook, same payload, same report).
+    if (!treeContext.mounted) return;
     await _reportComplete(treeContext);
   }
 

@@ -57,6 +57,16 @@ class _FakeProcessCap extends ProcessCapability {
   };
 }
 
+class _CountingProcessCap extends _FakeProcessCap {
+  int spawnCalls = 0;
+
+  @override
+  RuntimeConfig spawn(TreeContext context, StepArgs args) {
+    spawnCalls += 1;
+    return super.spawn(context, args);
+  }
+}
+
 class _ImmediateSession implements ProcessSession {
   final StreamController<ProcessSessionUpdate> _updates =
       StreamController<ProcessSessionUpdate>();
@@ -135,6 +145,28 @@ class _ProvisionSourceControl implements SourceControl {
   }
 }
 
+class _BlockingProvisionSourceControl implements SourceControl {
+  final Completer<void> entered = Completer<void>();
+  final Completer<void> release = Completer<void>();
+
+  @override
+  String workspaceFor(String beadId) => '/w/$beadId';
+  @override
+  String branchFor(String beadId) => 'grid/$beadId';
+  @override
+  String get baseBranch => 'main';
+
+  @override
+  Future<void> provisionWorkspace({
+    required String beadId,
+    required String workspaceDir,
+  }) async {
+    Directory('$workspaceDir/.git').createSync(recursive: true);
+    entered.complete();
+    await release.future;
+  }
+}
+
 /// The LITERAL [ProcessLeaseRequest] construction (the round-3 committee's
 /// binding fix: the fake AllocationInputs/ProcessCapability shown in full,
 /// never prose). [transport] defaults to a fresh [FakeRuntimeProvider]; pass
@@ -143,9 +175,10 @@ ProcessLeaseRequest _request(
   String stepBeadId, {
   FakeRuntimeProvider? transport,
   AllocationSink sink = _ignoreAllocationReport,
+  ProcessCapability? capability,
 }) => ProcessLeaseRequest(
   stepBeadId: stepBeadId,
-  capability: const _FakeProcessCap(),
+  capability: capability ?? const _FakeProcessCap(),
   inputs: AllocationInputs(
     args: stepArgs('tg-1/lease'),
     transport: transport ?? FakeRuntimeProvider(),
@@ -434,6 +467,56 @@ void main() {
       expect(transport.started, hasLength(1));
       expect(transport.started.single.config.workDir, workspaceDir);
     });
+
+    test(
+      'unmount after provisioning throws before capability spawn and runtime start',
+      () async {
+        final workspaceDir = Directory.systemTemp
+            .createTempSync('grid-molecule-unmounted-')
+            .path;
+        addTearDown(() => Directory(workspaceDir).deleteSync(recursive: true));
+        final sourceControl = _BlockingProvisionSourceControl();
+        final capability = _CountingProcessCap();
+        final transport = FakeRuntimeProvider();
+        addTearDown(transport.close);
+        final reports = <AllocationReport>[];
+        final request = _request(
+          'tgdog-step-1',
+          transport: transport,
+          sink: reports.add,
+          capability: capability,
+        );
+        final context = _stationCtx(
+          workspaceDir: workspaceDir,
+          sourceControl: sourceControl,
+        );
+
+        final expectation = expectLater(
+          stationProcessSpawner(request, context, stepArgs('tg-1/lease')),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              'unmounted before spawn (tgdog-s/tg-1/lease)',
+            ),
+          ),
+        );
+        await sourceControl.entered.future;
+        context.mounted = false;
+        sourceControl.release.complete();
+        await Future<void>.delayed(Duration.zero);
+        if (transport.started.isNotEmpty) {
+          transport.emit(
+            const SessionStarted(name: 'tgdog-s/tg-1/lease', pid: 10, pgid: 20),
+          );
+        }
+        await expectation;
+
+        expect(capability.spawnCalls, 0);
+        expect(transport.started, isEmpty);
+        expect(reports.whereType<AllocationStarted>(), isEmpty);
+      },
+    );
   });
 
   group('lease breadcrumb codec — leaseBreadcrumb / leaseBreadcrumbOf', () {

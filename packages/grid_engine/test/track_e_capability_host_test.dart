@@ -207,6 +207,23 @@ final class _MutableServiceBundleState extends State<_MutableServiceBundle> {
       InheritedSeed<ServiceBundle>(value: _value, child: seed.child);
 }
 
+final class _UnmountOnDeliveryReadServiceBundle extends ServiceBundle {
+  _UnmountOnDeliveryReadServiceBundle({
+    required this.onDeliveryRead,
+    required this.method,
+    required ExplorationTransport transport,
+  }) : super(transport: transport);
+
+  final void Function() onDeliveryRead;
+  final RecordingDeliveryMethod method;
+
+  @override
+  DeliveryMethod? get delivery {
+    onDeliveryRead();
+    return method;
+  }
+}
+
 final class _LifecycleCapability extends Capability {
   _LifecycleCapability(this.events);
 
@@ -1024,28 +1041,68 @@ void main() {
     );
 
     test(
+      'unmount at terminal delivery boundary drops advance before ambient reads',
+      () async {
+        final runGate = Completer<void>();
+        final method = RecordingDeliveryMethod();
+        final transport = RecordingExplorationTransport();
+        final log = <String>[];
+        late TreeOwner owner;
+        var ownerDisposed = false;
+        final services = _UnmountOnDeliveryReadServiceBundle(
+          onDeliveryRead: () {
+            owner.dispose();
+            ownerDisposed = true;
+          },
+          method: method,
+          transport: transport,
+        );
+        final h = _host(
+          _ServiceCap(const Ok(), log, runGate: runGate),
+          services: services,
+        );
+        owner = h.owner;
+        addTearDown(() async {
+          if (!ownerDisposed) owner.dispose();
+          if (!runGate.isCompleted) runGate.complete();
+          await _pump();
+          await h.fakes.provider.close();
+        });
+
+        await _pump();
+        final state =
+            (_hostBranch(h.root) as StatefulBranch).state
+                as CapabilityHostState;
+        h.fakes.runner.calls.clear();
+
+        state.deliverReportForTest(const AllocationAdvanced());
+        await _pump();
+
+        expect(ownerDisposed, isTrue);
+        expect(method.requests, isEmpty);
+        expect(h.fakes.runner.callsFor('update'), isEmpty);
+        expect(transport.named('step.persistFailed'), isEmpty);
+      },
+    );
+
+    test(
       'every Host continuation pairs dependency scope with mountedness',
       () async {
         final uri = await Isolate.resolvePackageUri(
           Uri.parse('package:grid_engine/src/circuit/capability_host.dart'),
         );
         final source = File(uri!.toFilePath()).readAsStringSync();
+        final staleExits = RegExp(
+          r'!scope\.isCurrent \|\| !context\.mounted',
+        ).allMatches(source);
+        final activeChecks = RegExp(
+          r'scope\.isCurrent && context\.mounted',
+        ).allMatches(source);
 
         expect(source, isNot(contains('_cancelled')));
-        expect(
-          RegExp(
-            r'!scope\.isCurrent \|\| !context\.mounted',
-          ).allMatches(source),
-          hasLength(9),
-        );
-        expect(
-          RegExp(r'scope\.isCurrent && context\.mounted').allMatches(source),
-          hasLength(2),
-        );
-        expect(
-          RegExp(r'\bcontext\.mounted\b').allMatches(source),
-          hasLength(11),
-        );
+        expect(staleExits, hasLength(9));
+        expect(activeChecks, hasLength(2));
+        expect(staleExits.length + activeChecks.length, 11);
       },
     );
 

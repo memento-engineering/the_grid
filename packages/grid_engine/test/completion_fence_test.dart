@@ -174,7 +174,7 @@ AllocationInputs _inputs({
   workSignalTimeout: workSignalTimeout,
 );
 
-TreeContext _mountAllocation(
+FakeTreeContext _mountAllocation(
   ProcessAllocation allocation, {
   bool withWorkspace = true,
   bool withSourceControl = true,
@@ -404,6 +404,36 @@ void main() {
           reason: 'the terminal latched at entry',
         );
         expect(reports, hasLength(1));
+      },
+    );
+
+    test(
+      'unmount after inferred-completion probe skips ProcessAllocation completion report',
+      () async {
+        final reports = <AllocationReport>[];
+        final log = <String>[];
+        late FakeTreeContext context;
+        final probe = _Probe(
+          GateOutcome.clear,
+          onCall: () => context.mounted = false,
+        );
+        final allocation =
+            _AgentCap(log).createAllocation(
+                  _inputs(
+                    sink: reports.add,
+                    cancel: CancelToken(),
+                    workSignal: probe.call,
+                  ),
+                )
+                as ProcessAllocation;
+        context = _mountAllocation(allocation);
+
+        allocation.deliverEventForTest(_inferredExit, context);
+        await _pump();
+
+        expect(probe.calls, hasLength(1));
+        expect(reports, isEmpty);
+        expect(log, isEmpty);
       },
     );
   });

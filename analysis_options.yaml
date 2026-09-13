@@ -1,4 +1,6 @@
 include: package:lints/recommended.yaml
+plugins:
+  genesis_lint: ^0.1.0
 analyzer:
   language:
     strict-casts: true
