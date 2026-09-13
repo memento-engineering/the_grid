@@ -106,6 +106,7 @@ export 'src/domain/session_ledger_metrics_projection.dart';
 // adopt-or-mint decision (SessionScope). A closed session is never blanket-
 // blocking: a DEAD KEY (closed mid-flight) mints fresh instead of wedging.
 export 'src/domain/session_disposition.dart';
+export 'src/domain/stranded_work.dart';
 export 'src/domain/substation_config.dart';
 export 'src/domain/session_projection.dart';
 // The trajectory dual-read's TYPE SEAM (cut-wiring C1): the engine declares

@@ -227,6 +227,7 @@ JoinedSnapshot _snapshot(
   List<Bead> beads, {
   Map<String, SessionProjection> sessions = const {},
   Map<String, List<SessionProjection>> surplus = const {},
+  DateTime? stateCapturedAt,
 }) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
     beads: beads,
@@ -234,6 +235,7 @@ JoinedSnapshot _snapshot(
     readyIds: {for (final bead in beads) bead.id},
     capturedAt: DateTime.utc(2026, 9, 4),
   ),
+  stateCapturedAt: stateCapturedAt,
   sessionsByWorkBead: sessions,
   surplusSessionsByWorkBead: surplus,
 );
@@ -851,6 +853,210 @@ void main() {
       expect(authority.admissionStatus.refusals, [initial.refusals.last]);
     },
   );
+
+  test(
+    'stranded work is read-only over eligibility and terminal disposition',
+    () {
+      final work = _bead('tg-work').copyWith(
+        metadata: const {
+          'grid.approved_by': 'governor',
+          'grid.approved_at': '2026-09-13T12:00:00Z',
+          'grid.approved_rev': 'current',
+        },
+      );
+      const delivered = SessionProjection(
+        workBeadId: 'tg-work',
+        sessionId: 'session-done',
+        isTerminal: true,
+        completed: true,
+        results: {
+          'blank-first': {ResultKeys.delivery: '   ', 'pr_url': 'ignored'},
+          'land-a': {
+            ResultKeys.delivery: 'github-pr',
+            'pr_url': 'https://github.test/the-grid/pull/426',
+          },
+          'land-z': {
+            ResultKeys.delivery: 'export',
+            'pr_url': 'https://example.test/export',
+          },
+        },
+      );
+      const eligible = MountEligibilityDecision.eligible();
+
+      expect(
+        strandedWorkOf(
+          workBead: work,
+          session: delivered,
+          eligibility: eligible,
+        ),
+        (
+          workBeadId: 'tg-work',
+          blockingSessionId: 'session-done',
+          disposition: 'done',
+          deliveryMethod: 'github-pr',
+          deliveryReference: 'https://github.test/the-grid/pull/426',
+        ),
+      );
+      expect(
+        strandedWorkOf(
+          workBead: work,
+          session: delivered.copyWith(
+            sessionId: 'session-held',
+            completed: false,
+            humanHeld: true,
+            results: const {},
+          ),
+          eligibility: eligible,
+        )?.disposition,
+        'held',
+      );
+      expect(
+        strandedWorkOf(
+          workBead: work,
+          session: delivered,
+          eligibility: const MountEligibilityDecision.refused(
+            clause: 'approval revision is stale',
+          ),
+        ),
+        isNull,
+      );
+      expect(
+        strandedWorkOf(
+          workBead: work.copyWith(status: BeadStatus.closed),
+          session: delivered,
+          eligibility: eligible,
+        ),
+        isNull,
+      );
+      expect(
+        strandedWorkOf(
+          workBead: work.copyWith(status: BeadStatus.inProgress),
+          session: delivered,
+          eligibility: eligible,
+        ),
+        isNull,
+      );
+      expect(
+        strandedWorkOf(
+          workBead: work,
+          session: const SessionProjection(
+            workBeadId: 'tg-work',
+            sessionId: 'session-paused',
+            pauseState: SessionPauseState.paused,
+          ),
+          eligibility: eligible,
+        ),
+        isNull,
+      );
+      expect(
+        strandedWorkOf(
+          workBead: work,
+          session: const SessionProjection(
+            workBeadId: 'tg-work',
+            sessionId: 'session-voided',
+            isTerminal: true,
+          ),
+          eligibility: eligible,
+        ),
+        isNull,
+      );
+    },
+  );
+
+  test('admission retains current stranded rows in deterministic order', () {
+    final station = _stationOver(RecordingBdRunner(), maxConcurrentWork: 4);
+    addTearDown(station.dispose);
+    Bead approved(String id) => _bead(id).copyWith(
+      metadata: const {
+        'grid.approved_by': 'governor',
+        'grid.approved_at': '2026-09-13T12:00:00Z',
+        'grid.approved_rev': 'current',
+      },
+    );
+
+    final heldWork = approved('tg-a');
+    final doneWork = approved('tg-z');
+    final staleWork = approved('tg-stale').copyWith(
+      metadata: const {
+        'grid.approved_by': 'governor',
+        'grid.approved_at': '2026-09-13T12:00:00Z',
+        'grid.approved_rev': 'stale',
+      },
+    );
+    const held = SessionProjection(
+      workBeadId: 'tg-a',
+      sessionId: 'session-held',
+      isTerminal: true,
+      humanHeld: true,
+    );
+    const done = SessionProjection(
+      workBeadId: 'tg-z',
+      sessionId: 'session-done',
+      isTerminal: true,
+      completed: true,
+      results: {
+        'land': {
+          ResultKeys.delivery: 'github-pr',
+          'pr_url': 'https://github.test/the-grid/pull/426',
+        },
+      },
+    );
+    const stale = SessionProjection(
+      workBeadId: 'tg-stale',
+      sessionId: 'session-stale',
+      isTerminal: true,
+      completed: true,
+    );
+    MountEligibilityDecision approval(Bead bead) =>
+        bead.metadata['grid.approved_rev'] == 'current'
+        ? const MountEligibilityDecision.eligible()
+        : const MountEligibilityDecision.refused(
+            clause: 'approval revision is stale',
+          );
+    final snapshot = _snapshot(
+      [doneWork, staleWork, heldWork],
+      sessions: const {'tg-a': held, 'tg-stale': stale, 'tg-z': done},
+      stateCapturedAt: DateTime.utc(2026, 9, 13, 12, 1),
+    );
+
+    station.admission.admitPending(
+      snapshot,
+      _config.copyWith(maxConcurrentWork: 4),
+      ServiceBundle(mountEligibility: approval),
+      [
+        StationAdmissionCandidate(bead: doneWork, session: done),
+        StationAdmissionCandidate(bead: staleWork, session: stale),
+        StationAdmissionCandidate(bead: heldWork, session: held),
+      ],
+    );
+
+    final stranded = station.admission.admissionStatus.stranded;
+    expect(stranded, [
+      (
+        workBeadId: 'tg-a',
+        blockingSessionId: 'session-held',
+        disposition: 'held',
+        deliveryMethod: null,
+        deliveryReference: null,
+      ),
+      (
+        workBeadId: 'tg-z',
+        blockingSessionId: 'session-done',
+        disposition: 'done',
+        deliveryMethod: 'github-pr',
+        deliveryReference: 'https://github.test/the-grid/pull/426',
+      ),
+    ]);
+    expect(() => stranded.clear(), throwsUnsupportedError);
+
+    station.admission.admitPending(
+      snapshot,
+      _config.copyWith(maxConcurrentWork: 4),
+      ServiceBundle(mountEligibility: approval),
+      const [],
+    );
+    expect(station.admission.admissionStatus.stranded, isEmpty);
+  });
 
   test(
     'zero-admission waiter status is stable, sorted, immutable, and clears',

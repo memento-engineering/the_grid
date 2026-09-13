@@ -13,6 +13,7 @@ import '../domain/rework.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_disposition.dart';
 import '../domain/session_projection.dart';
+import '../domain/stranded_work.dart';
 import '../domain/substation_config.dart';
 import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
@@ -21,8 +22,10 @@ import 'trajectory_scope.dart';
 
 /// A read-only station admission snapshot for operator status surfaces.
 ///
-/// Only bead identities, refusal clauses, and reservation/refusal timing cross
-/// this boundary. Candidate bodies and mutable authority state remain private.
+/// Only bead identities, refusal clauses, reservation/refusal timing, and the
+/// blocking-session disposition plus stored delivery receipt for stranded work
+/// cross this boundary. Candidate bodies and mutable authority state remain
+/// private.
 final class StationAdmissionStatus {
   /// Creates an immutable snapshot of the station admission budget.
   StationAdmissionStatus({
@@ -33,9 +36,11 @@ final class StationAdmissionStatus {
     List<({String bead, String substation, DateTime since})>
         zeroAdmissionWaiters =
         const [],
+    List<StrandedWork> stranded = const [],
   }) : reservations = List.unmodifiable(reservations),
        refusals = List.unmodifiable(refusals),
-       zeroAdmissionWaiters = List.unmodifiable(zeroAdmissionWaiters);
+       zeroAdmissionWaiters = List.unmodifiable(zeroAdmissionWaiters),
+       stranded = List.unmodifiable(stranded);
 
   /// The station-wide concurrency ceiling.
   final int maxAgents;
@@ -49,6 +54,9 @@ final class StationAdmissionStatus {
   /// Pending work in every scope whose latest admission pass admitted zero.
   final List<({String bead, String substation, DateTime since})>
   zeroAdmissionWaiters;
+
+  /// Open, eligible work blocked by a linked terminal session disposition.
+  final List<StrandedWork> stranded;
 }
 
 /// A work bead and the session projection that must ride with its mount.
@@ -206,6 +214,8 @@ final class _AdmissionScopeState {
   final Map<String, DateTime> _zeroAdmissionSinceByBead = <String, DateTime>{};
   // Started rival-cleanup microtasks are unavailable from JoinedSnapshot.
   final Set<String> _rivalCleanupsInFlight = <String>{};
+  // Current stranded rows are derived afresh from each synchronous pass.
+  final Map<String, StrandedWork> _strandedByBeadId = <String, StrandedWork>{};
 }
 
 /// The single station-owned answer to “may this attempt start now?”.
@@ -303,11 +313,21 @@ final class StationAdmissionAuthority {
           final bySubstation = a.substation.compareTo(b.substation);
           return bySubstation != 0 ? bySubstation : a.bead.compareTo(b.bead);
         });
+    final stranded =
+        <StrandedWork>[
+          for (final scope in _scopes.values) ...scope._strandedByBeadId.values,
+        ]..sort((left, right) {
+          final byWork = left.workBeadId.compareTo(right.workBeadId);
+          return byWork != 0
+              ? byWork
+              : left.blockingSessionId.compareTo(right.blockingSessionId);
+        });
     return StationAdmissionStatus(
       maxAgents: _maxConcurrentWork,
       reservations: reservations,
       refusals: refusals,
       zeroAdmissionWaiters: zeroAdmissionWaiters,
+      stranded: stranded,
     );
   }
 
@@ -358,6 +378,7 @@ final class StationAdmissionAuthority {
       substationId: config.substationId,
     );
     final scope = _scopes.putIfAbsent(scopeKey, _AdmissionScopeState.new);
+    scope._strandedByBeadId.clear();
     final suppliedIds = {for (final candidate in supplied) candidate.bead.id};
 
     // Structural unmount is a release. This is scoped, so another WorkList's
@@ -493,6 +514,16 @@ final class StationAdmissionAuthority {
         services,
         bead,
       );
+      if (verdict case BlockedLinkedSession(:final session)) {
+        final stranded = strandedWorkOf(
+          workBead: bead,
+          session: session,
+          eligibility: eligibility,
+        );
+        if (stranded != null) {
+          scope._strandedByBeadId[bead.id] = stranded;
+        }
+      }
       switch (eligibility) {
         case MountRefused(:final clause):
           _noteEligibilityRefusal(scope, services, bead.id, clause);

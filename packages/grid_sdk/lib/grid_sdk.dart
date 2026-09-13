@@ -253,6 +253,7 @@ export 'package:grid_engine/grid_engine.dart'
         ResultMetricFields,
         ResultTransport,
         StationAdmissionStatus,
+        StrandedWork,
         TreeProjector,
         RestartReconciler,
         RestartReport,
