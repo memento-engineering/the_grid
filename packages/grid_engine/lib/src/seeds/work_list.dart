@@ -17,6 +17,8 @@ import '../domain/session_bead.dart';
 import '../domain/session_disposition.dart';
 import '../domain/session_projection.dart';
 import '../domain/substation_config.dart';
+import '../domain/worktree_outstanding.dart';
+import '../kernel/admission_barrier.dart';
 import '../kernel/station_admission_authority.dart';
 import '../kernel/station_services.dart';
 import '../kernel/trajectory_scope.dart';
@@ -68,6 +70,11 @@ class _WorkListState extends State<WorkList>
 
   StationTrajectoryRecorder _recorder =
       TrajectoryRecorderScope.disabled.recorder;
+
+  /// The barrier's observer (§W2.4 W2-B) — the offline path's own handle to
+  /// the counting arm and the refusal derivation. Null composes the clause in
+  /// its observe form over a disarmed read, which refuses nothing.
+  AdmissionBarrier? _barrier;
 
   static SessionProjection? _latestRetiredSession(
     String beadId,
@@ -175,6 +182,7 @@ class _WorkListState extends State<WorkList>
     }
     _recorder =
         trajectoryScope?.recorder ?? TrajectoryRecorderScope.disabled.recorder;
+    _barrier = trajectoryScope?.barrier;
 
     if (!identical(notifier, _notifier)) {
       _removeSnapshotListener?.call();
@@ -351,6 +359,17 @@ class _WorkListState extends State<WorkList>
         _snapshot.sessionsByWorkBead,
       ),
       mountAttemptClause(_snapshot.mountAttemptsByWorkBead),
+      // THE WORKTREE-OUTSTANDING BARRIER (cut-wiring §W2.4 W2-B), composed at
+      // BOTH `composeMountEligibility` sites. Under shadow it runs in its
+      // OBSERVE form: it evaluates, its findings are counted, and eligibility
+      // changes for no candidate.
+      worktreeOutstandingClause(
+        read: _snapshot.worktreeOutstanding,
+        linkedSessionsOf: _snapshot.linkedSessions,
+        snapshotRevOf: _snapshot.eligibilityBasisRevisionOf,
+        observeForm: _barrier?.observeForm ?? true,
+        onFinding: _barrier?.observe,
+      ),
     ], services.mountEligibility);
     final mounted = <StationAdmissionReservation>[];
     final pending = <StationAdmissionCandidate>[];

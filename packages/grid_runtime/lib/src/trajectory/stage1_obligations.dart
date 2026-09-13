@@ -102,6 +102,7 @@ const String kExternalCloseTerminalObligation = 'external-close-terminal';
 const String kWorktreeReapedBackfillObligation = 'worktree-reaped-backfill';
 const String kLiveWorktreeReapObligation = 'live-worktree-reap';
 const String kLivenessDetectorObligation = 'liveness-detector';
+const String kAdmissionRestorationObligation = 'admission-restoration';
 
 /// How long a ledger-closed session must stay closed-in-bd / open-in-P1 before
 /// the external-close obligation appends its reconstructed terminal. Every
@@ -158,6 +159,7 @@ List<ObligationQuery> buildStage1ObligationQueries({
   DateTime Function()? clock,
   ReapWorktree? reapWorktree,
   WorktreeRootSupplier? worktreeRoot,
+  bool admissionRefusalsArmed = false,
 }) => [
   UnknownTerminalSettlementObligation(
     recorder: recorder,
@@ -191,7 +193,106 @@ List<ObligationQuery> buildStage1ObligationQueries({
     coalesce: pulseCoalesce,
     clock: clock ?? DateTime.now,
   ),
+  // The barrier's restoration half (cut-wiring §W2.4 W2-B item 4), armed on
+  // the SAME lever as its refusal: the cut. Under shadow the barrier appends
+  // no refusal, so there is nothing for this query to clear and it stays out
+  // of the set entirely.
+  if (admissionRefusalsArmed)
+    AdmissionRestorationObligation(recorder: recorder, station: station),
 ];
+
+/// The worktree-outstanding barrier's RESTORATION (cut-wiring §W2.4 W2-B).
+///
+/// The barrier's refusal is appended at the mount boundary, synchronously and
+/// fire-and-forget; its restoration cannot be, for one mechanical reason: the
+/// `admission.restored` key is
+/// `restored:<bead>:<clause>:<refusal_record_id>` and the refusal's record id
+/// is minted INSIDE the appender, so the observation site never learns it. The
+/// query below is the path that does — it reads the refusal row it clears, so
+/// the record id is a column rather than an invention.
+///
+/// **Keyed on the external state it repairs** (schema §5's invariant): the
+/// refusal stands while P6 still shows a live worktree under any session of
+/// the bead, and clears the moment the tick reap flips that row to `reaped`
+/// (or evicts it). Nothing here writes P6.
+///
+/// Only the LATEST refusal per (bead, clause) is restored: the level-shaped
+/// key means an episode of refusals is a ladder of revisions, and P3's clause
+/// level derives from the latest refusal/restore PAIR — restoring every
+/// superseded rung would add rows that no level reads.
+final class AdmissionRestorationObligation extends ObligationQuery {
+  AdmissionRestorationObligation({
+    required StationTrajectoryRecorder recorder,
+    required String station,
+    this.clause = kWorktreeOutstandingClause,
+    this.batch = kObligationBatchSize,
+  }) : _recorder = recorder,
+       _station = station;
+
+  final StationTrajectoryRecorder _recorder;
+  final String _station;
+
+  /// The refusal clause this obligation clears — the barrier's, never the
+  /// authority's Stage-3 clause family.
+  final String clause;
+  final int batch;
+
+  @override
+  String get name => kAdmissionRestorationObligation;
+
+  @override
+  Map<String, Object?> get parameters => {
+    'station': _station,
+    'clause': clause,
+  };
+
+  @override
+  String get sql =>
+      'SELECT r.record_id AS record_id, r.work_bead_id AS work_bead_id '
+      'FROM trajectory r '
+      "WHERE r.record_type = 'admission.refused' "
+      'AND r.station = :station '
+      'AND r.work_bead_id IS NOT NULL '
+      "AND JSON_UNQUOTE(JSON_EXTRACT(r.payload, '\$.clause')) = :clause "
+      // Not already cleared.
+      'AND NOT EXISTS (SELECT 1 FROM trajectory s '
+      "WHERE s.record_type = 'admission.restored' "
+      'AND s.resolves_record_id = r.record_id) '
+      // Not superseded by a later refusal of the same bead on the same clause.
+      'AND NOT EXISTS (SELECT 1 FROM trajectory n '
+      "WHERE n.record_type = 'admission.refused' "
+      'AND n.work_bead_id = r.work_bead_id AND n.seq > r.seq '
+      "AND JSON_UNQUOTE(JSON_EXTRACT(n.payload, '\$.clause')) = :clause) "
+      // THE EXTERNAL STATE: no live worktree left under any session of the
+      // bead. P6 carries no work-bead column, so this is the same
+      // P6 → P1 → work_bead_id join the clause evaluates in memory.
+      'AND NOT EXISTS (SELECT 1 FROM proj_process_identity p '
+      'JOIN proj_session_head h ON h.session_id = p.session_id '
+      'WHERE h.work_bead_id = r.work_bead_id '
+      "AND p.worktree_state = 'live' AND p.worktree IS NOT NULL) "
+      'ORDER BY r.seq LIMIT $batch';
+
+  @override
+  Future<List<ObligationAppend>> repair(List<Map<String, String?>> rows) async {
+    final appends = <ObligationAppend>[];
+    final seen = <String>{};
+    for (final row in rows) {
+      final recordId = row['record_id'];
+      final workBeadId = row['work_bead_id'];
+      if (recordId == null || workBeadId == null) continue;
+      if (!seen.add(recordId)) continue;
+      final derived = _recorder.buildAdmissionRestored(
+        workBeadId: workBeadId,
+        clause: clause,
+        refusalRecordId: recordId,
+      );
+      appends.add(
+        ObligationAppend(derived.record, substation: derived.substation),
+      );
+    }
+    return appends;
+  }
+}
 
 /// §2.4 obligation 1 — settle `attempt.terminal(outcome='unknown')` rows that
 /// no settling successor has healed.

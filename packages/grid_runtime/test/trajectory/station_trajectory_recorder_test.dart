@@ -1653,4 +1653,98 @@ void main() {
       expect(disabled.stats.derived, 0);
     });
   });
+
+  group('the barrier\'s admission.refused derivation (§W2.4 W2-B)', () {
+    test('mints a mount_attempt_id per evaluation and derives the '
+        'substation from the store prefix', () {
+      recorder
+        ..admissionRefused(
+          workBeadId: 'tg-1',
+          clause: kWorktreeOutstandingClause,
+          snapshotRev: '1-0123456789abcdef',
+          detail: const {
+            'worktrees': ['/w/tg-1'],
+          },
+        )
+        ..admissionRefused(
+          workBeadId: 'tg-1',
+          clause: kWorktreeOutstandingClause,
+          snapshotRev: '2-0123456789abcdef',
+        );
+
+      expect(sink.captured, hasLength(2));
+      final first = sink.captured.first;
+      expect(first.record.recordType, 'admission.refused');
+      expect(first.substation, 'tg');
+      expect(
+        first.record.idemKeyText(
+          const IdemContext(station: 'tranquility', bootEpoch: 3),
+        ),
+        'refused:tg-1:$kWorktreeOutstandingClause:1-0123456789abcdef',
+      );
+      final ids = [
+        for (final capture in sink.captured)
+          capture.record.correlationToJson()['mount_attempt_id'] as String,
+      ];
+      expect(ids.first, hasLength(26));
+      expect(
+        ids.first,
+        isNot(ids.last),
+        reason: 'one id per EVALUATION — a refusal reserves nothing',
+      );
+    });
+
+    test('a retired round key refuses under the ORIGINAL bead', () {
+      recorder.admissionRefused(
+        workBeadId: 'tg-1#r2',
+        clause: kWorktreeOutstandingClause,
+        snapshotRev: '1-0123456789abcdef',
+      );
+
+      expect(
+        sink.captured.single.record.correlationToJson()['work_bead_id'],
+        'tg-1',
+      );
+    });
+
+    test('an unowned bead takes the deterministic fallback', () {
+      recorder.admissionRefused(
+        workBeadId: 'zz-9',
+        clause: kWorktreeOutstandingClause,
+        snapshotRev: '1-0123456789abcdef',
+      );
+
+      expect(sink.captured.single.substation, kUnownedSubstation);
+    });
+
+    test('the restoration builder carries the refusal record id', () {
+      final derived = recorder.buildAdmissionRestored(
+        workBeadId: 'tg-1',
+        clause: kWorktreeOutstandingClause,
+        refusalRecordId: '01J8ZR0000000000000000000A',
+      );
+
+      expect(derived.substation, 'tg');
+      expect(
+        derived.record.idemKeyText(
+          const IdemContext(station: 'tranquility', bootEpoch: 3),
+        ),
+        'restored:tg-1:$kWorktreeOutstandingClause:'
+        '01J8ZR0000000000000000000A',
+      );
+    });
+
+    test('a non-accepting sink counts the observation and never throws', () {
+      sink.accepting = false;
+
+      recorder.admissionRefused(
+        workBeadId: 'tg-1',
+        clause: kWorktreeOutstandingClause,
+        snapshotRev: '1-0123456789abcdef',
+      );
+
+      expect(sink.captured, isEmpty);
+      expect(recorder.stats.skipped, greaterThan(0));
+    });
+  });
 }

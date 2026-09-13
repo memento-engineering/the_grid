@@ -4,12 +4,14 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart' show GridIssueTypes;
 
 import '../domain/cross_link.dart';
+import '../domain/eligibility_basis_revision.dart';
 import '../domain/joined_snapshot.dart';
 import '../domain/linked_sessions.dart';
 import '../domain/mount_attempt.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
 import '../domain/trajectory_views.dart';
+import '../domain/worktree_outstanding.dart';
 import '../molecule/molecule_codec.dart';
 import '../molecule/molecule_schema.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
@@ -74,18 +76,22 @@ class StationJoinBridge {
     TrajectoryStepSnapshot Function()? stepSnapshot,
     StepSnapshotSubscribe? onStepChanges,
     DualReadStepObserver? stepDualRead,
+    TrajectoryProcessIdentitySnapshot Function()? processIdentitySnapshot,
   }) {
     final reportedTargetClosedCrossLinks =
         <({String linkBeadId, String targetId})>{};
+    final revisions = EligibilityBasisRevisions();
     final seed = _join(
       work.current,
       state.current,
       headSnapshot?.call(),
       stepSnapshot?.call(),
+      processIdentitySnapshot?.call(),
       onUnresolvedCrossLink: onUnresolvedCrossLink,
       reportedTargetClosedCrossLinks: reportedTargetClosedCrossLinks,
       dualRead: dualRead,
       stepDualRead: stepDualRead,
+      revisions: revisions,
     );
     return StationJoinBridge._(
       work: work,
@@ -101,6 +107,8 @@ class StationJoinBridge {
       stepSnapshot: stepSnapshot,
       onStepChanges: onStepChanges,
       stepDualRead: stepDualRead,
+      processIdentitySnapshot: processIdentitySnapshot,
+      revisions: revisions,
     );
   }
 
@@ -119,6 +127,9 @@ class StationJoinBridge {
     required TrajectoryStepSnapshot Function()? stepSnapshot,
     required StepSnapshotSubscribe? onStepChanges,
     required DualReadStepObserver? stepDualRead,
+    required TrajectoryProcessIdentitySnapshot Function()?
+    processIdentitySnapshot,
+    required EligibilityBasisRevisions revisions,
   }) : _work = work,
        _state = state,
        _ownsNotifier = ownsNotifier,
@@ -130,7 +141,9 @@ class StationJoinBridge {
        _dualRead = dualRead,
        _stepSnapshot = stepSnapshot,
        _onStepChanges = onStepChanges,
-       _stepDualRead = stepDualRead;
+       _stepDualRead = stepDualRead,
+       _processIdentitySnapshot = processIdentitySnapshot,
+       _revisions = revisions;
 
   final SnapshotSource _work;
   final SnapshotSource _state;
@@ -158,6 +171,18 @@ class StationJoinBridge {
 
   /// The step comparator's bookkeeper. Under `observe` it only counts.
   final DualReadStepObserver? _stepDualRead;
+
+  /// THE BARRIER'S THIRD MIRROR (cut-wiring §W2.4 W2-B): the pre-fetched,
+  /// immutable P6 process/worktree identity read. Same terms as the P1 and P2
+  /// reads — a value the pure join takes, never an inline await — and null on
+  /// any composition that arms no dual read, which leaves the barrier's read
+  /// disarmed and the clause refusing nothing.
+  final TrajectoryProcessIdentitySnapshot Function()? _processIdentitySnapshot;
+
+  /// The bead-scoped eligibility BASIS revision ledger. Bridge-owned because
+  /// the join is the one producer of every input it hashes, and MONOTONE
+  /// across joins — which is exactly why it is a field rather than a local.
+  final EligibilityBasisRevisions _revisions;
 
   /// The existing LOUD sink for cross-link enforcement and lifecycle signals:
   /// a malformed link bead, an unobserved `to` target, or the first observation
@@ -246,10 +271,12 @@ class StationJoinBridge {
     state ?? _state.current,
     _headSnapshot?.call(),
     _stepSnapshot?.call(),
+    _processIdentitySnapshot?.call(),
     onUnresolvedCrossLink: _onUnresolvedCrossLink,
     reportedTargetClosedCrossLinks: _reportedTargetClosedCrossLinks,
     dualRead: _dualRead,
     stepDualRead: _stepDualRead,
+    revisions: _revisions,
   );
 
   /// Re-emits a FRESH-instance copy of [latest] — the kernel's backoff re-poke
@@ -265,6 +292,9 @@ class StationJoinBridge {
         surplusSessionsByWorkBead: _latest.surplusSessionsByWorkBead,
         mountAttemptsByWorkBead: _latest.mountAttemptsByWorkBead,
         frontierExclusionsByBeadId: _latest.frontierExclusionsByBeadId,
+        worktreeOutstanding: _latest.worktreeOutstanding,
+        eligibilityBasisRevisionsByBeadId:
+            _latest.eligibilityBasisRevisionsByBeadId,
       ),
     );
   }
@@ -330,12 +360,14 @@ class StationJoinBridge {
     GraphSnapshot? work,
     GraphSnapshot? state,
     TrajectoryHeadSnapshot? head,
-    TrajectoryStepSnapshot? steps, {
+    TrajectoryStepSnapshot? steps,
+    TrajectoryProcessIdentitySnapshot? processIdentities, {
     void Function(String message)? onUnresolvedCrossLink,
     required Set<({String linkBeadId, String targetId})>
     reportedTargetClosedCrossLinks,
     DualReadSessionObserver? dualRead,
     DualReadStepObserver? stepDualRead,
+    EligibilityBasisRevisions? revisions,
   }) {
     if (work == null) return JoinedSnapshot.empty();
     var graph = work;
@@ -429,6 +461,46 @@ class StationJoinBridge {
         );
       });
     }
+    // THE BARRIER'S READ (§W2.4 W2-B) and the bead-scoped eligibility basis
+    // revision it keys its record on. Both are computed HERE, on the finished
+    // maps, for one reason: the mount predicate is synchronous and bead-only,
+    // so every input it reads must already be in memory when it runs.
+    final worktreeOutstanding = WorktreeOutstandingRead(
+      processIdentities: processIdentities,
+      heads: head,
+    );
+    final joined = JoinedSnapshot(
+      graph: graph,
+      stateCapturedAt: state?.capturedAt,
+      sessionsByWorkBead: sessions,
+      surplusSessionsByWorkBead: surplus,
+      mountAttemptsByWorkBead: attempts,
+      frontierExclusionsByBeadId: frontierExclusionsByBeadId,
+      worktreeOutstanding: worktreeOutstanding,
+    );
+    if (revisions == null) return joined;
+    final now = DateTime.now();
+    final revisionsByBeadId = <String, String>{};
+    for (final bead in graph.beadsById.values) {
+      final linked = joined.linkedSessions(bead.id);
+      revisionsByBeadId[bead.id] = revisions.revise(
+        bead.id,
+        EligibilityBasis.of(
+          bead: bead,
+          ready: graph.readyIds.contains(bead.id),
+          frontierExclusion: frontierExclusionsByBeadId[bead.id],
+          attempt: attempts[bead.id],
+          linkedSessions: linked,
+          worktree: evaluateWorktreeOutstanding(
+            read: worktreeOutstanding,
+            workBeadId: bead.id,
+            linkedSessions: linked,
+            now: now,
+          ),
+        ),
+      );
+    }
+    revisions.retain(revisionsByBeadId.keys.toSet());
     return JoinedSnapshot(
       graph: graph,
       stateCapturedAt: state?.capturedAt,
@@ -436,6 +508,10 @@ class StationJoinBridge {
       surplusSessionsByWorkBead: surplus,
       mountAttemptsByWorkBead: attempts,
       frontierExclusionsByBeadId: frontierExclusionsByBeadId,
+      worktreeOutstanding: worktreeOutstanding,
+      eligibilityBasisRevisionsByBeadId: Map<String, String>.unmodifiable(
+        revisionsByBeadId,
+      ),
     );
   }
 

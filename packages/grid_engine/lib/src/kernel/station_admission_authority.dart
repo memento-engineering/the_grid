@@ -15,9 +15,11 @@ import '../domain/session_disposition.dart';
 import '../domain/session_projection.dart';
 import '../domain/stranded_work.dart';
 import '../domain/substation_config.dart';
+import '../domain/worktree_outstanding.dart';
 import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
 import '../sdk/circuit.dart';
+import 'admission_barrier.dart';
 import 'trajectory_scope.dart';
 
 /// A read-only station admission snapshot for operator status surfaces.
@@ -234,8 +236,10 @@ final class StationAdmissionAuthority {
     required int maxConcurrentWork,
     AllocationLiveness? liveness,
     TrajectoryAdmissionHalt? trajectoryAdmissionHalt,
+    AdmissionBarrier? admissionBarrier,
     DateTime Function()? clock,
   }) : _writer = writer,
+       _admissionBarrier = admissionBarrier,
        _provider = provider,
        _stateSubstation = stateSubstation,
        _maxConcurrentWork = maxConcurrentWork,
@@ -254,6 +258,11 @@ final class StationAdmissionAuthority {
   final DateTime Function() _clock;
   final TrajectoryAdmissionHalt? _trajectoryAdmissionHalt;
   void Function()? _removeTrajectoryAdmissionHaltListener;
+
+  /// The worktree-outstanding barrier's observer (§W2.4 W2-B): the counting
+  /// arm under shadow, the refusal derivation under the cut. Null composes the
+  /// clause in its observe form, which changes eligibility for nothing.
+  final AdmissionBarrier? _admissionBarrier;
 
   // Per-substation branch and status state is unavailable to one-scope calls.
   final Map<_ScopeKey, _AdmissionScopeState> _scopes =
@@ -886,6 +895,18 @@ final class StationAdmissionAuthority {
         snapshot.sessionsByWorkBead,
       ),
       mountAttemptClause(snapshot.mountAttemptsByWorkBead),
+      // THE WORKTREE-OUTSTANDING BARRIER (cut-wiring §W2.4 W2-B), composed at
+      // BOTH `composeMountEligibility` sites so the authority and the offline
+      // path evaluate the same gate. Observe form under shadow: it counts and
+      // changes eligibility for nothing.
+      worktreeOutstandingClause(
+        read: snapshot.worktreeOutstanding,
+        linkedSessionsOf: snapshot.linkedSessions,
+        snapshotRevOf: snapshot.eligibilityBasisRevisionOf,
+        observeForm: _admissionBarrier?.observeForm ?? true,
+        onFinding: _admissionBarrier?.observe,
+        clock: _clock,
+      ),
     ], services.mountEligibility);
     try {
       return predicate(bead);

@@ -1565,6 +1565,17 @@ Future<StationWorkRuntime> _acquireStationWork({
           onFlare: transport?.flare,
         )
       : null;
+  // THE WORKTREE-OUTSTANDING BARRIER's observer (cut-wiring §W2.4 W2-B).
+  // Built under BOTH postures, because the counting arm is the whole point:
+  // under shadow the clause is composed, evaluates, and COUNTS would-refuse
+  // decisions onto the same round summary, so the flip boot is the clause's
+  // SECOND execution rather than its first. `cut` is the one lever that turns
+  // the count into a refusal and arms its record.
+  final admissionBarrier = AdmissionBarrier(
+    recorder: recorder,
+    cut: trajectoryConfig.discipline == TrajectoryDiscipline.cut,
+    accounting: dualReadAccounting,
+  );
   final dualRead = !dualReadArmed
       ? null
       : DualReadSessionObserver(
@@ -1751,6 +1762,9 @@ Future<StationWorkRuntime> _acquireStationWork({
     stateSubstation: stateSubstation,
     maxConcurrentWork: maxConcurrentWork,
     trajectoryAdmissionHalt: trajectoryAdmissionHalt,
+    // The barrier's observer, shared with the ambient recorder scope below so
+    // the authority path and the offline path count onto ONE bookkeeper.
+    admissionBarrier: admissionBarrier,
     // THE COMPLETION FENCE. A detached one-shot agent's vanish is reported as an
     // INFERRED clean exit — a murder and a completion look identical on the wire.
     // The engine advances the circuit on such an exit only for a capability that
@@ -1850,6 +1864,12 @@ Future<StationWorkRuntime> _acquireStationWork({
         : (listener) =>
               trajectory.onStepCursorsChanged(listener, fireImmediately: false),
     stepDualRead: stepDualRead,
+    // THE BARRIER's third mirror (§W2.4 W2-B): the pre-fetched P6
+    // process/worktree identity read, on the same terms as P1 and P2 — a
+    // value the pure join takes, null at `off` so the clause stays disarmed.
+    processIdentitySnapshot: dualReadArmed
+        ? () => trajectory.processIdentities
+        : null,
   );
   final bridge =
       joinBridgeBuilder?.call(buildDefault: buildJoinBridgeDefault) ??
@@ -1905,6 +1925,7 @@ Future<StationWorkRuntime> _acquireStationWork({
       trajectory: TrajectoryRecorderScope(
         recorder,
         admissionHalt: trajectoryAdmissionHalt,
+        barrier: admissionBarrier,
       ),
     ),
     commands: commands,

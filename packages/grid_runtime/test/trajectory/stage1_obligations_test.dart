@@ -105,6 +105,23 @@ void main() {
       ]);
     });
 
+    test('the admission restoration arms ONLY with the cut', () {
+      List<String> names({required bool armed}) => buildStage1ObligationQueries(
+        recorder: _recorder(),
+        db: _FakeDb(),
+        station: 'tranquility',
+        bootEpoch: () => 7,
+        admissionRefusalsArmed: armed,
+      ).map((query) => query.name).toList();
+
+      expect(
+        names(armed: false),
+        isNot(contains(kAdmissionRestorationObligation)),
+        reason: 'under shadow the barrier appends no refusal to clear',
+      );
+      expect(names(armed: true).last, kAdmissionRestorationObligation);
+    });
+
     test('writes NOTHING that mounts: no bd, no filesystem mutation, no '
         'eligibility clause — every statement is a trajectory read, a '
         'traj_pulse UPSERT, or a traj_pulse prune', () async {
@@ -852,5 +869,62 @@ void main() {
         expect(detector.lastScanCost!.scanned, 1);
       },
     );
+  });
+
+  group('the barrier\'s restoration (§W2.4 W2-B)', () {
+    AdmissionRestorationObligation build() =>
+        AdmissionRestorationObligation(recorder: _recorder(), station: 'tg');
+
+    test('keys off the EXTERNAL state it repairs, never its own append', () {
+      final query = build();
+
+      expect(query.sql, startsWith('SELECT'));
+      expect(query.sql, contains("r.record_type = 'admission.refused'"));
+      // The P6 → P1 → work_bead_id join the clause evaluates in memory.
+      expect(query.sql, contains('proj_process_identity p'));
+      expect(query.sql, contains('JOIN proj_session_head h'));
+      expect(query.sql, contains("p.worktree_state = 'live'"));
+      // Already-cleared and superseded refusals are excluded.
+      expect(query.sql, contains("s.record_type = 'admission.restored'"));
+      expect(query.sql, contains('n.seq > r.seq'));
+      expect(query.parameters['clause'], kWorktreeOutstandingClause);
+      expect(query.parameters['station'], 'tg');
+    });
+
+    test('appends admission.restored on the RATIFIED key', () async {
+      final appends = await build().repair([
+        {'record_id': '01J8ZR0000000000000000000A', 'work_bead_id': 'tg-abc'},
+      ]);
+
+      expect(appends, hasLength(1));
+      final record = appends.single.record;
+      expect(record.recordType, 'admission.restored');
+      expect(
+        record.idemKeyText(const IdemContext(station: 'tg', bootEpoch: 7)),
+        'restored:tg-abc:$kWorktreeOutstandingClause:'
+        '01J8ZR0000000000000000000A',
+      );
+      expect(
+        record.correlationToJson()['resolves_record_id'],
+        '01J8ZR0000000000000000000A',
+      );
+      expect(appends.single.substation, 'tg');
+      expect(appends.single.provenance, TrajectoryProvenance.observed);
+    });
+
+    test('one record per refusal, and nothing for an unreadable row', () async {
+      final appends = await build().repair([
+        {'record_id': 'R1', 'work_bead_id': 'tg-abc'},
+        {'record_id': 'R1', 'work_bead_id': 'tg-abc'},
+        {'record_id': null, 'work_bead_id': 'tg-abc'},
+        {'record_id': 'R2', 'work_bead_id': null},
+      ]);
+
+      expect(appends, hasLength(1));
+    });
+
+    test('no rows is the fixpoint signal', () async {
+      expect(await build().repair(const []), isEmpty);
+    });
   });
 }

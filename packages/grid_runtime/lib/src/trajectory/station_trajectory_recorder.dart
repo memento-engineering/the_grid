@@ -160,6 +160,17 @@ const String kExternalCloseUnknownReason = 'external-close';
 /// `provenance_basis` for the tick's `worktree.reaped` backfill (§2.4
 /// obligation 2): the legacy reap already ran, the record never landed — the
 /// named non-atomic crash class, healed record-only.
+/// The clause the worktree-outstanding barrier refuses and restores under —
+/// the `<clause>` hole of BOTH ratified admission keys (cut-wiring §W2.4
+/// W2-B).
+///
+/// It lives HERE, beside the record vocabulary, rather than in the engine that
+/// evaluates the clause: grid_engine imports grid_runtime and not the reverse,
+/// so one definition serves the mount-boundary predicate, the refusal record,
+/// and the restoration query — and a rename cannot drift the record family
+/// away from the gate that writes it.
+const String kWorktreeOutstandingClause = 'worktree-outstanding';
+
 const String kTickReapedBackfillBasis = 'tick-reaped-backfill';
 
 /// `provenance_basis` for the tick's settling terminal (§2.4 obligation 1):
@@ -1591,6 +1602,87 @@ class StationTrajectoryRecorder {
       stashes: stashes,
     ),
   );
+
+  /// The `admission.refused` record — the worktree-outstanding barrier's
+  /// refusal, on the RATIFIED key `refused:<bead>:<clause>:<snapshotRev>`
+  /// (cut-wiring §W2.4 W2-B item 4, ruling Q7: no amendment).
+  ///
+  /// [mountAttemptId] is MINTED HERE, per evaluation — the record and the
+  /// envelope both require one, and a refusal writes no reservation, so the
+  /// barrier mints rather than borrowing a grant-side id. [snapshotRev] is the
+  /// bead-scoped eligibility BASIS revision; the caller supplies it and never
+  /// substitutes a publish counter, because the key's level shape is the whole
+  /// reason it is ratified.
+  DerivedRecord buildAdmissionRefused({
+    required String workBeadId,
+    required String clause,
+    required String snapshotRev,
+    Map<String, Object?>? detail,
+  }) {
+    final parsed = parseLegacyWorkKey(workBeadId);
+    final owned = _substationOf(parsed.workBeadId);
+    return DerivedRecord(
+      AdmissionRefused(
+        workBeadId: parsed.workBeadId,
+        mountAttemptId: _mintUlid(),
+        clause: clause,
+        snapshotRev: snapshotRev,
+        detail: detail,
+      ),
+      substation: owned.substation,
+    );
+  }
+
+  /// The `admission.restored` record — the refusal above cleared, keyed
+  /// `restored:<bead>:<clause>:<refusalRecordId>`.
+  ///
+  /// [refusalRecordId] is the REAL record id of the refusal being cleared, so
+  /// this is built by the path that can read it (§2.4's restoration
+  /// obligation, whose query returns it), never invented at an observation
+  /// site.
+  DerivedRecord buildAdmissionRestored({
+    required String workBeadId,
+    required String clause,
+    required String refusalRecordId,
+    String? actor,
+  }) {
+    final parsed = parseLegacyWorkKey(workBeadId);
+    final owned = _substationOf(parsed.workBeadId);
+    return DerivedRecord(
+      AdmissionRestored(
+        workBeadId: parsed.workBeadId,
+        clause: clause,
+        refusalRecordId: refusalRecordId,
+        actor: actor,
+      ),
+      substation: owned.substation,
+    );
+  }
+
+  /// `admission.refused` — fire-and-forget, because the refusal record is NOT
+  /// decision-bearing: a lost one never halts admission, and the barrier's
+  /// verdict stands whether or not the record lands.
+  void admissionRefused({
+    required String workBeadId,
+    required String clause,
+    required String snapshotRev,
+    Map<String, Object?>? detail,
+    DateTime? occurredAt,
+  }) {
+    _observe('admissionRefused', () {
+      final derived = buildAdmissionRefused(
+        workBeadId: workBeadId,
+        clause: clause,
+        snapshotRev: snapshotRev,
+        detail: detail,
+      );
+      _enqueue(
+        derived.record,
+        substation: derived.substation,
+        occurredAt: occurredAt,
+      );
+    });
+  }
 
   /// One `attempt.liveness.*` threshold crossing (§2.4 obligation 3). The
   /// DETECTOR decides when a crossing happened — including the unknown rule

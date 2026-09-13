@@ -2,6 +2,7 @@ import 'package:beads_dart/beads_dart.dart';
 
 import 'mount_attempt.dart';
 import 'session_projection.dart';
+import 'worktree_outstanding.dart';
 
 /// The single immutable value the tree builds from: the read-workspace work
 /// graph JOINed with the_grid's owned session cursors, keyed by work bead id.
@@ -23,6 +24,8 @@ class JoinedSnapshot {
     this.surplusSessionsByWorkBead = const {},
     this.mountAttemptsByWorkBead = const {},
     this.frontierExclusionsByBeadId = const {},
+    this.worktreeOutstanding = const WorktreeOutstandingRead.disarmed(),
+    this.eligibilityBasisRevisionsByBeadId = const {},
   });
 
   /// An empty baseline — the notifier's seed value before the first refresh
@@ -39,7 +42,9 @@ class JoinedSnapshot {
       sessionsByWorkBead = const {},
       surplusSessionsByWorkBead = const {},
       mountAttemptsByWorkBead = const {},
-      frontierExclusionsByBeadId = const {};
+      frontierExclusionsByBeadId = const {},
+      worktreeOutstanding = const WorktreeOutstandingRead.disarmed(),
+      eligibilityBasisRevisionsByBeadId = const {};
 
   /// The read-workspace work graph (pristine source — read-only, A37).
   final GraphSnapshot graph;
@@ -107,4 +112,28 @@ class JoinedSnapshot {
   /// Empty means no cross-link exclusion. The join computes this once so the
   /// synchronous mount-eligibility predicate performs no store read.
   final Map<String, String> frontierExclusionsByBeadId;
+
+  /// THE BARRIER'S READ (cut-wiring §W2.4 W2-B): the ambient P6 and P1 mirrors
+  /// as the worktree-outstanding clause joins them.
+  ///
+  /// It rides here for the same hard reason the mount-attempt budget does: the
+  /// mount boundary's [MountEligibilityPredicate] is synchronous and receives
+  /// only the candidate bead, so the mirrors must already be in memory when
+  /// the predicate runs. [WorktreeOutstandingRead.disarmed] is the default and
+  /// the offline/trajectory-less shape — the clause then refuses nothing.
+  final WorktreeOutstandingRead worktreeOutstanding;
+
+  /// The bead-scoped eligibility BASIS revision per work bead id — the
+  /// `<snapshotRev>` hole of the ratified `admission.refused` key.
+  ///
+  /// LEVEL-SHAPED: the value changes only when the inputs that decide THAT
+  /// bead's eligibility change, so an idle ineligible bead dedupes by
+  /// construction. Empty when no producer computes it (a hand-built snapshot,
+  /// an offline tree) — and an absent revision leaves the refusal RECORD
+  /// disarmed rather than minting an unkeyable one.
+  final Map<String, String> eligibilityBasisRevisionsByBeadId;
+
+  /// This bead's eligibility basis revision, or null when none was computed.
+  String? eligibilityBasisRevisionOf(String workBeadId) =>
+      eligibilityBasisRevisionsByBeadId[workBeadId];
 }

@@ -162,6 +162,7 @@ const Map<String, String> kDualReadCounterSemantics = <String, String>{
   'append_refused_testimony': 'cumulative',
   'append_queue_depth': 'gauge',
   'append_ack_p99_ms': 'gauge',
+  'barrier_would_refuse': 'cumulative',
 };
 
 /// The flare a served-tuple mismatch raises. Axis-tagged, because C4 adds a
@@ -781,6 +782,24 @@ class DualReadAccounting {
   int maxTerminalLagMs = 0;
   int maxRetirementLagMs = 0;
 
+  /// The worktree-outstanding barrier's OBSERVE-FORM count (cut-wiring §W2.5,
+  /// W2-B): how many candidates the barrier WOULD have refused this boot.
+  ///
+  /// Cumulative and deduped on the work bead, exactly as [divergences] dedupes
+  /// on its event keys: an idle ineligible bead re-evaluated on every pass is
+  /// ONE would-refuse decision, not one per pass. REPORTED, never gating — the
+  /// counter changes what mounts for nothing, which is what keeps Stage 1's
+  /// "the shadow window changes NOTHING about what mounts" headline true while
+  /// the flip boot stops being the clause's first execution.
+  int barrierWouldRefuse = 0;
+  final Set<String> _barrierWouldRefuseBeads = <String>{};
+
+  /// Counts one would-refuse decision for [workBeadId], deduped per bead.
+  void recordBarrierWouldRefuse(String workBeadId) {
+    if (!_barrierWouldRefuseBeads.add(workBeadId)) return;
+    barrierWouldRefuse += 1;
+  }
+
   /// Identity-matched heads whose overlay CHANGED the projection this pass —
   /// under `observe` the count of decisions `primary` WOULD have changed,
   /// under `primary` the count it did. Same function on both sides, so the
@@ -1269,6 +1288,7 @@ class DualReadAccounting {
       'step_lag_escalations': stepLagEscalations,
       'first_epoch_claimed_at': firstEpochClaimedAt?.toUtc().toIso8601String(),
       'append_ack_p99_ms': appendAckP99Ms,
+      'barrier_would_refuse': barrierWouldRefuse,
     };
   }
 
