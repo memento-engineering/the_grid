@@ -84,6 +84,7 @@ final class DisciplineQuiesceRefused implements Exception {
   DisciplineQuiesceRefused({
     required this.discipline,
     required Iterable<String> offendingSessionIds,
+    this.reason,
   }) : offendingSessionIds = List<String>.unmodifiable(
          offendingSessionIds.toList(growable: false)..sort(),
        );
@@ -94,10 +95,19 @@ final class DisciplineQuiesceRefused implements Exception {
   /// Every station-wide open session crossing that boundary, sorted.
   final List<String> offendingSessionIds;
 
+  /// Why the boundary could not be evaluated, or null for an era mismatch.
+  final String? reason;
+
   @override
-  String toString() =>
-      'DisciplineQuiesceRefused(discipline: ${discipline.name}, '
-      'sessions: ${offendingSessionIds.join(',')})';
+  String toString() {
+    final unevaluable = reason;
+    if (unevaluable == null) {
+      return 'DisciplineQuiesceRefused(discipline: ${discipline.name}, '
+          'sessions: ${offendingSessionIds.join(',')})';
+    }
+    return 'DisciplineQuiesceRefused(discipline: ${discipline.name}, '
+        'sessions: ${offendingSessionIds.join(',')}, reason: $unevaluable)';
+  }
 }
 
 /// Computes the station-wide bidirectional discipline boundary over raw beads.
@@ -548,8 +558,27 @@ class StationWorkRuntime implements SubstationProvisioner {
 
       // Requery AFTER replay: this is the complete raw state carrier for both
       // break-glass and quiescence. SessionProjection intentionally has no
-      // metadata map and gains no discipline field.
-      await _stateRequery();
+      // metadata map and gains no discipline field. Shadow can keep serving
+      // its incumbent carrier after a failed refresh; cut has no safe carrier
+      // to fall back to and therefore refuses before the driver starts.
+      stage = StationWorkStartStage.disciplineQuiesce;
+      _lifecycle = StationWorkRuntimeState.starting(stage: stage);
+      try {
+        await _stateRequery();
+      } on Object catch (error, stackTrace) {
+        _onRefusal(
+          'state requery failed (discipline quiesce unevaluable) — $error',
+        );
+        if (_trajectoryConfig.discipline == TrajectoryDiscipline.cut) {
+          final refusal = DisciplineQuiesceRefused(
+            discipline: _trajectoryConfig.discipline,
+            offendingSessionIds: const [],
+            reason: 'requery-failed',
+          );
+          await trajectory.shutdown();
+          Error.throwWithStackTrace(refusal, stackTrace);
+        }
+      }
       var state = _stateSnapshot();
 
       if (_trajectoryConfig.breakGlassReason case final reason?) {

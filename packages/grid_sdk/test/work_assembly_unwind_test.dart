@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_sdk/grid_sdk.dart';
+import 'package:grid_trajectory/grid_trajectory.dart'
+    show SqlResult, TrajectoryDb, projSessionHeadCutColumns;
 import 'package:test/test.dart';
 
 final class _ConstructionFailure implements Exception {
@@ -39,6 +41,42 @@ final class _EmptyBeadProbeReader implements BeadProbeReader {
 
   @override
   Future<List<Bead>> openSuperseding(Set<String> priorIds) async => const [];
+}
+
+final class _FakeTrajectoryDb implements TrajectoryDb {
+  final List<String> statements = [];
+  bool closed = false;
+
+  @override
+  Future<SqlResult> execute(String sql, [Map<String, dynamic>? params]) async {
+    statements.add(sql);
+    if (sql.contains('information_schema.columns') &&
+        params?['table'] == 'proj_session_head') {
+      return SqlResult(
+        rows: [
+          for (final column in projSessionHeadCutColumns) {'name': column},
+        ],
+      );
+    }
+    if (sql.contains("table_name = 'trajectory'")) {
+      return const SqlResult(
+        rows: [
+          {'name': 'substation'},
+        ],
+      );
+    }
+    if (sql.contains('COALESCE(MAX(epoch), 0) AS e')) {
+      return const SqlResult(
+        rows: [
+          {'e': '1'},
+        ],
+      );
+    }
+    return const SqlResult();
+  }
+
+  @override
+  Future<void> close() async => closed = true;
 }
 
 final class _MutableStateReader implements SnapshotReader, BeadProbeReader {
@@ -128,6 +166,8 @@ final class _GatedGridControllerRuntime extends GridControllerRuntime {
     required this.label,
     required List<String> events,
     this.startGate,
+    this.requeryFailureAtCall,
+    this.requeryFailure,
     super.reader = const _EmptySnapshotReader(),
   }) : record = events,
        super(dirtySources: const []);
@@ -135,7 +175,10 @@ final class _GatedGridControllerRuntime extends GridControllerRuntime {
   final String label;
   final List<String> record;
   final Completer<void>? startGate;
+  final int? requeryFailureAtCall;
+  final Object? requeryFailure;
   final Completer<void> startEntered = Completer<void>();
+  StackTrace? requeryFailureStackTrace;
   var startCalls = 0;
   var requeryCalls = 0;
   var disposeCalls = 0;
@@ -151,10 +194,18 @@ final class _GatedGridControllerRuntime extends GridControllerRuntime {
   }
 
   @override
-  Future<void> requery() {
+  Future<void> requery() async {
     requeryCalls++;
     record.add('$label freshness barrier');
-    return super.requery();
+    if (requeryCalls == requeryFailureAtCall) {
+      final stackTrace = StackTrace.current;
+      requeryFailureStackTrace = stackTrace;
+      Error.throwWithStackTrace(
+        requeryFailure ?? StateError('$label requery failed'),
+        stackTrace,
+      );
+    }
+    await super.requery();
   }
 
   @override
@@ -983,6 +1034,188 @@ void main() {
       );
       expect(driver.startCalls, 0);
     });
+
+    test(
+      'shadow start logs post-replay requery failure once and starts driver',
+      () async {
+        final events = <String>[];
+        final refusals = <String>[];
+        final requeryFailure = StateError('post-replay snapshot unavailable');
+        final workSource = _GatedGridControllerRuntime(
+          label: 'work',
+          events: events,
+        );
+        final stateSource = _GatedGridControllerRuntime(
+          label: 'state',
+          events: events,
+          requeryFailureAtCall: 4,
+          requeryFailure: requeryFailure,
+        );
+        final workBundle = _controllerBundle(
+          runtime: workSource,
+          events: events,
+          shutdownEvent: 'work bundle shutdown (first)',
+        );
+        final stateBundle = _controllerBundle(
+          runtime: stateSource,
+          events: events,
+          shutdownEvent: 'state bundle shutdown',
+        );
+        const shadow = TrajectoryConfig(mode: TrajectoryConfigMode.disabled);
+        final trajectory = await TrajectoryHarness.build(
+          config: shadow,
+          gridHome: temporary.path,
+          station: 'state',
+        );
+        final federated = _RecordingFederatedSource(events);
+        final bridge = _RecordingJoinBridge(events);
+        late _RecordingStartDriver driver;
+        final runtime = await assembleRecordingRuntime(
+          workBundle: workBundle,
+          stateBundle: stateBundle,
+          provider: _RecordingProvider(events),
+          trajectory: trajectory,
+          federated: federated,
+          bridge: bridge,
+          trajectoryConfig: shadow,
+          onRefusal: refusals.add,
+          driverBuilder: ({required buildDefault}) =>
+              driver = _RecordingStartDriver(bridge: bridge, events: events),
+        );
+        addTearDown(runtime.shutdown);
+
+        await runtime.start();
+
+        final requeryRefusals = refusals
+            .where(
+              (line) => line.contains(
+                'state requery failed '
+                '(discipline quiesce unevaluable)',
+              ),
+            )
+            .toList(growable: false);
+        expect(requeryRefusals, hasLength(1));
+        expect(requeryRefusals.single, contains('$requeryFailure'));
+        expect(stateSource.requeryCalls, 4);
+        expect(driver.startCalls, 1);
+        expect(runtime.lifecycle, isA<StationWorkRuntimeStarted>());
+      },
+    );
+
+    test(
+      'cut start converts post-replay requery failure to quiesce refusal',
+      () async {
+        _seedProxyEndpoint('${temporary.path}/home/.grid', database: 'state');
+        final events = <String>[];
+        final refusals = <String>[];
+        final requeryFailure = StateError('post-replay snapshot unavailable');
+        final workSource = _GatedGridControllerRuntime(
+          label: 'work',
+          events: events,
+        );
+        final stateSource = _GatedGridControllerRuntime(
+          label: 'state',
+          events: events,
+          requeryFailureAtCall: 4,
+          requeryFailure: requeryFailure,
+        );
+        final workBundle = _controllerBundle(
+          runtime: workSource,
+          events: events,
+          shutdownEvent: 'work bundle shutdown (first)',
+        );
+        final stateBundle = _controllerBundle(
+          runtime: stateSource,
+          events: events,
+          shutdownEvent: 'state bundle shutdown',
+        );
+        const cut = TrajectoryConfig(discipline: TrajectoryDiscipline.cut);
+        final db = _FakeTrajectoryDb();
+        final trajectory = await TrajectoryHarness.build(
+          config: cut,
+          gridHome: temporary.path,
+          station: 'state',
+          connect: () async => db,
+          onFlare: (name, _) => events.add(name),
+        );
+        final federated = _RecordingFederatedSource(events);
+        final bridge = _RecordingJoinBridge(events);
+        late _RecordingStartDriver driver;
+        final runtime = await assembleRecordingRuntime(
+          workBundle: workBundle,
+          stateBundle: stateBundle,
+          provider: _RecordingProvider(events),
+          trajectory: trajectory,
+          federated: federated,
+          bridge: bridge,
+          trajectoryConfig: cut,
+          dryRun: false,
+          onRefusal: refusals.add,
+          driverBuilder: ({required buildDefault}) =>
+              driver = _RecordingStartDriver(bridge: bridge, events: events),
+        );
+        addTearDown(runtime.shutdown);
+
+        Object? first;
+        StackTrace? firstStackTrace;
+        try {
+          await runtime.start();
+        } on Object catch (error, stackTrace) {
+          first = error;
+          firstStackTrace = stackTrace;
+        }
+
+        expect(first, isA<DisciplineQuiesceRefused>());
+        final refusal = first! as DisciplineQuiesceRefused;
+        expect(refusal.discipline, TrajectoryDiscipline.cut);
+        expect(refusal.reason, 'requery-failed');
+        expect(refusal.offendingSessionIds, isEmpty);
+        expect(
+          () => refusal.offendingSessionIds.add('state-session'),
+          throwsUnsupportedError,
+        );
+        expect(refusal.toString(), contains('reason: requery-failed'));
+        expect(
+          '$firstStackTrace',
+          '${stateSource.requeryFailureStackTrace}',
+          reason: 'the typed refusal retains the failed requery stack',
+        );
+        final requeryRefusals = refusals
+            .where(
+              (line) => line.contains(
+                'state requery failed '
+                '(discipline quiesce unevaluable)',
+              ),
+            )
+            .toList(growable: false);
+        expect(requeryRefusals, hasLength(1));
+        expect(requeryRefusals.single, contains('$requeryFailure'));
+        expect(stateSource.requeryCalls, 4);
+        expect(driver.startCalls, 0);
+        expect(db.closed, isTrue);
+        expect(
+          events.where((event) => event == 'trajectory.shutdown'),
+          hasLength(1),
+        );
+
+        final failure = runtime.lifecycle as StationWorkRuntimeFailed;
+        expect(failure.stage, StationWorkStartStage.disciplineQuiesce);
+        expect(failure.error, same(refusal));
+        await expectLater(
+          runtime.start(),
+          throwsA(
+            isA<StationWorkStartRefused>()
+                .having((retry) => retry.failure, 'failure', same(failure))
+                .having(
+                  (retry) => retry.originalError,
+                  'originalError',
+                  same(refusal),
+                ),
+          ),
+        );
+        expect(driver.startCalls, 0);
+      },
+    );
 
     test('start exposes sources progress and successful idempotence', () async {
       final events = <String>[];

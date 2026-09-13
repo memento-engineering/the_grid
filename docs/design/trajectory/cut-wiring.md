@@ -1554,6 +1554,12 @@ gates everything that branches a write. The Q5/Q10 and Q6 forks are now closed b
    preserves the open session id and cursor for a later resume, so excluding it would permit
    that resumed session to cross carriers. The refusal names it for an explicit void-or-resume
    operator choice rather than silently re-running it.
+   **Post-replay requery failure contract.** The requery is part of the
+   `disciplineQuiesce` start stage, never a bare universal await. A shadow boot logs one
+   refusal and evaluates the predicate over the last state snapshot; a cut boot cannot
+   evaluate its carrier, shuts the trajectory down, and throws
+   `DisciplineQuiesceRefused(reason: 'requery-failed', offendingSessionIds: [])` before
+   the driver starts.
 4. **Break-glass (Q11, O-M7).** `GRID_G1_BREAK_GLASS=<reason>` (the name is r2's; the
    space half may rename the env) is resolved at assembly into the config BEFORE any
    posture read: it forces `discipline: shadow` for the boot and carries the reason. Both
@@ -1620,6 +1626,13 @@ gates everything that branches a write. The Q5/Q10 and Q6 forks are now closed b
    (`grid_runtime/lib/src/trajectory/stage1_obligations.dart`) already runs for the
    record-only half. Under
    shadow the backfill obligation keeps running and the inline reap keeps reaping.
+   `LiveWorktreeReapObligation` is an automatic lifecycle/restart cleanup caller
+   governed by `the_grid#held-session-collection-override-is-human-only`: “Only an
+   explicit operator `session collect --override-unsafe` request may bypass a known
+   `GateOutcome.present` result”; that exception “does not authorize automatic callers
+   to force removal.” The obligation therefore composes the existing gated
+   `StationGitService.reap`/`ReapWorktree` seam under the same fail-closed three-gate
+   contract, and the tick path exposes no override surface.
 7. **The restore runbook (E3/Q4)** is W2-A's operator text, verbatim from E3.
 8. **Docs riding the PR:** the §7 amendment (C-M3), the stage1-wiring §2.3 settle row
    (C-m2), the §9 exception cross-reference to §W2.2 (Q10), the `required` contract line,
