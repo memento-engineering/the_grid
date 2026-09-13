@@ -96,15 +96,15 @@ never killed).
 | [`CLAUDE.md`](CLAUDE.md) | Session contract: process rules, conventions, and the running build log |
 | [`docs/PDR.md`](docs/PDR.md) | Vision, goals, milestones, acceptance criteria, the gate |
 | [`docs/GLOSSARY.md`](docs/GLOSSARY.md) | Status-tagged index of the vocabulary and flows — records where docs and code disagree |
-| [`docs/adr/ADR-0000…`](docs/adr/ADR-0000-ai-decision-register.md) | **AI decision register** — pending AI decisions live here until promoted or rejected |
-| [`ADR-0001…0004`](docs/adr/) | Foundations · package topology + projections · convergence port · runtime providers/tmux |
-| [`ADR-0006`](docs/adr/ADR-0006-dogfood-rig-and-live-write-authorization.md) | Dogfood rig + live-write authorization |
-| [`ADR-0007`](docs/adr/ADR-0007-tree-engine-and-genesis-supersession.md) | The engine pivot: `genesis_tree` IS the engine; Riverpod → `StateNotifier` |
-| [`ADR-0008`](docs/adr/ADR-0008-authoring-sdk-and-reentrant-engine.md) | Authoring SDK + reentrant engine: Station/Substation/Asset, compose-never-subclass |
-| [`ADR-0009`](docs/adr/ADR-0009-the-allocation-tree.md) | The Allocation Tree — the_grid's "third tree" of live effects |
-| [`ADR-0011`](docs/adr/ADR-0011-federation-and-asset-management.md) | Federation + asset management (leasing resources across stations) |
-| [`ADR-0012`](docs/adr/ADR-0012-observability.md) | Observability (partial — the LAN cockpit slice is ratified) |
-| [`ADR-0013`](docs/adr/ADR-0013-state-holding-value-types.md) | State-holding value types (draft direction) |
+| [`docs/decisions/`](docs/decisions/) | **The decision register** — every ADR below is a register entry; the old ADR-0000 pending-amendment convention is retired, superseded by the decisions repository's own specification |
+| [`ADR-0001…0004`](docs/decisions/) | Foundations · package topology + projections · convergence port · runtime providers/tmux |
+| [`ADR-0006`](docs/decisions/2026-06-15-adr-0006-dogfood-rig-and-live-write-authorization.md) | Dogfood rig + live-write authorization |
+| [`ADR-0007`](docs/decisions/2026-06-24-adr-0007-tree-engine-and-genesis-supersession.md) | The engine pivot: `genesis_tree` IS the engine; Riverpod → `StateNotifier` |
+| [`ADR-0008`](docs/decisions/2026-06-27-adr-0008-authoring-sdk-and-reentrant-engine.md) | Authoring SDK + reentrant engine: Station/Substation/Asset, compose-never-subclass |
+| [`ADR-0009`](docs/decisions/2026-07-01-adr-0009-the-allocation-tree.md) | The Allocation Tree — the_grid's "third tree" of live effects |
+| [`ADR-0011`](docs/decisions/2026-06-29-adr-0011-federation-and-asset-management.md) | Federation + asset management (leasing resources across stations) |
+| [`ADR-0012`](docs/decisions/2026-07-11-adr-0012-observability.md) | Observability (partial — the LAN cockpit slice is ratified) |
+| [`ADR-0013`](docs/decisions/2026-07-12-adr-0013-state-holding-value-types.md) | State-holding value types (draft direction) |
 
 ADR-0005 was retired by ADR-0007; ADR-0010 is reserved, unwritten. The
 `docs/M*-BUILD-ORDER.md` files are the dependency-ordered implementation plans each

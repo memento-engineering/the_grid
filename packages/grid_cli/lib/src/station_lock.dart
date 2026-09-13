@@ -1,5 +1,5 @@
-/// RS-2 — the station lock (D-A1, `docs/adr/ADR-0014-the-resident-station.md`,
-/// Accepted 2026-07-19).
+/// RS-2 — the station lock (D-A1, ADR-0014,
+/// `docs/decisions/2026-07-19-adr-0014-the-resident-station.md`, Accepted 2026-07-19).
 ///
 /// **The named invariant: ONE supervisor per station STATE store.** Two
 /// stations over the same session store observe the same ready bead,

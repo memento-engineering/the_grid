@@ -5,8 +5,8 @@ import 'package:grid_cli/grid_cli.dart';
 import 'package:grid_trajectory/grid_trajectory.dart' show TrajCommand;
 
 // The MINIMAL generic bin — only the asset-agnostic driving commands. the_grid
-// is a framework, not a turnkey tool (the Dart runner model — see
-// docs/adr/ADR-0008-authoring-sdk-and-reentrant-engine.md): a REAL station is a user-composed,
+// is a framework, not a turnkey tool (the Dart runner model — see ADR-0008,
+// docs/decisions/2026-06-27-adr-0008-authoring-sdk-and-reentrant-engine.md): a REAL station is a user-composed,
 // AOT-compiled runner that assembles the CLI-SDK Commands it wants plus its
 // assets' exported Commands (CodeRunCommand/DartCommand from power_station's
 // packs, and serve/lease — generic, but parameterized by asset closures like

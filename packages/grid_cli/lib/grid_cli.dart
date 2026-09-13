@@ -1,5 +1,6 @@
 /// the_grid **CLI SDK** — the reusable CLI components a station runner assembles
-/// (the Dart runner model — see `docs/adr/ADR-0008-authoring-sdk-and-reentrant-engine.md`).
+/// (the Dart runner model — see
+/// `docs/decisions/2026-06-27-adr-0008-authoring-sdk-and-reentrant-engine.md`).
 ///
 /// `the_grid` is a framework, not a turnkey tool: a station is a user-composed,
 /// AOT-compiled runner (`main.dart` + `dart compile exe`) that builds a

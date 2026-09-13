@@ -37,10 +37,10 @@ void main() {
 
   test('A57 records ref naming while ADR-0001 remains historical', () {
     final register = repoFile(
-      'docs/adr/ADR-0000-ai-decision-register.md',
+      'docs/decisions/2026-08-08-a57-upstream-fixture-directories-name-the-selected-bd-ref-tg.md',
     ).readAsStringSync();
     final ratified = repoFile(
-      'docs/adr/ADR-0001-technical-foundations.md',
+      'docs/decisions/2026-06-11-adr-0001-technical-foundations.md',
     ).readAsStringSync();
     expect(register, contains('## A57 (2026-08-08)'));
     expect(register, contains('fixtures/upstream/<date>-bd-<ref>/'));
