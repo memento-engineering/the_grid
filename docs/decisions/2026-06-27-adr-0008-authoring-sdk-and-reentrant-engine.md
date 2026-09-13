@@ -12,7 +12,12 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - a-silent-harness-exit-is-infra-not-work
+    - adr-0008-decision-10-is-superseded-by-the-agent-environment-layer
+    - capability-failures-carry-a-kind-and-a-per-kind-policy
+    - grid-block-packages-publish-dart-asset-definitions
+    - run-grid-is-the-single-flush-coordinator
   bead: null
   legacy-id: "ADR-0008"
 ---
