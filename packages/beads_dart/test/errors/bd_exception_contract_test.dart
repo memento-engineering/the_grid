@@ -12,7 +12,9 @@ const readyRefusalStderr = 'Error: --ready cannot be combined with --status\n';
 
 void main() {
   test('bead text transport failures expose diagnostics', () {
-    const refused = BeadTextRefused(
+    final refused = BeadTextRefused(
+      call: const ['bd', 'update', 'tg-1', '--acceptance', 'text\u0000tail'],
+      remedy: 'remove the NUL',
       field: 'acceptanceCriteria',
       offset: 4,
       context: 'text\u0000tail',
@@ -21,7 +23,13 @@ void main() {
     expect(refused.offset, 4);
     expect(
       refused.message,
-      r'Refused acceptanceCriteria at offset 4 near "text\u0000tail"',
+      allOf(
+        contains(
+          r'Refused acceptanceCriteria at offset 4 near "text\u0000tail"',
+        ),
+        contains('"bd","update","tg-1"'),
+        contains('Remedy: remove the NUL'),
+      ),
     );
 
     const mismatch = BeadTextRoundTripFailure(

@@ -197,14 +197,44 @@ class BdUsageException extends BdException {
   final String stderr;
 }
 
+/// A bd operation refused because an invocation can silently produce a wrong
+/// result.
+class BdGuardrailRefused extends BdException {
+  BdGuardrailRefused({
+    required List<String> call,
+    required this.reason,
+    required this.remedy,
+  }) : call = List<String>.unmodifiable(call);
+
+  /// The exact argv that was or would have been executed, including `bd`.
+  final List<String> call;
+
+  /// The silent-success failure this guard prevents.
+  final String reason;
+
+  /// An executable alternative or the named explicit opt-in.
+  final String remedy;
+
+  @override
+  String get message => 'Refused ${jsonEncode(call)}: $reason Remedy: $remedy';
+}
+
 /// An argv-only bead text field contains a control character that Dart cannot
 /// transport safely.
 class BeadTextRefused extends BdException {
-  const BeadTextRefused({
+  BeadTextRefused({
+    required List<String> call,
+    required this.remedy,
     required this.field,
     required this.offset,
     required this.context,
-  });
+  }) : call = List<String>.unmodifiable(call);
+
+  /// The exact argv that would have been executed, including the `bd` binary.
+  final List<String> call;
+
+  /// How to make the attempted write safe.
+  final String remedy;
 
   final String field;
   final int offset;
@@ -212,7 +242,8 @@ class BeadTextRefused extends BdException {
 
   @override
   String get message =>
-      'Refused $field at offset $offset near ${jsonEncode(context)}';
+      'Refused $field at offset $offset near ${jsonEncode(context)} in '
+      '${jsonEncode(call)}. Remedy: $remedy';
 }
 
 /// An argv-only bead text field differed when read back after persistence.

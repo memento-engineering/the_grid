@@ -41,6 +41,7 @@ sealed class GridCommandRequest with _$GridCommandRequest {
     required OperatorBeadTextField field,
     required String content,
     @Default(false) bool append,
+    @Default(false) bool allowNotesReplacement,
   }) = GridSetBeadText;
 
   /// Parks the live session driving [beadId] without closing its round.

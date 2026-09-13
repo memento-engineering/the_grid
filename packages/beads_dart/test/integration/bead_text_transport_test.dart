@@ -21,7 +21,10 @@ void main() {
           defaultTimeout: const Duration(seconds: 60),
         ),
       );
-      final id = await service.create(title: 'text transport receipt');
+      const argvTitle =
+          'literal `printf nope` and \$(printf nope) and \$BD_TEXT_SENTINEL';
+      final id = await service.create(title: argvTitle);
+      expect((await service.show([id])).single.title, argvTitle);
 
       final nulDesign =
           '${List.filled(8191, 'a').join()}'

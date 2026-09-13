@@ -26,10 +26,10 @@ final class OpenBeadsCall {
 ///
 /// Records the full argv + piped stdin of every `bd` invocation so tests can
 /// assert the EXACT commands the chokepoint issued (`--actor grid-controller`,
-/// `--set-metadata key=value`, never `show`, never SQL). A canned envelope reply is
-/// matched by the invocation's leading subcommand; `create` returns a synthetic
-/// id the caller controls so the chokepoint's mint+stamp can be exercised
-/// end-to-end with no real `bd`.
+/// `--set-metadata key=value`, never `show`, never SQL). A canned envelope reply
+/// is matched by the invocation's leading subcommand; `create` returns a
+/// synthetic id the caller controls so the chokepoint's mint+stamp can be
+/// exercised end-to-end with no real `bd`.
 class RecordingBdRunner implements BdRunner, BeadProbeReader {
   RecordingBdRunner({
     String createdId = 'tgdog-sess1',
@@ -159,6 +159,25 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
         ),
       );
     }
+    if (sub == 'query' && args.length > 1) {
+      final expression = args[1];
+      final id = expression.startsWith('id=') ? expression.substring(3) : null;
+      final includeClosed = args.contains('--all');
+      return Future<BdResult>.value(
+        BdResult(
+          exitCode: 0,
+          stdout: jsonEncode({
+            'schema_version': 1,
+            'data': [
+              for (final bead in exportBeads)
+                if (bead.id == id && (includeClosed || !bead.isClosed))
+                  bead.toJson(),
+            ],
+          }),
+          stderr: '',
+        ),
+      );
+    }
     if (sub == 'export') {
       return Future<BdResult>.value(
         const BdResult(
@@ -190,6 +209,26 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
           stderr: '',
         ),
       );
+    }
+    if (sub == 'update' && args.length > 1) {
+      final notesIndex = args.indexOf('--notes');
+      final appendIndex = args.indexOf('--append-notes');
+      if (notesIndex >= 0 || appendIndex >= 0) {
+        final id = args[1];
+        exportBeads = [
+          for (final bead in exportBeads)
+            if (bead.id != id)
+              bead
+            else if (notesIndex >= 0)
+              bead.copyWith(notes: args[notesIndex + 1])
+            else
+              bead.copyWith(
+                notes: bead.notes.isEmpty
+                    ? args[appendIndex + 1]
+                    : '${bead.notes}\n${args[appendIndex + 1]}',
+              ),
+        ];
+      }
     }
     final data = switch (sub) {
       'create' => '{"id":"$_createdId"}',
