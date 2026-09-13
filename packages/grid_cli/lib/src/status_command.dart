@@ -223,6 +223,30 @@ class StatusCommand extends Command<int> {
         'live sessions: ${work['liveSessions']}  ·  last sync: '
         '${work['lastSyncAt']}',
       );
+    final stranded = work['stranded'];
+    if (stranded is Map<String, Object?>) {
+      final count = stranded['count'];
+      if (count is int && count > 0) {
+        stdout.writeln('  STRANDED: $count');
+        final beads = stranded['beads'];
+        if (beads is List<Object?>) {
+          for (final row in beads) {
+            if (row is! Map<String, Object?>) continue;
+            final line = StringBuffer()
+              ..write('    bead ${row['workBeadId']}')
+              ..write('  ·  session ${row['blockingSessionId']}')
+              ..write('  ·  disposition ${row['disposition']}');
+            if (row['deliveryMethod'] case final String method) {
+              line.write('  ·  delivery $method');
+            }
+            if (row['deliveryReference'] case final String reference) {
+              line.write('  ·  PR $reference');
+            }
+            stdout.writeln(line);
+          }
+        }
+      }
+    }
     final admission = payload['admission'];
     if (admission is Map<String, Object?>) {
       final maxAgents = admission['maxAgents'];

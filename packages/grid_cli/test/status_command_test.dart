@@ -193,6 +193,82 @@ void main() {
     expect(empty.stdout, isNot(contains('admission: BLOCKED')));
   });
 
+  test(
+    'stranded work renders persistently and remains raw in JSON mode',
+    () async {
+      final payload = <String, Object?>{
+        ...statusPayload,
+        'work': <String, Object?>{
+          ...(statusPayload['work']! as Map<String, Object?>),
+          'stranded': <String, Object?>{
+            'count': 1,
+            'beads': <Object?>[
+              <String, Object?>{
+                'workBeadId': 'tg-hnhw',
+                'blockingSessionId': 'tranquility-ann6ol',
+                'disposition': 'done',
+                'deliveryMethod': 'github-pr',
+                'deliveryReference': 'https://github.test/the-grid/pull/426',
+              },
+            ],
+          },
+        },
+      };
+
+      final human = await runCaptured(Up(record: record(), payload: payload));
+      expect(human.code, 0);
+      expect(
+        human.stdout,
+        'station: UP\n'
+        '  substation: lunar\n'
+        '  state store: /tmp/state\n'
+        '  work root: /tmp/work\n'
+        '  mode: LIVE\n'
+        '  pid: 42  ·  uptime: 10s  ·  version: test-vm\n'
+        '  ready: 1  ·  mounted: 1  ·  live sessions: 1  ·  last sync: null\n'
+        '  STRANDED: 1\n'
+        '    bead tg-hnhw  ·  session tranquility-ann6ol  ·  disposition done'
+        '  ·  delivery github-pr  ·  PR '
+        'https://github.test/the-grid/pull/426\n',
+      );
+      expect(human.stderr, isEmpty);
+
+      final json = await runCaptured(Up(record: record(), payload: payload), [
+        '--json',
+      ]);
+      expect(json.code, 0);
+      expect(json.stdout, '${jsonEncode(payload)}\n');
+      expect(jsonDecode(json.stdout), payload);
+      expect(json.stderr, isEmpty);
+    },
+  );
+
+  test('empty and zero-count stranded blocks add no human output', () async {
+    const clean =
+        'station: UP\n'
+        '  substation: lunar\n'
+        '  state store: /tmp/state\n'
+        '  work root: /tmp/work\n'
+        '  mode: LIVE\n'
+        '  pid: 42  ·  uptime: 10s  ·  version: test-vm\n'
+        '  ready: 1  ·  mounted: 1  ·  live sessions: 1  ·  last sync: null\n';
+    for (final stranded in const <Map<String, Object?>>[
+      <String, Object?>{},
+      <String, Object?>{'count': 0, 'beads': <Object?>[]},
+    ]) {
+      final payload = <String, Object?>{
+        ...statusPayload,
+        'work': <String, Object?>{
+          ...(statusPayload['work']! as Map<String, Object?>),
+          'stranded': stranded,
+        },
+      };
+      final result = await runCaptured(Up(record: record(), payload: payload));
+      expect(result.stdout, clean);
+      expect(result.stderr, isEmpty);
+    }
+  });
+
   test('a payload without admission preserves the legacy UP output', () async {
     final result = await runCaptured(
       Up(record: record(), payload: statusPayload),

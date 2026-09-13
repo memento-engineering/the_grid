@@ -262,6 +262,22 @@ class StationStatus {
       'mintFailedScopes': mintFailedScopes,
       'lastSyncAt': lastSyncAt?.toIso8601String(),
       'perSubstation': [for (final s in perSubstation) s.toJson()],
+      if (admission case final snapshot? when snapshot.stranded.isNotEmpty)
+        'stranded': <String, Object?>{
+          'count': snapshot.stranded.length,
+          'beads': <Object?>[
+            for (final row in snapshot.stranded)
+              <String, Object?>{
+                'workBeadId': row.workBeadId,
+                'blockingSessionId': row.blockingSessionId,
+                'disposition': row.disposition,
+                if (row.deliveryMethod case final method?)
+                  'deliveryMethod': method,
+                if (row.deliveryReference case final reference?)
+                  'deliveryReference': reference,
+              },
+          ],
+        },
     },
     if (admission case final admission?)
       'admission': <String, Object?>{

@@ -172,10 +172,69 @@ void main() {
       expect(response.body, isNot(contains('SECRET BEAD DESCRIPTION')));
     });
 
+    test('GET /status publishes delivered stranded work', () async {
+      final control = await StationControl.start(
+        port: 0,
+        token: 'secret-token',
+        view: () => StationStatus(
+          substation: 'tgdog',
+          stateStore: '/tmp/tgdog-state',
+          workRoot: '/tmp/root',
+          dryRun: false,
+          pid: 4242,
+          startedAt: DateTime.utc(2026, 9, 13),
+          version: 'test-vm',
+          ready: 256,
+          mounted: 5,
+          liveSessions: 0,
+          lastSyncAt: DateTime.utc(2026, 9, 13, 1),
+          admission: StationAdmissionStatus(
+            maxAgents: 6,
+            reservations: const [],
+            refusals: const [],
+            stranded: const [
+              (
+                workBeadId: 'tg-hnhw',
+                blockingSessionId: 'tranquility-ann6ol',
+                disposition: 'done',
+                deliveryMethod: 'github-pr',
+                deliveryReference: 'https://github.test/the-grid/pull/426',
+              ),
+            ],
+          ),
+        ),
+        commandHandler: _FakeCommandHandler(),
+      );
+      addTearDown(control.dispose);
+
+      final response = await _get(
+        control.url,
+        '/status',
+        token: 'secret-token',
+      );
+      expect(response.statusCode, HttpStatus.ok);
+      final body = jsonDecode(response.body) as Map<String, Object?>;
+      final work = body['work'] as Map<String, Object?>;
+      expect(work['ready'], 256);
+      expect(work['stranded'], {
+        'count': 1,
+        'beads': [
+          {
+            'workBeadId': 'tg-hnhw',
+            'blockingSessionId': 'tranquility-ann6ol',
+            'disposition': 'done',
+            'deliveryMethod': 'github-pr',
+            'deliveryReference': 'https://github.test/the-grid/pull/426',
+          },
+        ],
+      });
+    });
+
     test('status constructors always serialize zero mint failures', () {
       final json = _sampleStatus().toJson();
       final work = json['work'] as Map<String, Object?>;
       expect(work['mintFailedScopes'], 0);
+      expect(work, isNot(contains('stranded')));
       expect(json, isNot(contains('admission')));
 
       const substation = SubstationStatus(
