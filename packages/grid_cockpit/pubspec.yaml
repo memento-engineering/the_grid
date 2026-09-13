@@ -1,7 +1,6 @@
 name: grid_cockpit
 description: Watch-only macOS operator client for a resident grid station.
 repository: https://github.com/memento-engineering/the_grid
-resolution: workspace
 publish_to: none
 version: 0.1.0+1
 
