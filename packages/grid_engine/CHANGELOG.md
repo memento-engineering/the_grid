@@ -1,3 +1,24 @@
+## 0.4.0-dev.3
+
+- Breaking: the state-store cross-link surface is GONE. `src/domain/cross_link.dart` (`CrossLink`,
+  `CrossLinkKeys`, `BlockEdge`, `crossLinkEdges`, `projectCrossLinks`, `crossLinkTypeRefusal`,
+  `kCrossLinkBlocks`, `kCrossLinkTargetCloseRule`) and `src/bridge/block_guard.dart`
+  (`applyBlockGuard`) are deleted and no longer exported; `mount_eligibility.dart` drops
+  `freshCrossLinkReadClause` and `crossLinkExclusionClause`; `JoinedSnapshot` drops
+  `frontierExclusionsByBeadId`; `StationJoinBridge` drops `onUnresolvedCrossLink`; and
+  `configuredBdTypeNames` changes shape (#447).
+- Migration: a cross-store blocker is now bd's own `external:<project>:<capability>` dependency row
+  on the CONSUMER's work bead — read it through the new `src/domain/external_dep.dart` surface and
+  delete both retired clauses from any composed `MountEligibilityPredicate` list; `grid link
+  migrate` converts a store that still holds the inert link receipts.
+- Adds `src/domain/bd_type_discovery.dart` (bd `types --json` discovery, so an operator verb can
+  narrow its own scoped read), `src/domain/external_dep.dart`,
+  `src/domain/eligibility_basis_revision.dart`, `src/domain/worktree_outstanding.dart` and
+  `src/kernel/admission_barrier.dart` — the admission refusal for a candidate that still holds an
+  outstanding worktree (#445, #446).
+- Floors `beads_dart` at `^0.3.0-dev.2` and `grid_runtime` at `^0.2.1-dev.2`: the external-row read
+  surface and `kWorktreeOutstandingClause` land in those releases.
+
 ## 0.4.0-dev.2
 
 - `Workspace` gains an optional `baseSha` (equality and hash include it) and `SourceControl` gains

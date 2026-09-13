@@ -1,3 +1,21 @@
+## 0.6.0-dev.3
+
+- Breaking: `UnlinkCommand` and `runUnlink` are removed from the public surface, and the
+  `link_command.dart` export narrows to `LinkCommand`, `LinkEndpointStore` and `runLink` (#447).
+  The `grid unlink` verb is retired with them, and `LinkCommand` / `runLink` drop their `input` and
+  `stateStorePrefix` arguments — the verb reads bd, never the station's state store.
+- Migration: a cross-store blocker is a bd dependency row, so remove one with
+  `bd dep remove <from> external:<project>:<capability>` — or let it lift on its own, which is the
+  intended path: the edge clears when the target ships (`bd ship <target>` on a CLOSED target). Run
+  the one-pass `grid link migrate --grid-root <home> [--dry-run]` to convert a store that still
+  holds the retired link beads.
+- `grid link <from> --blocked-by <to>` is now SUGAR over `bd dep add` — it labels the target
+  `export:<target>` and adds the `external:<project>:<target>` row, mints no bead, and never touches
+  the station's state store. `grid link ls` lists the rows the roster's stores carry (#445).
+- Adds `grid watch --grid-home` — the station watch as a first-class verb over
+  `src/station_watch.dart`, now exported (#442).
+- Floors every in-workspace sibling at this wave's versions.
+
 ## 0.6.0-dev.2
 
 - Publishes what main has carried unversioned since 0.6.0-dev.1:

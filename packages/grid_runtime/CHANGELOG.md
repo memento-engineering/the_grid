@@ -1,3 +1,17 @@
+## 0.2.1-dev.2
+
+- Breaking: `StationBeadWriter.createLink` is removed (#447). Nothing authors a state-store link
+  bead any more, and `GridIssueTypes.link` is dropped from `customTypes`, so no fresh store seeds
+  the type.
+- Migration: author a cross-store blocker as a bd `external:<project>:<capability>` dependency row
+  on the consumer's own work bead (`grid link <from> --blocked-by <to>`) instead of calling
+  `createLink`; `GridIssueTypes.link` survives READ-ONLY so a store still holding inert receipts
+  can be converted once with `grid link migrate`.
+- Adds capability shipping on the writer (`unshippedCapabilities`, `shipExports`), the
+  admission-restoration obligation and `kWorktreeOutstandingClause`, and re-exports `IdemContext`
+  (#445, #446).
+- Floors `beads_dart` at `^0.3.0-dev.2` and `grid_trajectory` at `^0.2.1-dev.2`.
+
 ## 0.2.1-dev.1
 
 - Adds `StationGitRepository` (exported from `grid_runtime.dart`): a resident registry of provisioned
