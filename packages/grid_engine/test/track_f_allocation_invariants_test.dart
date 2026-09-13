@@ -58,6 +58,16 @@ Future<String> _readEngineSource(String libRelative) async {
   return File(uri!.toFilePath()).readAsStringSync();
 }
 
+Future<String> _readThisTestSource() async {
+  final libraryUri = await Isolate.resolvePackageUri(
+    Uri.parse('package:grid_engine/grid_engine.dart'),
+  );
+  final testUri = libraryUri!.resolve(
+    '../test/track_f_allocation_invariants_test.dart',
+  );
+  return File.fromUri(testUri).readAsStringSync();
+}
+
 List<String> _importLines(String src) =>
     src.split('\n').where((l) => l.trimLeft().startsWith('import ')).toList();
 
@@ -132,7 +142,9 @@ class _DaemonCap extends ProcessCapability {
 }
 
 final class _LatestDependencyCap extends ProcessCapability {
-  const _LatestDependencyCap();
+  const _LatestDependencyCap(this.workDir);
+
+  final String workDir;
 
   @override
   CompletionContract get completionContract =>
@@ -140,7 +152,7 @@ final class _LatestDependencyCap extends ProcessCapability {
 
   @override
   RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
-    workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
+    workDir: workDir,
     command: 'sh',
     args: const ['-c', 'echo hi'],
     lifecycle: Lifecycle.oneTurn,
@@ -152,6 +164,30 @@ final class _LatestDependencyCap extends ProcessCapability {
     Exited() || Died() => StepSignal.failed,
     _ => StepSignal.none,
   };
+}
+
+final class _InputsOnlyUpdatableAllocation extends Allocation {
+  _InputsOnlyUpdatableAllocation(super.inputs, this.observedInputs);
+
+  final List<AllocationInputs> observedInputs;
+
+  @override
+  bool canUpdate(Allocation next) => next is _InputsOnlyUpdatableAllocation;
+
+  @override
+  Future<void> startOrAdopt(TreeContext treeContext) async {
+    state = AllocationState.live;
+    observeInputsForTest();
+  }
+
+  void observeInputsForTest() => observedInputs.add(inputs);
+
+  @override
+  Future<void> dispose() async {
+    if (state == AllocationState.gone) return;
+    inputs.args.cancel.cancel();
+    state = AllocationState.gone;
+  }
 }
 
 final class _WatchingSourceControl implements SourceControl {
@@ -332,9 +368,16 @@ void main() {
         );
         final leaseSource = await _readEngineSource('src/sdk/lease.dart');
         final routeSource = await _readEngineSource('src/sdk/route.dart');
+        final testSource = await _readThisTestSource();
         final inputsDeclaration = allocationSource.substring(
           allocationSource.indexOf('class AllocationInputs {'),
           allocationSource.indexOf('abstract class Allocation '),
+        );
+        final updatableAllocationDeclaration = testSource.substring(
+          testSource.indexOf(
+            'final class _InputsOnlyUpdatableAllocation extends Allocation',
+          ),
+          testSource.indexOf('final class _WatchingSourceControl'),
         );
         expect(inputsDeclaration, isNot(contains('TreeContext')));
         final storedTreeHandle = RegExp(
@@ -344,10 +387,19 @@ void main() {
           expect(storedTreeHandle.hasMatch(source), isFalse);
         }
         expect(
+          storedTreeHandle.hasMatch(updatableAllocationDeclaration),
+          isFalse,
+          reason:
+              'a canUpdate allocation must not retain a call-scoped '
+              'TreeContext field',
+        );
+        expect(
           allocationSource,
           contains('startOrAdopt(TreeContext treeContext)'),
           reason: 'call-scoped TreeContext parameters are the positive control',
         );
+        expect(allocationSource, contains('retained across [update]'));
+        expect(allocationSource, contains('must re-read tree values'));
 
         final inputs = _inputs(FakeRuntimeProvider());
         // Compile-time shape: the effect gets transport (process), a report sink,
@@ -360,6 +412,47 @@ void main() {
       },
     );
   });
+
+  test(
+    'Allocation.update rebinds only inputs and retains no TreeContext',
+    () async {
+      final transport = FakeRuntimeProvider();
+      addTearDown(transport.close);
+      final observedInputs = <AllocationInputs>[];
+      final firstInputs = AllocationInputs(
+        args: stepArgs('tg-1/updatable'),
+        transport: transport,
+        address: const AllocationAddress('s', 'tg-1/updatable'),
+        env: const {'generation': 'first'},
+        sink: (_) {},
+      );
+      final secondInputs = AllocationInputs(
+        args: stepArgs('tg-1/updatable'),
+        transport: transport,
+        address: const AllocationAddress('s', 'tg-1/updatable'),
+        env: const {'generation': 'second'},
+        sink: (_) {},
+      );
+      final allocation = _InputsOnlyUpdatableAllocation(
+        firstInputs,
+        observedInputs,
+      );
+      final next = _InputsOnlyUpdatableAllocation(secondInputs, []);
+
+      await allocation.startMounted(_treeCtx());
+      expect(observedInputs, hasLength(1));
+      expect(observedInputs.single, same(firstInputs));
+      expect(allocation.canUpdate(next), isTrue);
+
+      await allocation.update(next);
+      allocation.observeInputsForTest();
+
+      expect(allocation.inputs, same(secondInputs));
+      expect(observedInputs, hasLength(2));
+      expect(observedInputs[0], same(firstInputs));
+      expect(observedInputs[1], same(secondInputs));
+    },
+  );
 
   group(
     'Track F/G — D4: dispose (kill) and detach (leave) are DISTINCT verbs',
@@ -444,6 +537,10 @@ void main() {
         'tg-1',
         workspaceDir: '${root.path}/new',
       );
+      final staleWorkspace = testWorkspace(
+        'tg-1',
+        workspaceDir: '${root.path}/stale',
+      );
       final provisions = <String>[];
       final oldServices = ServiceBundle(
         sourceControl: _WatchingSourceControl('old', provisions),
@@ -451,12 +548,15 @@ void main() {
       final newServices = ServiceBundle(
         sourceControl: _WatchingSourceControl('new', provisions),
       );
+      final staleServices = ServiceBundle(
+        sourceControl: _WatchingSourceControl('stale', provisions),
+      );
       final probedWorkspaces = <String>[];
       final reports = <AllocationReport>[];
       final transport = FakeRuntimeProvider();
       addTearDown(transport.close);
       final allocation = ProcessAllocation(
-        const _LatestDependencyCap(),
+        _LatestDependencyCap(newWorkspace.workspaceDir),
         AllocationInputs(
           args: stepArgs('tg-1/agent'),
           transport: transport,
@@ -489,7 +589,7 @@ void main() {
       owner.flush();
 
       final treeContext = FakeTreeContext(
-        values: {ServiceBundle: newServices, Workspace: newWorkspace},
+        values: {ServiceBundle: staleServices, Workspace: staleWorkspace},
       );
       await allocation.startOrAdopt(treeContext);
       allocation.deliverEventForTest(
@@ -498,12 +598,27 @@ void main() {
       );
       await _pump();
 
-      expect(provisions, ['new:${newWorkspace.workspaceDir}']);
+      expect(
+        provisions,
+        ['new:${newWorkspace.workspaceDir}'],
+        reason:
+            'the lifecycle-watched ServiceBundle and Workspace must win over '
+            'the stale call-scoped tree during provisioning',
+      );
       expect(
         transport.started.single.config.workDir,
         newWorkspace.workspaceDir,
+        reason:
+            'the spawn config must name the lifecycle-watched Workspace, not '
+            'the stale call-scoped tree Workspace',
       );
-      expect(probedWorkspaces, [newWorkspace.workspaceDir]);
+      expect(
+        probedWorkspaces,
+        [newWorkspace.workspaceDir],
+        reason:
+            'the work-signal probe must receive the lifecycle-watched '
+            'Workspace, not the stale call-scoped tree Workspace',
+      );
       expect(reports.whereType<AllocationCompleted>(), hasLength(1));
     },
   );
