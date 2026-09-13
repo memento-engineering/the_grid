@@ -18,6 +18,15 @@ import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
+import '../support/molecule_spawn_semaphore.dart';
+
+// The shared cross-process spawn semaphore covers only each state trigger
+// through verification of its exact START, never running/completion or a
+// non-START wait. Its START budget is max(30 seconds, 20 x measured
+// first-output latency).
+
+late MoleculeSpawnStartBudget _spawnStartBudget;
+
 /// The `code` circuit `track_c_session_scope_test.dart` also drives
 /// (`agent → verify → land`) — reused so the flat-mode assertions here read
 /// directly against that suite's own known-good shapes.
@@ -75,17 +84,21 @@ Future<void> _pumpUntil(
   bool Function() condition, {
   required String what,
   Duration timeout = _pumpUntilTimeout,
+  MoleculeSpawnStartBudget? startBudget,
 }) async {
+  final effectiveTimeout = startBudget?.timeout ?? timeout;
   final stopwatch = Stopwatch()..start();
-  while (stopwatch.elapsed < timeout) {
+  while (stopwatch.elapsed < effectiveTimeout) {
     if (condition()) return;
     await Future<void>.delayed(const Duration(milliseconds: 1));
   }
   if (condition()) return;
   stopwatch.stop();
   final elapsed = stopwatch.elapsed;
+  final diagnostic = startBudget == null ? '' : '; ${startBudget.diagnostic}';
   throw TestFailure(
-    'Timed out waiting for $what after ${elapsed.inMilliseconds} ms',
+    'Timed out waiting for $what after ${elapsed.inMilliseconds} ms'
+    '$diagnostic',
   );
 }
 
@@ -221,6 +234,10 @@ class _LiveArmProcessCap extends ProcessCapability {
 }
 
 void main() {
+  setUpAll(() async {
+    _spawnStartBudget = await MoleculeSpawnStartBudget.probe();
+  });
+
   test(
     '_pumpUntil fails loudly with its condition label on exhaustion',
     () async {
@@ -244,6 +261,58 @@ void main() {
       );
     },
   );
+
+  test(
+    'probe-derived START budget keeps the 30 second floor and scales at 20x',
+    () {
+      final floored = MoleculeSpawnStartBudget.derive(
+        const Duration(milliseconds: 1500),
+      );
+      final scaled = MoleculeSpawnStartBudget.derive(
+        const Duration(seconds: 5),
+      );
+
+      expect(floored.timeout, const Duration(seconds: 30));
+      expect(scaled.timeout, const Duration(seconds: 100));
+      expect(
+        scaled.diagnostic,
+        allOf(
+          contains('probe latency=5000ms'),
+          contains('derived START budget=100000ms'),
+          contains('minimum=30000ms'),
+          contains('multiplier=20x'),
+        ),
+      );
+    },
+  );
+
+  test('a START timeout appends the probe-derived budget diagnostic', () async {
+    const budget = MoleculeSpawnStartBudget(
+      probeLatency: Duration(milliseconds: 5),
+      timeout: Duration(milliseconds: 2),
+    );
+
+    await expectLater(
+      _pumpUntil(
+        () => false,
+        what: 'process sentinel to start',
+        startBudget: budget,
+      ),
+      throwsA(
+        isA<TestFailure>().having(
+          (failure) => failure.message,
+          'message',
+          matches(
+            RegExp(
+              r'^Timed out waiting for process sentinel to start after '
+              r'[0-9]+ ms; probe latency=5ms; derived START budget=2ms; '
+              r'minimum=30000ms; multiplier=20x$',
+            ),
+          ),
+        ),
+      ),
+    );
+  });
 
   test('_pumpUntil succeeds after 200 ms of busy microtasks', () async {
     var conditionMet = false;
@@ -496,18 +565,42 @@ void main() {
           return false;
         }
 
-        Future<void> finish(String path) async {
+        Future<void> finish(
+          String path, {
+          required Future<void> Function() trigger,
+        }) async {
           final name = 'tgdog-sess1/$path';
-          final beadId = switch (path) {
-            'tg-9/build' => currentBuildStepId,
-            'tg-9/critic' => 'tgdog-step9-critic',
-            'tg-9/land' => 'tgdog-step9-land',
-            _ => throw StateError('unknown step path $path'),
-          };
-          await _pumpUntil(
-            () => f.provider.started.any((s) => s.name == name),
-            what: 'process $name to start',
-          );
+          late final String beadId;
+          final priorStarts = f.provider.started
+              .where((started) => started.name == name)
+              .length;
+          await MoleculeSpawnSemaphore.run(() async {
+            await trigger();
+            beadId = switch (path) {
+              'tg-9/build' => currentBuildStepId,
+              'tg-9/critic' => 'tgdog-step9-critic',
+              'tg-9/land' => 'tgdog-step9-land',
+              _ => throw StateError('unknown step path $path'),
+            };
+            final expectedStarts = path == 'tg-9/build' ? priorStarts + 1 : 1;
+            await _pumpUntil(
+              () {
+                // A late async completion can dirty the tree after trigger's
+                // fixed microtask drain; render it while observing START.
+                m.owner.flush();
+                return f.provider.started
+                        .where((started) => started.name == name)
+                        .length ==
+                    expectedStarts;
+              },
+              what: 'process $name to start',
+              startBudget: _spawnStartBudget,
+            );
+            expect(
+              f.provider.started.where((started) => started.name == name),
+              hasLength(expectedStarts),
+            );
+          });
           f.provider.emit(SessionStarted(name: name, pid: 10, pgid: 10));
           await _pumpUntil(
             () => hasStepStamp(beadId, StepState.running),
@@ -538,13 +631,14 @@ void main() {
         );
         expect(f.runner.graphApplyCalls.single, isNot(contains('--ephemeral')));
 
-        await pushMolecule();
-        await finish('tg-9/build');
+        await finish('tg-9/build', trigger: pushMolecule);
         expect(hasStepStamp('tgdog-step9-build', StepState.running), isTrue);
         expect(hasStepStamp('tgdog-step9-build', StepState.complete), isTrue);
 
-        await pushMolecule(build: StepState.complete);
-        await finish('tg-9/critic');
+        await finish(
+          'tg-9/critic',
+          trigger: () => pushMolecule(build: StepState.complete),
+        );
         await pushMolecule(
           build: StepState.complete,
           critic: StepState.complete,
@@ -573,20 +667,24 @@ void main() {
           hasLength(1),
         );
 
-        await pushMolecule(
-          build: StepState.pending,
-          critic: StepState.complete,
-          criticGrade: 'A',
-          includeSuccessor: true,
+        await finish(
+          'tg-9/build',
+          trigger: () => pushMolecule(
+            build: StepState.pending,
+            critic: StepState.complete,
+            criticGrade: 'A',
+            includeSuccessor: true,
+          ),
         );
-        await finish('tg-9/build');
-        await pushMolecule(
-          build: StepState.complete,
-          critic: StepState.complete,
-          criticGrade: 'A',
-          includeSuccessor: true,
+        await finish(
+          'tg-9/land',
+          trigger: () => pushMolecule(
+            build: StepState.complete,
+            critic: StepState.complete,
+            criticGrade: 'A',
+            includeSuccessor: true,
+          ),
         );
-        await finish('tg-9/land');
         await pushMolecule(
           build: StepState.complete,
           critic: StepState.complete,

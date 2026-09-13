@@ -14,6 +14,15 @@ import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
 
+import 'support/molecule_spawn_semaphore.dart';
+
+// The shared cross-process spawn semaphore covers only each state trigger
+// through verification of its exact START, never running/completion or a
+// non-START wait. Its START budget is max(30 seconds, 20 x measured
+// first-output latency).
+
+late MoleculeSpawnStartBudget _spawnStartBudget;
+
 const _code = Circuit(
   id: 'code',
   terminalStepId: 'land',
@@ -66,11 +75,31 @@ Future<void> _pumpUntil(
   TreeOwner owner,
   bool Function() condition, {
   int maxRounds = 500,
+  MoleculeSpawnStartBudget? startBudget,
+  String? what,
 }) async {
-  for (var i = 0; i < maxRounds && !condition(); i++) {
+  if (startBudget == null) {
+    for (var i = 0; i < maxRounds && !condition(); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+      owner.flush();
+    }
+    return;
+  }
+
+  final label = what;
+  if (label == null) throw ArgumentError.notNull('what');
+  final stopwatch = Stopwatch()..start();
+  while (stopwatch.elapsed < startBudget.timeout) {
+    if (condition()) return;
     await Future<void>.delayed(const Duration(milliseconds: 1));
     owner.flush();
   }
+  if (condition()) return;
+  stopwatch.stop();
+  throw TestFailure(
+    'Timed out waiting for $label after ${stopwatch.elapsed.inMilliseconds} '
+    'ms; ${startBudget.diagnostic}',
+  );
 }
 
 Bead _task(String id) =>
@@ -223,6 +252,48 @@ List<Map<String, dynamic>> _updatesFor(RecordingBdRunner runner, String id) {
 }
 
 void main() {
+  setUpAll(() async {
+    _spawnStartBudget = await MoleculeSpawnStartBudget.probe();
+  });
+
+  test('START budget timeout is loud and requires what', () async {
+    final owner = TreeOwner();
+    addTearDown(owner.dispose);
+    const budget = MoleculeSpawnStartBudget(
+      probeLatency: Duration(milliseconds: 5),
+      timeout: Duration(milliseconds: 2),
+    );
+
+    await expectLater(
+      _pumpUntil(
+        owner,
+        () => false,
+        startBudget: budget,
+        what: 'process sentinel to start',
+      ),
+      throwsA(
+        isA<TestFailure>().having(
+          (failure) => failure.message,
+          'message',
+          matches(
+            RegExp(
+              r'^Timed out waiting for process sentinel to start after '
+              r'[0-9]+ ms; probe latency=5ms; derived START budget=2ms; '
+              r'minimum=30000ms; multiplier=20x$',
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await expectLater(
+      _pumpUntil(owner, () => false, startBudget: budget),
+      throwsA(
+        isA<ArgumentError>().having((error) => error.name, 'name', 'what'),
+      ),
+    );
+  });
+
   group('tg-4rw / I-10 — a dead session key mints fresh instead of wedging', () {
     test(
       'a lagging state snapshot refuses before the authored cross-link is projected',
@@ -539,11 +610,19 @@ void main() {
       m.owner.flush();
       await _pumpUntil(m.owner, () => f.runner.workCreates.length >= 2);
       expect(reg.events, isEmpty, reason: 'the joined pour still lags');
-      joined.push(
-        _joined({'tg-1': _moleculeProjection(sessionId: 'tgdog-sess1')}),
-      );
-      m.owner.flush();
-      await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
+      await MoleculeSpawnSemaphore.run(() async {
+        joined.push(
+          _joined({'tg-1': _moleculeProjection(sessionId: 'tgdog-sess1')}),
+        );
+        m.owner.flush();
+        await _pumpUntil(
+          m.owner,
+          () => reg.events.isNotEmpty,
+          startBudget: _spawnStartBudget,
+          what: 'process tgdog-sess1/tg-1/agent to start',
+        );
+        expect(reg.events, ['START agent(tgdog-sess1/tg-1/agent)']);
+      });
 
       // MINT: exactly one fresh session, plus its molecule pour (tg-eli
       // phase 2: every fresh mint pours a molecule graph) — the pre-fix
@@ -574,7 +653,6 @@ void main() {
 
       // The fresh round starts VIRGIN: the frontier mounts `agent`, NOT the dead
       // cursor's `verify` — a fresh session never inherits a dead row's cursor.
-      expect(reg.events, ['START agent(tgdog-sess1/tg-1/agent)']);
       expect(f.runner.neverShowOrSql, isTrue);
     });
 
@@ -621,21 +699,28 @@ void main() {
 
       // The join catches up: the dead key is gone (re-keyed) and the fresh
       // session projects its own cursor — `agent` done, so `verify` inflates.
-      joined.push(
-        _joined({
-          'tg-1': _moleculeProjection(
-            sessionId: 'tgdog-sess1',
-            states: const {
-              'agent': StepState.complete,
-              'verify': StepState.pending,
-              'land': StepState.pending,
-            },
-          ),
-        }),
-      );
-      m.owner.flush();
-      await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
-      expect(reg.events, ['START verify(tgdog-sess1/tg-1/verify)']);
+      await MoleculeSpawnSemaphore.run(() async {
+        joined.push(
+          _joined({
+            'tg-1': _moleculeProjection(
+              sessionId: 'tgdog-sess1',
+              states: const {
+                'agent': StepState.complete,
+                'verify': StepState.pending,
+                'land': StepState.pending,
+              },
+            ),
+          }),
+        );
+        m.owner.flush();
+        await _pumpUntil(
+          m.owner,
+          () => reg.events.isNotEmpty,
+          startBudget: _spawnStartBudget,
+          what: 'process tgdog-sess1/tg-1/verify to start',
+        );
+        expect(reg.events, ['START verify(tgdog-sess1/tg-1/verify)']);
+      });
       expect(f.runner.workCreates, hasLength(2));
     });
 
@@ -878,26 +963,34 @@ void main() {
       final f = buildFakes();
       final transport = _RecordingTransport();
       final reg = RecordingCapabilityRegistry(circuits: const {});
-      final m = _mount(
-        joined: JoinedSnapshotNotifier(
-          _joined(const {
-            'tg-1': SessionProjection(
-              workBeadId: 'tg-1',
-              sessionId: 'tgdog-live',
-              cursor: {'tg-1/agent': NodeCursor(state: StepState.running)},
-            ),
-          }),
-        ),
-        ctx: f.ctx,
-        registry: reg,
-        transport: transport,
-      );
-      addTearDown(m.owner.dispose);
-      await _pump();
-      m.owner.flush();
+      await MoleculeSpawnSemaphore.run(() async {
+        final m = _mount(
+          joined: JoinedSnapshotNotifier(
+            _joined(const {
+              'tg-1': SessionProjection(
+                workBeadId: 'tg-1',
+                sessionId: 'tgdog-live',
+                cursor: {'tg-1/agent': NodeCursor(state: StepState.running)},
+              ),
+            }),
+          ),
+          ctx: f.ctx,
+          registry: reg,
+          transport: transport,
+        );
+        addTearDown(m.owner.dispose);
+        await _pump();
+        m.owner.flush();
+        await _pumpUntil(
+          m.owner,
+          () => reg.events.isNotEmpty,
+          startBudget: _spawnStartBudget,
+          what: 'process tgdog-live/tg-1/agent to start',
+        );
+        expect(reg.events, ['START agent(tgdog-live/tg-1/agent)']);
+      });
 
       expect(f.runner.workCreates, isEmpty);
-      expect(reg.events, ['START agent(tgdog-live/tg-1/agent)']);
       expect(transport.flares, isEmpty);
     });
   });
