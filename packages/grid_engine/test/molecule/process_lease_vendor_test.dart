@@ -132,6 +132,8 @@ class _ProvisionSourceControl implements SourceControl {
   String branchFor(String beadId) => 'grid/$beadId';
   @override
   String get baseBranch => 'main';
+  @override
+  String? baseShaFor(String beadId) => null;
 
   @override
   Future<void> provisionWorkspace({
@@ -155,6 +157,8 @@ class _BlockingProvisionSourceControl implements SourceControl {
   String branchFor(String beadId) => 'grid/$beadId';
   @override
   String get baseBranch => 'main';
+  @override
+  String? baseShaFor(String beadId) => null;
 
   @override
   Future<void> provisionWorkspace({

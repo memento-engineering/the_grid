@@ -437,6 +437,8 @@ class _RecordingProvisionSourceControl implements SourceControl {
   String branchFor(String beadId) => 'grid/$beadId';
   @override
   String get baseBranch => 'main';
+  @override
+  String? baseShaFor(String beadId) => null;
 
   @override
   Future<void> provisionWorkspace({
@@ -466,6 +468,8 @@ class _DerivingSourceControl implements SourceControl {
   String branchFor(String beadId) => 'custom/$beadId';
   @override
   String get baseBranch => 'trunk';
+  @override
+  String? baseShaFor(String beadId) => null;
 
   @override
   Future<void> provisionWorkspace({

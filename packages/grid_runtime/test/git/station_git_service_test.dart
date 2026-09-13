@@ -106,12 +106,20 @@ void main() {
         final sink = _CapturingSink();
         final seeded = await seedOriginAndClone();
         final svc = serviceRecording(sink);
+        final repository = StationGitRepository(service: svc);
+        addTearDown(repository.dispose);
+        final snapshots = <Map<String, BeadWorktree>>[];
+        final subscription = repository.snapshots.listen(snapshots.add);
+        addTearDown(subscription.cancel);
         final root = await svc.registerRootCheckout(
           path: seeded.root,
           substation: 'tgdog',
         );
 
-        final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-1');
+        final wt = await repository.provisionWorktree(
+          root: root,
+          beadId: 'lenny-1',
+        );
 
         final record = sink.single();
         expect(record.recordType, 'worktree.provisioned');
@@ -127,24 +135,62 @@ void main() {
         );
         expect(fact['commit_sha'], head.output.trim());
         expect((fact['commit_sha']! as String), hasLength(40));
+        expect(wt.baseSha, head.output.trim());
+        expect(repository.baseShaFor('lenny-1'), head.output.trim());
+        expect(snapshots, [
+          <String, BeadWorktree>{'lenny-1': wt},
+        ]);
       },
     );
 
-    test('an ADOPTED branch records adopted_existing=true', () async {
+    test('an ADOPTED branch refreshes the retained SHA and records '
+        'adopted_existing=true', () async {
       final sink = _CapturingSink();
       final seeded = await seedOriginAndClone();
-      final svc = serviceRecording(sink);
+      final calls = <List<String>>[];
+      final svc = StationGitService(
+        runner: _RecordingGitRunner(runner, calls),
+        prOpener: _FakePrOpener(),
+        recorder: StationTrajectoryRecorder(sink: sink),
+      );
+      final repository = StationGitRepository(service: svc);
+      addTearDown(repository.dispose);
       final root = await svc.registerRootCheckout(
         path: seeded.root,
         substation: 'tgdog',
       );
-      final wt = await svc.provisionWorktree(root: root, beadId: 'tg-wedge');
+      final wt = await repository.provisionWorktree(
+        root: root,
+        beadId: 'tg-wedge',
+      );
+      final originalSha = repository.baseShaFor('tg-wedge');
+      File(p.join(wt.path, 'advanced.txt')).writeAsStringSync('advanced\n');
+      await git(wt.path, const <String>['add', '-A']);
+      await git(wt.path, const <String>['commit', '-m', 'advance branch']);
+      final advanced = await runner.run(
+        workingDirectory: wt.path,
+        args: const <String>['rev-parse', 'HEAD'],
+      );
       // The tg-e0p wedge: the worktree goes, the branch survives.
       await git(seeded.root, <String>['worktree', 'remove', wt.path]);
       sink.records.clear();
+      calls.clear();
 
-      await svc.provisionWorktree(root: root, beadId: 'tg-wedge');
-      expect(sink.single().payloadToJson()['adopted_existing'], isTrue);
+      final adopted = await repository.provisionWorktree(
+        root: root,
+        beadId: 'tg-wedge',
+      );
+      final record = sink.single();
+      final fact = {...record.correlationToJson(), ...record.payloadToJson()};
+      expect(fact['adopted_existing'], isTrue);
+      expect(fact['commit_sha'], advanced.output.trim());
+      expect(adopted.baseSha, advanced.output.trim());
+      expect(repository.baseShaFor('tg-wedge'), advanced.output.trim());
+      expect(repository.baseShaFor('tg-wedge'), isNot(originalSha));
+      expect(
+        calls.where((args) => args.join(' ') == 'rev-parse HEAD'),
+        hasLength(1),
+      );
     });
 
     test(
@@ -163,6 +209,7 @@ void main() {
         final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-2');
         expect(Directory(wt.path).existsSync(), isTrue);
         expect(wt.branch, 'grid/lenny-2');
+        expect(wt.baseSha, hasLength(40));
       },
     );
 
@@ -179,11 +226,12 @@ void main() {
           beadId: 'lenny-3',
         );
         expect(Directory(wt.path).existsSync(), isTrue);
+        expect(wt.baseSha, hasLength(40));
       },
     );
 
-    test('a non-accepting recorder SKIPS the base-sha probe — no extra git '
-        'subprocess when the observation would be skipped anyway', () async {
+    test('a non-accepting recorder still probes HEAD exactly once and the '
+        'repository retains it', () async {
       final seeded = await seedOriginAndClone();
       final calls = <List<String>>[];
       final svc = StationGitService(
@@ -191,22 +239,57 @@ void main() {
         prOpener: _FakePrOpener(),
         // The default recorder: StationTrajectoryRecorder.disabled().
       );
+      final repository = StationGitRepository(service: svc);
+      addTearDown(repository.dispose);
       final root = await svc.registerRootCheckout(
         path: seeded.root,
         substation: 'tgdog',
       );
       calls.clear();
-      final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-4');
+      final wt = await repository.provisionWorktree(
+        root: root,
+        beadId: 'lenny-4',
+      );
       expect(Directory(wt.path).existsSync(), isTrue, reason: 'unchanged');
       expect(
         calls.where((args) => args.join(' ') == 'rev-parse HEAD'),
-        isEmpty,
+        hasLength(1),
         reason:
-            'the rev-parse\'s ONLY consumer is the record; a dry station, '
-            'an unprovisioned home, and every provisioning test pay nothing',
+            'the provision result owns one HEAD fact regardless of trajectory '
+            'posture; it must not add a second read path',
       );
-      // The positive control lives above: the recording service DOES probe
-      // (the fresh-mint test reads commit_sha off the record).
+      expect(repository.baseShaFor('lenny-4'), wt.baseSha);
+      expect(repository.baseShaFor('lenny-4'), hasLength(40));
+    });
+
+    test('a failed adoption-time HEAD probe clears the repository\'s stale '
+        'SHA without failing provisioning', () async {
+      final seeded = await seedOriginAndClone();
+      final runnerWithFailure = _SwitchableHeadGitRunner(runner);
+      final svc = StationGitService(
+        runner: runnerWithFailure,
+        prOpener: _FakePrOpener(),
+      );
+      final repository = StationGitRepository(service: svc);
+      addTearDown(repository.dispose);
+      final root = await svc.registerRootCheckout(
+        path: seeded.root,
+        substation: 'tgdog',
+      );
+      final first = await repository.provisionWorktree(
+        root: root,
+        beadId: 'lenny-null',
+      );
+      expect(repository.baseShaFor('lenny-null'), first.baseSha);
+      await git(seeded.root, <String>['worktree', 'remove', first.path]);
+
+      runnerWithFailure.failHeadProbe = true;
+      final adopted = await repository.provisionWorktree(
+        root: root,
+        beadId: 'lenny-null',
+      );
+      expect(adopted.baseSha, isNull);
+      expect(repository.baseShaFor('lenny-null'), isNull);
     });
   });
 
@@ -762,6 +845,28 @@ final class _RecordingGitRunner implements GitRunner {
     required List<String> args,
   }) {
     calls.add(List<String>.unmodifiable(args));
+    return _inner.run(workingDirectory: workingDirectory, args: args);
+  }
+}
+
+/// Delegates every command except an operator-selected HEAD probe. This pins
+/// the non-fatal probe contract without replacing the real worktree-add path.
+final class _SwitchableHeadGitRunner implements GitRunner {
+  _SwitchableHeadGitRunner(this._inner);
+
+  final GitRunner _inner;
+  bool failHeadProbe = false;
+
+  @override
+  Future<GitRunResult> run({
+    required String workingDirectory,
+    required List<String> args,
+  }) {
+    if (failHeadProbe && args.join(' ') == 'rev-parse HEAD') {
+      return Future<GitRunResult>.value(
+        const GitRunResult(exitCode: 1, output: 'HEAD unavailable'),
+      );
+    }
     return _inner.run(workingDirectory: workingDirectory, args: args);
   }
 }

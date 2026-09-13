@@ -105,6 +105,7 @@ export 'src/git/station_git_service.dart'
     show
         BeadWorktree,
         ReapWorktree,
+        StationGitRepository,
         StationGitService,
         LandResult,
         ReapOutcome,

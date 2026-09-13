@@ -87,6 +87,8 @@ class _RecordingProvisionSourceControl implements SourceControl {
   String branchFor(String beadId) => 'grid/$beadId';
   @override
   String get baseBranch => 'main';
+  @override
+  String? baseShaFor(String beadId) => null;
 
   @override
   Future<void> provisionWorkspace({
@@ -182,6 +184,32 @@ void main() {
       expect(a, b);
       expect(a.hashCode, b.hashCode);
       expect(a, isNot(c));
+    });
+
+    test('Workspace equality includes baseSha without changing its text', () {
+      const unknown = Workspace(
+        workspaceDir: '/w/tg-1',
+        branch: 'grid/tg-1',
+        baseBranch: 'main',
+      );
+      const known = Workspace(
+        workspaceDir: '/w/tg-1',
+        branch: 'grid/tg-1',
+        baseBranch: 'main',
+        baseSha: '0123456789012345678901234567890123456789',
+      );
+      const sameKnown = Workspace(
+        workspaceDir: '/w/tg-1',
+        branch: 'grid/tg-1',
+        baseBranch: 'main',
+        baseSha: '0123456789012345678901234567890123456789',
+      );
+
+      expect(known, sameKnown);
+      expect(known.hashCode, sameKnown.hashCode);
+      expect(known, isNot(unknown));
+      expect(known.toString(), unknown.toString());
+      expect(known.toString(), 'Workspace(/w/tg-1 @ grid/tg-1 → main)');
     });
 
     test('AdoptFence.hasIdentity is false only when all-null', () {

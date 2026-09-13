@@ -96,6 +96,9 @@ class _FakeSourceControl implements SourceControl {
   String get baseBranch => 'main';
 
   @override
+  String? baseShaFor(String beadId) => null;
+
+  @override
   String branchFor(String beadId) => 'grid/$beadId';
 
   @override
