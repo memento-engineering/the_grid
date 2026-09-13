@@ -303,6 +303,72 @@ void main() {
       },
     );
 
+    test('grid/rework finds a gated session through bare and round-suffixed '
+        'work keys', () async {
+      for (final entry
+          in <({String sessionId, String workBeadKey, String retiredKey})>[
+            (
+              sessionId: 'tgdog-bare',
+              workBeadKey: 'tg-1',
+              retiredKey: reworkKeyFor('tg-1', 1),
+            ),
+            (
+              sessionId: 'tgdog-round',
+              workBeadKey: reworkKeyFor('tg-1', 1),
+              retiredKey: reworkKeyFor('tg-1', 2),
+            ),
+          ]) {
+        final stateRunner = _RecordingRunner();
+        final workRunner = _RecordingRunner();
+        final handler = _handler(
+          state: _Source(
+            _snapshot([
+              _session(
+                entry.sessionId,
+                workBead: entry.workBeadKey,
+                molecule: true,
+                open: true,
+              ),
+              Bead(
+                id: '${entry.sessionId}-gate',
+                issueType: GridIssueTypes.gate,
+                metadata: {
+                  'rig': 'tgdog',
+                  'blocks': entry.sessionId,
+                  'node': 'tg-1/review/route',
+                },
+              ),
+            ]),
+          ),
+          work: _Source(_workSnapshot()),
+          stateRunner: stateRunner,
+          workRunner: workRunner,
+        );
+
+        final result = await handler(
+          const GridCommandRequest.rework(
+            beadId: 'tg-1',
+            note: 'carry critique',
+          ),
+        );
+
+        expect(result, isA<GridCommandCompleted>());
+        expect(
+          stateRunner.calls,
+          contains(
+            allOf(
+              containsAllInOrder(['update', entry.sessionId]),
+              contains('work_bead=${entry.retiredKey}'),
+            ),
+          ),
+        );
+        final noteWrite = workRunner.calls.singleWhere(
+          (call) => call.contains('--append-notes'),
+        );
+        expect(noteWrite.join(' '), contains('carry critique'));
+      }
+    });
+
     test(
       'grid/rework publishes its own retire and replay does not retire twice',
       () async {

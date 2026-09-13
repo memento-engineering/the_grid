@@ -171,6 +171,7 @@ final class _UnsnapshottedReservation {
     required this.writeState,
     required this.reservationToken,
     required this.since,
+    this.retiredSessionId,
   });
 
   final _ScopeKey scopeKey;
@@ -179,6 +180,8 @@ final class _UnsnapshottedReservation {
   final DateTime since;
   _MountAttemptWriteState writeState;
   String? sessionId;
+  final String? retiredSessionId;
+  bool retiredSessionClosed = false;
   bool minting = false;
 }
 
@@ -385,13 +388,13 @@ final class StationAdmissionAuthority {
 
     final durableRows = <String, SessionProjection>{};
     for (final entry in snapshot.sessionsByWorkBead.entries) {
-      final row = entry.value;
+      final row = _effectiveSession(entry.value);
       final id = row.sessionId;
       durableRows[id != null && id.isNotEmpty ? id : 'work:${entry.key}'] = row;
     }
     for (final entry in snapshot.surplusSessionsByWorkBead.entries) {
       for (var index = 0; index < entry.value.length; index++) {
-        final row = entry.value[index];
+        final row = _effectiveSession(entry.value[index]);
         final id = row.sessionId;
         durableRows[id != null && id.isNotEmpty
                 ? id
@@ -469,7 +472,7 @@ final class StationAdmissionAuthority {
           continue;
         }
       }
-      final linked = snapshot.linkedSessions(bead.id);
+      final linked = _effectiveLinkedSessions(snapshot, bead.id);
       final verdict = linkedSessionVerdictOf(linked);
       if (!bead.isClosed && verdict is BlockedLinkedSession) {
         if (sessionDispositionOf(verdict.session) is PausedSession) {
@@ -571,6 +574,12 @@ final class StationAdmissionAuthority {
             );
             continue;
           }
+          // An OPEN #rN row is linked so admission can see it, but it is also
+          // the durable retire signal. Reserve its successor now; the mounted
+          // SessionScope closes this exact predecessor before consuming the
+          // reservation. Treating it as an ordinary adoption would strand the
+          // rework transition at the tombstone.
+          if (retiredRound) break;
           final sessionId = session.sessionId;
           final awaitsReadmission =
               session.pauseState == SessionPauseState.resumed &&
@@ -732,6 +741,7 @@ final class StationAdmissionAuthority {
           writeState: _MountAttemptWriteState.recorded,
           reservationToken: Object(),
           since: _clock().toUtc(),
+          retiredSessionId: retiredRound ? candidate.session?.sessionId : null,
         );
         _reservations[bead.id] = reservation;
         admitted.add(_reservationValue(candidate, reservation));
@@ -1000,7 +1010,7 @@ final class StationAdmissionAuthority {
     required Map<String, String> metadata,
   }) async {
     final live = <String, SessionProjection>{};
-    final linked = snapshot.linkedSessions(candidate.bead.id);
+    final linked = _effectiveLinkedSessions(snapshot, candidate.bead.id);
     for (var index = 0; index < linked.length; index += 1) {
       final row = linked[index];
       final id = row.sessionId;
@@ -1226,6 +1236,10 @@ final class StationAdmissionAuthority {
       closeReason: 'reworked',
       trigger: GateCloseCause.supersededRound,
     );
+    final reservation = _reservations[workBeadId];
+    if (reservation?.retiredSessionId == sessionId) {
+      reservation!.retiredSessionClosed = true;
+    }
     _releaseSession(workBeadId, sessionId);
     _notifyListeners();
   }
@@ -1550,6 +1564,28 @@ final class StationAdmissionAuthority {
       onlyScope: reservation?.scopeKey ?? _lastScopeByBead[workBeadId],
     );
   }
+
+  SessionProjection _effectiveSession(SessionProjection row) {
+    final sessionId = row.sessionId;
+    if (row.isTerminal ||
+        sessionId == null ||
+        !_reservations.values.any(
+          (reservation) =>
+              reservation.retiredSessionClosed &&
+              reservation.retiredSessionId == sessionId,
+        )) {
+      return row;
+    }
+    return row.copyWith(isTerminal: true);
+  }
+
+  List<SessionProjection> _effectiveLinkedSessions(
+    JoinedSnapshot snapshot,
+    String workBeadId,
+  ) => snapshot
+      .linkedSessions(workBeadId)
+      .map(_effectiveSession)
+      .toList(growable: false);
 
   void _scheduleRetryInvalidation(String workBeadId) {
     if (_disposed || _retryTimers.containsKey(workBeadId)) return;
