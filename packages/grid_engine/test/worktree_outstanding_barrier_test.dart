@@ -363,10 +363,78 @@ void main() {
     });
 
     test('an IDLE but healthy station admits', () {
-      // No rows at all and a beat one tick old: the station is quiet, not
-      // wedged.
+      // DISCRIMINATING: the mirror is not empty — it holds a live worktree
+      // under a LIVE session, the shape a station at rest actually has — and
+      // the beat is one tick old. The clause must clear it on the JOIN (the
+      // session is not terminal) rather than on an empty read, and the 90 s
+      // grace must not trip on a quiet station.
       final decision = _evaluate(
-        _read(lastTickAt: _now.subtract(const Duration(seconds: 30))),
+        _read(
+          identities: [_Identity(sessionId: 's1', worktree: '/w/tg-1')],
+          heads: [_Head(sessionId: 's1', workBeadId: _workBead)],
+          lastTickAt: _now.subtract(const Duration(seconds: 30)),
+        ),
+        linked: const [
+          SessionProjection(workBeadId: _workBead, sessionId: 's1'),
+        ],
+      );
+
+      expect(decision, isA<MountEligible>());
+    });
+
+    test('a COMPROMISED mirror does NOT disarm the barrier', () {
+      // THE FAIL-OPEN THAT MUST NOT EXIST. `_latchMirrorCompromised` is
+      // reached from the mode latch, the fence-out, the halt and the degrade
+      // WITHOUT `_haltAdmission` — only a decision-bearing drop or suppression
+      // halts admission — so a harness with an empty append queue can latch
+      // its mirrors compromised while `TrajectoryAdmissionHalt` stays
+      // unlatched. If health disarmed the read, that harness would re-mount
+      // every stranded worktree under the cut.
+      final decision = _evaluate(
+        _read(
+          identities: [_Identity(sessionId: 's1', worktree: '/w/tg-1')],
+          heads: [_Head(sessionId: 's1', workBeadId: _workBead, isOpen: false)],
+          health: TrajectorySnapshotHealth.compromised,
+        ),
+      );
+
+      expect(decision, isA<MountRefused>());
+      expect((decision as MountRefused).clause, contains('/w/tg-1'));
+    });
+
+    test('a mirror that stops beating fails closed whatever its health', () {
+      // A harness that leaves `live` returns before `noteTickAt`, so the beat
+      // freezes and the SAME three-tick rule catches it — fail-closed, after
+      // the same grace the heal uses, not by a health enum.
+      for (final health in TrajectorySnapshotHealth.values) {
+        final decision = _evaluate(
+          _read(
+            lastTickAt: _now.subtract(
+              kWorktreeOutstandingStaleAfter + const Duration(seconds: 1),
+            ),
+            health: health,
+          ),
+        );
+
+        expect(decision, isA<MountRefused>(), reason: '${health.name} wedges');
+        expect((decision as MountRefused).clause, contains(health.name));
+      }
+    });
+
+    test('a freshly compromised mirror still admits inside the grace', () {
+      // Health alone refuses NOTHING: within three tick intervals the rows are
+      // as fresh as any live mirror's, so the grace holds exactly as it does
+      // for an idle station.
+      final decision = _evaluate(
+        _read(
+          identities: [_Identity(sessionId: 's1', worktree: '/w/tg-1')],
+          heads: [_Head(sessionId: 's1', workBeadId: _workBead)],
+          lastTickAt: _now.subtract(const Duration(seconds: 30)),
+          health: TrajectorySnapshotHealth.compromised,
+        ),
+        linked: const [
+          SessionProjection(workBeadId: _workBead, sessionId: 's1'),
+        ],
       );
 
       expect(decision, isA<MountEligible>());
@@ -622,64 +690,87 @@ void main() {
       }
     });
 
-    test('the AUTHORITY site refuses an outstanding candidate', () async {
-      final runner = RecordingBdRunner();
-      final services = StationServices(
-        provider: FakeRuntimeProvider(),
-        writer: StationBeadWriter(
-          bd: BdCliService(runner),
-          reader: runner,
-          ownership: BeadOwnershipPredicate(const {'tg'}),
-        ),
-        stateSubstation: 'tg',
-        maxConcurrentWork: 2,
-        admissionBarrier: AdmissionBarrier(
-          recorder: StationTrajectoryRecorder(sink: _CapturingSink()),
-          cut: true,
-          clock: () => _now,
-        ),
-      );
-      addTearDown(services.dispose);
+    // The barrier's fixture, shared by both call-site tests: a live P6 row
+    // under a P1-CLOSED session of the candidate bead.
+    WorktreeOutstandingRead outstandingRead() => _read(
+      identities: [_Identity(sessionId: 's1', worktree: '/w/tg-1')],
+      heads: [_Head(sessionId: 's1', workBeadId: _workBead, isOpen: false)],
+    );
 
-      final bead = _task();
-      final batch = services.admission.admitPending(
-        JoinedSnapshot(
-          graph: GraphSnapshot.fromParts(
-            beads: [bead],
-            dependencies: const [],
-            readyIds: {bead.id},
-            capturedAt: _now,
+    // THE CONTROL. Same clock, same beat, EMPTY P6 mirror. Every behavioural
+    // call-site assertion below is paired with this one, because a refusal
+    // that also fires here came from the WEDGED branch and would pass with the
+    // P6 → P1 join deleted.
+    WorktreeOutstandingRead clearRead() => _read();
+
+    test('the AUTHORITY site refuses on the JOIN, and admits without it', () {
+      StationAdmissionBatch admit(WorktreeOutstandingRead read) {
+        final runner = RecordingBdRunner();
+        final services = StationServices(
+          provider: FakeRuntimeProvider(),
+          writer: StationBeadWriter(
+            bd: BdCliService(runner),
+            reader: runner,
+            ownership: BeadOwnershipPredicate(const {'tg'}),
           ),
-          worktreeOutstanding: _read(
-            identities: [_Identity(sessionId: 's1', worktree: '/w/tg-1')],
-            heads: [
-              _Head(sessionId: 's1', workBeadId: _workBead, isOpen: false),
-            ],
-          ),
-        ),
-        const SubstationConfig(
-          substationId: 'tg',
-          ownedSubstations: {'tg'},
+          stateSubstation: 'tg',
           maxConcurrentWork: 2,
-        ),
-        const ServiceBundle(),
-        [StationAdmissionCandidate(bead: bead, session: null)],
+          // THE CLOCK SEAM. Without it the authority evaluates the clause at
+          // the wall clock, the fixture's beat reads 3+ intervals old, and
+          // every refusal below arrives through the wedged branch instead of
+          // the join.
+          clock: () => _now,
+          admissionBarrier: AdmissionBarrier(
+            recorder: StationTrajectoryRecorder(sink: _CapturingSink()),
+            cut: true,
+            clock: () => _now,
+          ),
+        );
+        addTearDown(services.dispose);
+
+        final bead = _task();
+        return services.admission.admitPending(
+          JoinedSnapshot(
+            graph: GraphSnapshot.fromParts(
+              beads: [bead],
+              dependencies: const [],
+              readyIds: {bead.id},
+              capturedAt: _now,
+            ),
+            worktreeOutstanding: read,
+          ),
+          const SubstationConfig(
+            substationId: 'tg',
+            ownedSubstations: {'tg'},
+            maxConcurrentWork: 2,
+          ),
+          const ServiceBundle(),
+          [StationAdmissionCandidate(bead: bead, session: null)],
+        );
+      }
+
+      final refusing = admit(outstandingRead());
+      expect(refusing.admitted, isEmpty);
+      expect(refusing.refused.single.clause, kWorktreeOutstandingClause);
+      expect(
+        refusing.refused.single.detail,
+        allOf(contains('s1'), contains('/w/tg-1'), contains('p1-closed')),
+        reason: 'the refusal is the JOIN, not the heartbeat',
       );
 
-      expect(batch.admitted, isEmpty);
-      expect(batch.refused.single.clause, kWorktreeOutstandingClause);
+      final clear = admit(clearRead());
+      expect(clear.refused, isEmpty);
+      expect({
+        for (final reservation in clear.admitted) reservation.candidate.bead.id,
+      }, {_workBead});
     });
 
     test('UNDER SHADOW the mount set is identical with and without it', () {
       final sink = _CapturingSink();
       final accounting = DualReadAccounting();
-      final outstanding = _read(
-        identities: [_Identity(sessionId: 's1', worktree: '/w/tg-1')],
-        heads: [_Head(sessionId: 's1', workBeadId: _workBead, isOpen: false)],
-      );
       final bead = _task();
 
-      Set<String> mountSet({required bool composed}) {
+      Set<String> mountSet({required bool composed, bool cut = false}) {
         final services = StationServices(
           provider: FakeRuntimeProvider(),
           writer: StationBeadWriter(
@@ -689,6 +780,7 @@ void main() {
           ),
           stateSubstation: 'tg',
           maxConcurrentWork: 2,
+          clock: () => _now,
           admissionBarrier: !composed
               ? null
               : AdmissionBarrier(
@@ -696,7 +788,8 @@ void main() {
                     sink: sink,
                     substationPrefixes: const {'tg'},
                   ),
-                  accounting: accounting,
+                  accounting: cut ? null : accounting,
+                  cut: cut,
                   clock: () => _now,
                 ),
         );
@@ -709,11 +802,10 @@ void main() {
               readyIds: {bead.id},
               capturedAt: _now,
             ),
-            // The read is armed either way; what differs is whether the
-            // barrier's observer is composed at all.
-            worktreeOutstanding: composed
-                ? outstanding
-                : const WorktreeOutstandingRead.disarmed(),
+            // ARMED in every arm — the candidate really does hold an
+            // outstanding worktree. What differs is only whether the barrier's
+            // observer is composed, and under which posture.
+            worktreeOutstanding: outstandingRead(),
             eligibilityBasisRevisionsByBeadId: const {_workBead: '1-abc'},
           ),
           const SubstationConfig(
@@ -738,65 +830,78 @@ void main() {
       );
       expect(accounting.barrierWouldRefuse, 1, reason: 'but it COUNTS');
       expect(sink.records, isEmpty);
+      // …and the counted would-refuse is a REAL one: the same snapshot under
+      // the cut takes the candidate out of the mount set.
+      expect(
+        mountSet(composed: true, cut: true),
+        isEmpty,
+        reason: 'the shadow counter counts the decision the cut would make',
+      );
     });
 
-    test('the OFFLINE site refuses an outstanding candidate', () {
-      final owner = TreeOwner();
-      addTearDown(owner.dispose);
-      final bead = _task();
-      final joined = JoinedSnapshotNotifier(
-        JoinedSnapshot(
-          graph: GraphSnapshot.fromParts(
-            beads: [bead],
-            dependencies: const [],
-            readyIds: {bead.id},
-            capturedAt: _now,
-          ),
-          worktreeOutstanding: _read(
-            identities: [_Identity(sessionId: 's1', worktree: '/w/tg-1')],
-            heads: [
-              _Head(sessionId: 's1', workBeadId: _workBead, isOpen: false),
-            ],
-          ),
-        ),
-      );
-      addTearDown(joined.dispose);
-
-      final root = owner.mountRoot(
-        ProviderScope(
-          child: InheritedSeed<TrajectoryRecorderScope>(
-            value: TrajectoryRecorderScope(
-              StationTrajectoryRecorder(sink: _CapturingSink()),
-              barrier: AdmissionBarrier(
-                recorder: StationTrajectoryRecorder(sink: _CapturingSink()),
-                cut: true,
-                clock: () => _now,
-              ),
+    test('the OFFLINE site refuses on the JOIN, and admits without it', () {
+      List<WorkBead> mounted(WorktreeOutstandingRead read) {
+        final owner = TreeOwner();
+        addTearDown(owner.dispose);
+        final bead = _task();
+        final joined = JoinedSnapshotNotifier(
+          JoinedSnapshot(
+            graph: GraphSnapshot.fromParts(
+              beads: [bead],
+              dependencies: const [],
+              readyIds: {bead.id},
+              capturedAt: _now,
             ),
-            child: InheritedSeed<JoinedSnapshotNotifier>(
-              value: joined,
-              child: InheritedSeed<SessionResolver>(
-                value: _IdleResolver(),
-                child: Station([
-                  SubstationScope(
-                    configNotifier: SubstationConfigNotifier(
-                      const SubstationConfig(
-                        substationId: 'test',
-                        ownedSubstations: {'tg'},
-                        maxConcurrentWork: 10,
+            worktreeOutstanding: read,
+          ),
+        );
+        addTearDown(joined.dispose);
+
+        final root = owner.mountRoot(
+          ProviderScope(
+            child: InheritedSeed<TrajectoryRecorderScope>(
+              value: TrajectoryRecorderScope(
+                StationTrajectoryRecorder(sink: _CapturingSink()),
+                // The offline path has no clock of its own: the barrier's IS
+                // the clause's clock at this site.
+                barrier: AdmissionBarrier(
+                  recorder: StationTrajectoryRecorder(sink: _CapturingSink()),
+                  cut: true,
+                  clock: () => _now,
+                ),
+              ),
+              child: InheritedSeed<JoinedSnapshotNotifier>(
+                value: joined,
+                child: InheritedSeed<SessionResolver>(
+                  value: _IdleResolver(),
+                  child: Station([
+                    SubstationScope(
+                      configNotifier: SubstationConfigNotifier(
+                        const SubstationConfig(
+                          substationId: 'test',
+                          ownedSubstations: {'tg'},
+                          maxConcurrentWork: 10,
+                        ),
                       ),
+                      services: const ServiceBundle(),
                     ),
-                    services: const ServiceBundle(),
-                  ),
-                ]),
+                  ]),
+                ),
               ),
             ),
           ),
-        ),
-      );
-      owner.flush();
+        );
+        owner.flush();
+        return _workBeads(root);
+      }
 
-      expect(_workBeads(root), isEmpty);
+      expect(mounted(outstandingRead()), isEmpty);
+      expect(
+        [for (final work in mounted(clearRead())) work.bead.id],
+        [_workBead],
+        reason: 'an EMPTY P6 mirror at the same beat mounts — so the refusal '
+            'above is the join, not the heartbeat',
+      );
     });
   });
 }

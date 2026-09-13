@@ -157,9 +157,6 @@ const String kTeardownReplayUnknownReason = 'teardown-replay';
 /// OBSERVED in the ledger — which is what an observer append is.
 const String kExternalCloseUnknownReason = 'external-close';
 
-/// `provenance_basis` for the tick's `worktree.reaped` backfill (§2.4
-/// obligation 2): the legacy reap already ran, the record never landed — the
-/// named non-atomic crash class, healed record-only.
 /// The clause the worktree-outstanding barrier refuses and restores under —
 /// the `<clause>` hole of BOTH ratified admission keys (cut-wiring §W2.4
 /// W2-B).
@@ -171,6 +168,9 @@ const String kExternalCloseUnknownReason = 'external-close';
 /// away from the gate that writes it.
 const String kWorktreeOutstandingClause = 'worktree-outstanding';
 
+/// `provenance_basis` for the tick's `worktree.reaped` backfill (§2.4
+/// obligation 2): the legacy reap already ran, the record never landed — the
+/// named non-atomic crash class, healed record-only.
 const String kTickReapedBackfillBasis = 'tick-reaped-backfill';
 
 /// `provenance_basis` for the tick's settling terminal (§2.4 obligation 1):

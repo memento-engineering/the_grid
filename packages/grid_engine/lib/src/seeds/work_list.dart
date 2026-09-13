@@ -369,6 +369,9 @@ class _WorkListState extends State<WorkList>
         snapshotRevOf: _snapshot.eligibilityBasisRevisionOf,
         observeForm: _barrier?.observeForm ?? true,
         onFinding: _barrier?.observe,
+        // The offline path owns no clock; the barrier's is the one instant
+        // both composition sites judge the heartbeat against.
+        clock: _barrier?.clock,
       ),
     ], services.mountEligibility);
     final mounted = <StationAdmissionReservation>[];

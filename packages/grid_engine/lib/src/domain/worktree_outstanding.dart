@@ -28,6 +28,10 @@
 /// **Staleness fails closed only on a WEDGED harness.** The clause reads the
 /// tick-stamped mirror heartbeat and refuses only after no beat for three tick
 /// intervals — the same grace the heal uses. An idle-healthy station admits.
+/// The heartbeat, and NOT the mirror's health enum, is the whole staleness
+/// rule: a harness that leaves `live` stops beating, so a compromised mirror
+/// reaches the same wedged refusal by the same grace rather than disarming the
+/// barrier it is the reason for.
 library;
 
 import 'package:grid_runtime/grid_runtime.dart' show kWorktreeOutstandingClause;
@@ -100,18 +104,31 @@ final class OutstandingWorktree {
 final class WorktreeOutstandingRead {
   /// Builds the read over the two ambient mirrors.
   ///
-  /// Either may be null — an offline or trajectory-less composition passes
-  /// neither and the read is [disarmed]. A P6 mirror whose health is not
-  /// `live` also disarms: a disengaged mirror is not evidence, and under the
-  /// cut a compromised mirror already halts admission through its own breaker,
-  /// so the barrier never doubles as a second halt.
+  /// A null P6 mirror is the ONLY thing that disarms the read: an offline or
+  /// trajectory-less composition has no fold to consult, and a clause with no
+  /// fold refuses nothing.
+  ///
+  /// **A non-`live` mirror health does NOT disarm** — that would be a
+  /// fail-OPEN on exactly the case the barrier exists for. Nothing else gates
+  /// admission on mirror health: the compromised latch
+  /// (`_latchMirrorCompromised`) is reached from the mode latch, the fence-out,
+  /// the halt and the degrade WITHOUT `_haltAdmission`, which only a
+  /// decision-bearing drop or suppression reaches, so a harness that latches
+  /// its mirrors compromised on an empty append queue leaves
+  /// `TrajectoryAdmissionHalt` unlatched. If health disarmed the barrier, that
+  /// harness would re-mount every stranded worktree under the cut.
+  ///
+  /// The rule the bead fixes is the HEARTBEAT rule, and it covers this case by
+  /// construction: a harness that leaves `live` mode returns before
+  /// `noteTickAt` (grid_sdk `trajectory_harness.dart`, the mode latch in
+  /// `_onTickPass`), so the beat freezes and the read goes wedged after three
+  /// tick intervals — fail-CLOSED, after the same grace the heal uses.
   factory WorktreeOutstandingRead({
     TrajectoryProcessIdentitySnapshot? processIdentities,
     TrajectoryHeadSnapshot? heads,
     Duration staleAfter = kWorktreeOutstandingStaleAfter,
   }) {
-    if (processIdentities == null ||
-        processIdentities.health != TrajectorySnapshotHealth.live) {
+    if (processIdentities == null) {
       return const WorktreeOutstandingRead.disarmed();
     }
     final headsByWorkBead = <String, List<SessionHeadView>>{};
@@ -123,10 +140,13 @@ final class WorktreeOutstandingRead {
     return WorktreeOutstandingRead._(
       processIdentities: processIdentities,
       headsByWorkBead: headsByWorkBead,
-      // Published only after a tick pass actually ran; the seed instant is the
-      // boot's first beat, so a freshly seeded mirror is healthy rather than
-      // wedged.
+      // Published only after a tick pass actually RAN — a skipped pass (busy,
+      // fenced out, halted, disposed) publishes no beat, which is why three
+      // skipped intervals fail closed rather than pretending the fold is
+      // fresh. The seed instant is the boot's first beat, so a freshly seeded
+      // mirror is healthy rather than wedged.
       heartbeatAt: processIdentities.lastTickAt ?? processIdentities.seededAt,
+      health: processIdentities.health,
       staleAfter: staleAfter,
     );
   }
@@ -135,6 +155,7 @@ final class WorktreeOutstandingRead {
     required TrajectoryProcessIdentitySnapshot? processIdentities,
     required Map<String, List<SessionHeadView>> headsByWorkBead,
     required this.heartbeatAt,
+    required this.health,
     required this.staleAfter,
   }) : _processIdentities = processIdentities,
        _headsByWorkBead = headsByWorkBead;
@@ -146,6 +167,7 @@ final class WorktreeOutstandingRead {
         processIdentities: null,
         headsByWorkBead: const <String, List<SessionHeadView>>{},
         heartbeatAt: null,
+        health: null,
         staleAfter: kWorktreeOutstandingStaleAfter,
       );
 
@@ -155,6 +177,10 @@ final class WorktreeOutstandingRead {
   /// The tick-stamped mirror heartbeat — `lastTickAt`, or the seed instant
   /// before the first tick pass has run.
   final DateTime? heartbeatAt;
+
+  /// The P6 mirror's health, REPORTED in the wedged detail and never a gate of
+  /// its own: health decides nothing here, the heartbeat does.
+  final TrajectorySnapshotHealth? health;
 
   /// How long without a beat before the clause calls the harness wedged.
   final Duration staleAfter;
@@ -263,7 +289,8 @@ WorktreeOutstandingFinding evaluateWorktreeOutstanding({
           '$kWorktreeOutstandingClause: the P6 mirror has not beaten for '
           '$kWorktreeOutstandingStaleTicks tick intervals '
           '(${read.staleAfter.inSeconds}s; last beat '
-          '${beat == null ? 'never' : beat.toUtc().toIso8601String()}) — '
+          '${beat == null ? 'never' : beat.toUtc().toIso8601String()}; '
+          'mirror health ${read.health?.name ?? 'unknown'}) — '
           'a wedged harness cannot prove this bead has no outstanding worktree',
     );
   }

@@ -36,6 +36,7 @@ class StationServices {
     this.trajectoryAdmissionHalt,
     this.admissionBarrier,
     this.maxConcurrentWork = kDefaultMaxConcurrentWork,
+    DateTime Function()? clock,
   }) : admission = StationAdmissionAuthority(
          writer: writer,
          provider: provider,
@@ -44,6 +45,7 @@ class StationServices {
          liveness: liveness,
          trajectoryAdmissionHalt: trajectoryAdmissionHalt,
          admissionBarrier: admissionBarrier,
+         clock: clock,
        );
 
   /// The process transport — spawn (`start`), kill (`stop`), and the broadcast

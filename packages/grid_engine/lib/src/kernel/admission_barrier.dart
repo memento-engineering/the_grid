@@ -50,6 +50,16 @@ final class AdmissionBarrier {
   final DualReadAccounting? _accounting;
   final DateTime Function() _clock;
 
+  /// The barrier's clock, PUBLISHED so both `composeMountEligibility` sites
+  /// evaluate the clause's three-tick heartbeat rule against the same instant
+  /// the barrier stamps its dedupe window with.
+  ///
+  /// The offline composition has no clock of its own — without this the clause
+  /// there would silently fall back to `DateTime.now`, which is what made the
+  /// barrier's two call-site tests refuse through the WEDGED branch instead of
+  /// the P6 → P1 join.
+  DateTime Function() get clock => _clock;
+
   /// Whether the station has crossed the cut: the single arming lever for the
   /// refusal AND for its record.
   final bool cut;
