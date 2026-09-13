@@ -1375,9 +1375,16 @@ only for the `#rN` string synthesis, which is genuinely a projection. (P1's `las
   quiesced boundary.** Mint, round-retire, terminal become single atomic appends (head as
   projection side-effect); step transitions ride the service; the tick goes live running **ONLY
   the attempt/step-family obligation queries** (audit round 2 — the coexistence rule applies to
-  the tick's writers too: the authority's eligibility re-evaluation and its
-  `admission.refused`/`admission.restored` records move to Stage 3 with their family, as do the
-  grant obligations, which have no grants to read before then).
+  the tick's writers too: ~~the authority's eligibility re-evaluation and its
+  `admission.refused`/`admission.restored` records move to Stage 3 with their family~~ —
+  **STRUCK for the `admission.refused`/`.restored` FAMILY (W2-B, the G1 cut ladder):** the
+  2026-08-31 Stage-1 build amendment below supersedes this staging with **arm together at the
+  cut**, and the worktree-outstanding barrier's refusal record and its restoration obligation
+  therefore arm at the CUT, not at Stage 3. The authority's own per-clause eligibility
+  re-evaluation (the cap/cooldown/defer clauses) is untouched and still Stage 3's. See the
+  Stage-1 build amendment in §14 and `docs/design/trajectory/cut-wiring.md` appendix W2-B for the
+  clause, its observe-form counting arm, and the ratified keys. The grant obligations do stay at
+  Stage 3, having no grants to read before then.)
 
   **AMENDED (stage1-wiring §2.4, r2 blocker 1 — landed with the Stage-1 build).** Audit round 2
   staged the worktree barrier here: "the barrier LOGIC arms at Stage 1 as an eligibility clause in
@@ -1898,9 +1905,15 @@ Blocking fixes:
 Staging and structure:
 
 5. **Stage-1 admission half-cutover** → the Stage-1 tick runs ONLY attempt/step-family queries;
-   eligibility re-evaluation and `admission.refused`/`.restored` move to Stage 3 with their
-   family. ~~The Stage-1/2 worktree barrier is a new eligibility clause in the LEGACY mount-gate
-   path reading P6 (flare-only), trajectory-recorded from Stage 3~~ — **superseded by
+   ~~eligibility re-evaluation and `admission.refused`/`.restored` move to Stage 3 with their
+   family.~~ **STRUCK for the `admission.refused`/`.restored` FAMILY (W2-B, the G1 cut ladder):**
+   the 2026-08-31 Stage-1 build amendment (§14) supersedes it with **arm together at the cut** —
+   the barrier's refusal record and its restoration obligation arm at the CUT, while the
+   authority's cap/cooldown/defer re-evaluation stays Stage 3's. The clause, its observe-form
+   counting arm and the ratified keys are designed in
+   `docs/design/trajectory/cut-wiring.md` appendix W2-B. ~~The Stage-1/2 worktree barrier is a new
+   eligibility clause in the LEGACY mount-gate path reading P6 (flare-only), trajectory-recorded
+   from Stage 3~~ — **superseded by
    stage1-wiring §2.4 (r2 blocker 1): the barrier and its refusal record arm TOGETHER at the cut,
    with the inline-reap retirement that opens the window they close. The shadow window arms no
    admission behavior of any family** (§5 tick, §9 Stages 1/3).

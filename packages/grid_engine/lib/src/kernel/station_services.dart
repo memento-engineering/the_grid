@@ -1,6 +1,7 @@
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../sdk/allocation.dart';
+import 'admission_barrier.dart';
 import 'station_admission_authority.dart';
 import 'trajectory_scope.dart';
 
@@ -33,7 +34,9 @@ class StationServices {
     this.liveness,
     this.workSignal,
     this.trajectoryAdmissionHalt,
+    this.admissionBarrier,
     this.maxConcurrentWork = kDefaultMaxConcurrentWork,
+    DateTime Function()? clock,
   }) : admission = StationAdmissionAuthority(
          writer: writer,
          provider: provider,
@@ -41,6 +44,8 @@ class StationServices {
          maxConcurrentWork: maxConcurrentWork,
          liveness: liveness,
          trajectoryAdmissionHalt: trajectoryAdmissionHalt,
+         admissionBarrier: admissionBarrier,
+         clock: clock,
        );
 
   /// The process transport — spawn (`start`), kill (`stop`), and the broadcast
@@ -90,6 +95,11 @@ class StationServices {
 
   /// The cut-only admission breaker shared with trajectory call sites.
   final TrajectoryAdmissionHalt? trajectoryAdmissionHalt;
+
+  /// The worktree-outstanding barrier's observer (§W2.4 W2-B) — the SAME
+  /// instance the ambient [TrajectoryRecorderScope] carries, so the authority
+  /// path and the offline path count onto one bookkeeper.
+  final AdmissionBarrier? admissionBarrier;
 
   /// The single station-owned admission and durable attempt-transition owner.
   final StationAdmissionAuthority admission;

@@ -18,6 +18,8 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:meta/meta.dart';
 
+import 'admission_barrier.dart';
+
 /// The stable gate reason for every cut-only trajectory admission halt.
 const String kTrajectoryAdmissionHaltGateReason = 'trajectory-admission-halted';
 
@@ -177,13 +179,23 @@ final class TrajectoryAdmissionHalt {
 @immutable
 final class TrajectoryRecorderScope {
   /// Wraps the harness's one recorder for ambient provision.
-  const TrajectoryRecorderScope(this.recorder, {this.admissionHalt});
+  const TrajectoryRecorderScope(
+    this.recorder, {
+    this.admissionHalt,
+    this.barrier,
+  });
 
   /// The station's single derivation layer (§2) — never a second one.
   final StationTrajectoryRecorder recorder;
 
   /// The cut-only station admission breaker; absent under shadow.
   final TrajectoryAdmissionHalt? admissionHalt;
+
+  /// The worktree-outstanding barrier's observer (§W2.4 W2-B) — present under
+  /// BOTH postures, because the counting arm is what makes the flip boot the
+  /// clause's second execution. Its own `cut` flag decides whether the clause
+  /// it feeds is armed or merely counting.
+  final AdmissionBarrier? barrier;
 
   /// The null object: a scope whose recorder's sink never accepts. A single
   /// shared instance, so the fallback below is allocation-free and — more to

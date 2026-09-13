@@ -173,6 +173,7 @@ export 'src/dispatch/ready_work_source.dart'
 export 'package:grid_trajectory/grid_trajectory.dart'
     show
         AdoptOutcome,
+        IdemContext,
         LeaseDisposition,
         MintPhase,
         RoundRetireCause,
@@ -205,7 +206,8 @@ export 'src/trajectory/station_trajectory_recorder.dart'
         kTickReapedBackfillBasis,
         kTickUnknownSettlementBasis,
         kUnownedSubstation,
-        kUnownedSubstationBasis;
+        kUnownedSubstationBasis,
+        kWorktreeOutstandingClause;
 export 'src/trajectory/trajectory_append_result.dart'
     show Acked, Dropped, Suppressed, TrajectoryAppendResult;
 // Stage 1 (tg-zfek, chunk W7) — the tick's shadow-posture obligation set and
@@ -213,6 +215,7 @@ export 'src/trajectory/trajectory_append_result.dart'
 // writes bd or the filesystem (stage1-wiring §2.4).
 export 'src/trajectory/stage1_obligations.dart'
     show
+        AdmissionRestorationObligation,
         AppendQueuedProbe,
         ExternalCloseTerminalObligation,
         LastActivityPoll,
@@ -227,6 +230,7 @@ export 'src/trajectory/stage1_obligations.dart'
         kDefaultExternalCloseGrace,
         kDefaultLivenessThreshold,
         kDefaultPulseCoalesce,
+        kAdmissionRestorationObligation,
         kExternalCloseTerminalObligation,
         kLivenessDetectorObligation,
         kObligationBatchSize,

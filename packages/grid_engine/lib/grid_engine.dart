@@ -114,6 +114,7 @@ export 'src/domain/session_projection.dart';
 // grid_sdk implements them over grid_trajectory's fold row types — so the
 // engine gains no dependency and no SQL client enters its transitive set.
 export 'src/domain/trajectory_views.dart';
+export 'src/domain/worktree_outstanding.dart';
 // The SESSION-AXIS DUAL READ (cut-wiring C2): the overlay and its monotone
 // guard, the comparator, the lag/adjudication classes, the per-boot accounting
 // behind the durable round summaries, and the ONE escalation rule's tracker —
@@ -139,6 +140,7 @@ export 'src/domain/wedge.dart';
 // primitives, not part of the pure beads client.
 export 'src/domain/driveable_work.dart';
 // The injectable per-bead content gate; concrete clauses live in assets.
+export 'src/domain/eligibility_basis_revision.dart';
 export 'src/domain/mount_attempt.dart';
 export 'src/domain/mount_eligibility.dart';
 
@@ -146,6 +148,7 @@ export 'src/domain/mount_eligibility.dart';
 // inherited lookup: process transport + the bd chokepoint + the owned state rig
 // + the adopt-liveness seam. Substation-scoped concerns (source control, the
 // workspace/branch layout) live on the SubstationScope's ServiceBundle, not here.
+export 'src/kernel/admission_barrier.dart';
 export 'src/kernel/station_services.dart';
 export 'src/kernel/station_admission_authority.dart';
 

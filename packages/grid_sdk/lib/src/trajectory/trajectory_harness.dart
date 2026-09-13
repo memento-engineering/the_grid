@@ -800,6 +800,10 @@ class TrajectoryHarness {
     appendQueued: hasQueuedAppendForAttemptOrSession,
     reapWorktree: _reapWorktree,
     worktreeRoot: _worktreeRoot,
+    // The barrier's restoration half arms on the cut, with its refusal
+    // (cut-wiring §W2.4 W2-B item 4): under shadow the mount boundary appends
+    // no `admission.refused`, so the query would have nothing to clear.
+    admissionRefusalsArmed: config.discipline == TrajectoryDiscipline.cut,
     livenessThreshold: config.livenessThreshold,
     pulseCoalesce: config.pulseCoalesce,
     clock: _clock,
