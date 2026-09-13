@@ -29,7 +29,7 @@ never bd's pid/lock/secret files, a dedicated `trajectory` SQL user granted on
 | `ddl` | §4 DDL verbatim (dolt_ignore-first, idempotent), SQL-user provisioning |
 | `append` | the fenced append client: epoch claim, T6i counter-CAS, belt predicates, the §5 error contract, the stdout+flare event seam |
 | `tick` | the §5 service-tick skeleton: interval loop, fence skip, run-to-fixpoint |
-| `cli` | the `traj` verbs (`show`, `shadow-diff`) and the read seam they run over |
+| `cli` | the `traj` verbs (`show`, `certify`, `shadow-diff`) and the read seam they run over |
 
 ## Testing
 

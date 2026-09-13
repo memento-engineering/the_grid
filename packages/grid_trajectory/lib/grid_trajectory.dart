@@ -45,7 +45,10 @@ export 'src/cli/committee_report.dart'; // the pure committee-effectiveness fold
 export 'src/cli/committee_report_render.dart'; // the operator table + the one --json object
 export 'src/cli/committee_report_usage.dart'; // the .usage.json FALLBACK scan (never the primary source)
 export 'src/cli/shadow_accounting.dart'; // per-round append accounting + its disqualification rule
+export 'src/cli/soak_certificate.dart'; // the §W2.5 soak certificate fold + its value types
+export 'src/cli/soak_certificate_render.dart'; // the certificate table + the one --json object
 export 'src/cli/traj_command.dart'; // the `traj` group; runners compose it explicitly
+export 'src/cli/traj_certify_command.dart'; // the §W2.5 soak certificate as PASS/FAIL rows over the last N boots
 export 'src/cli/traj_committee_report_command.dart'; // per-lane committee effectiveness over a log window
 export 'src/cli/traj_flags.dart'; // the shared exact-root grid-home flag
 export 'src/cli/traj_gc_command.dart'; // operator reclamation under the gridboot credential

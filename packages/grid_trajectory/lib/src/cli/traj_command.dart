@@ -8,6 +8,7 @@ library;
 import 'package:args/command_runner.dart';
 
 import 'shadow_accounting.dart';
+import 'traj_certify_command.dart';
 import 'traj_committee_report_command.dart';
 import 'traj_gc_command.dart';
 import 'traj_provision_command.dart';
@@ -34,6 +35,10 @@ class TrajCommand extends Command<int> {
     addSubcommand(
       TrajCommitteeReportCommand(open: open, usageFallback: usageFallback),
     );
+    // The soak CERTIFICATE (§W2.5, tg-2gt1): the same read-only corpus as the
+    // report above, folded into PASS/FAIL rows over the last N boot epochs so
+    // the cut's evidence has an oracle instead of a runbook.
+    addSubcommand(TrajCertifyCommand(open: open));
     addSubcommand(
       TrajShadowDiffCommand(
         open: open,
@@ -63,8 +68,8 @@ class TrajCommand extends Command<int> {
   @override
   final String description =
       'Read the trajectory log: per-subject history, the committee report, '
-      'and the shadow comparator; provision it on a fresh grid home; rebuild '
-      'the fold (quiesced) and reclaim the database.';
+      'the soak certificate, and the shadow comparator; provision it on a '
+      'fresh grid home; rebuild the fold (quiesced) and reclaim the database.';
 
   @override
   Future<int> run() async {
