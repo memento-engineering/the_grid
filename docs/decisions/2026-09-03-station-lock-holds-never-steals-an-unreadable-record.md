@@ -14,7 +14,8 @@ register:
   updates:
     - adr-0014-the-resident-station
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - station-lock-record-carries-an-optional-lifecycle-phase
   bead: tg-o2fy
   legacy-id: null
 ---

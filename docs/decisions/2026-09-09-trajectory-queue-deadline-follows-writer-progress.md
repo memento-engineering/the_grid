@@ -13,7 +13,8 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - trajectory-decision-bearing-awaits-are-cut-only
   bead: tg-for1
   legacy-id: null
 ---

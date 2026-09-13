@@ -14,7 +14,8 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - bd-fork-walks-each-dep-table-with-own-indexed-join
   bead: tg-1liv
   legacy-id: null
 ---

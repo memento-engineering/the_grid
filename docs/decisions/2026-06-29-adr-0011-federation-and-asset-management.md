@@ -12,7 +12,8 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - pause-is-a-non-terminal-blocking-disposition
   bead: null
   legacy-id: "ADR-0011"
 ---

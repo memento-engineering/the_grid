@@ -15,7 +15,8 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - store-handles-are-tracked-until-close-is-confirmed
   bead: tg-46q1
   legacy-id: null
 ---

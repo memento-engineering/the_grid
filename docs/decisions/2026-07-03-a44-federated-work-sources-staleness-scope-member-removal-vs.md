@@ -12,7 +12,8 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - cross-store-dep-rows-are-refused-not-honoured
   bead: null
   legacy-id: "A44"
 ---

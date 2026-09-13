@@ -12,7 +12,9 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - pause-is-a-non-terminal-blocking-disposition
+    - the-frontier-demotes-surplus-linked-sessions
   bead: null
   legacy-id: "A48"
 ---

@@ -16,7 +16,8 @@ register:
   updates:
     - "a55-where-the-state-store-s-link-set-enters-the-pipeline-and"
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - the-grid-is-a-beads-controller
   bead: tg-93u9
   legacy-id: null
 ---

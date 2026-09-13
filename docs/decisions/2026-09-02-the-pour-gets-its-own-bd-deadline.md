@@ -15,7 +15,9 @@ register:
   updates:
     - adr-0001-technical-foundations
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - bd-fork-walks-each-dep-table-with-own-indexed-join
+    - bd-silent-success-guardrails
   bead: tg-336w
   legacy-id: null
 ---

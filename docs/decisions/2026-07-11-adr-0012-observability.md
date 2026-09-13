@@ -12,7 +12,8 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - run-grid-is-the-single-flush-coordinator
   bead: null
   legacy-id: "ADR-0012"
 ---

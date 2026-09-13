@@ -12,7 +12,8 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - pgid-liveness-is-supervision-evidence
   bead: null
   legacy-id: "A49"
 ---

@@ -12,7 +12,10 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - admission-orders-by-priority-then-bead-id
+    - pause-is-a-non-terminal-blocking-disposition
+    - run-grid-is-the-single-flush-coordinator
   bead: null
   legacy-id: "A43"
 ---

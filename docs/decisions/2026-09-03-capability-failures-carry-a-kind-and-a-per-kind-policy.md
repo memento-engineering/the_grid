@@ -23,7 +23,9 @@ register:
     - a-silent-harness-exit-is-infra-not-work
     - adr-0008-authoring-sdk-and-reentrant-engine
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - declared-process-session-non-results-are-infra
+    - leased-process-failures-classify-by-result-boundary
   bead: tg-b5ep
   legacy-id: null
 ---

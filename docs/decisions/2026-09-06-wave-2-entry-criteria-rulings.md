@@ -13,7 +13,9 @@ register:
   obsoletes: []
   updates: [wave-2-flip-scope-soak-and-kill-date]
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - trajectory-decision-bearing-awaits-are-cut-only
+    - wave-2-kept-set-includes-gated-and-ready
   bead: tg-dme1
   legacy-id: null
 ---
