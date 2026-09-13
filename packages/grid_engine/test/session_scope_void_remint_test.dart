@@ -634,7 +634,7 @@ void main() {
         }),
       );
       m.owner.flush();
-      await _pump();
+      await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
       expect(reg.events, ['START verify(tgdog-sess1/tg-1/verify)']);
       expect(f.runner.workCreates, hasLength(2));
     });

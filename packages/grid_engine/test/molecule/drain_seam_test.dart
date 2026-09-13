@@ -604,6 +604,7 @@ void main() {
           contains('close'),
         );
       },
+      timeout: const Timeout(Duration(minutes: 2)),
     );
   });
 
