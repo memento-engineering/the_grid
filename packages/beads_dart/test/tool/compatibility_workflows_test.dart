@@ -169,6 +169,21 @@ done
   });
 
   group('release gate', () {
+    YamlMap publishWorkflow() =>
+        workflow('.github/workflows/publish.yml') as YamlMap;
+
+    YamlMap publishJob(String name) =>
+        (publishWorkflow()['jobs'] as YamlMap)[name] as YamlMap;
+
+    List<YamlMap> stepsOf(YamlMap job) {
+      final steps = job['steps'];
+      if (steps is! YamlList) return const [];
+      return [for (final step in steps) step as YamlMap];
+    }
+
+    String runTextOf(YamlMap job) =>
+        stepsOf(job).map((step) => step['run']).whereType<String>().join('\n');
+
     List<String> refs({
       required String package,
       required String floor,
@@ -219,7 +234,11 @@ done
       expect(source, contains('[\$floor,\$latest]|unique'));
       expect(source, isNot(contains('day_one_wait_through')));
       expect(source, contains('There is NO release embargo here'));
-      expect(yaml['jobs']['publish']['needs'], ['parse', 'bd-compatibility']);
+      expect(yaml['jobs']['publish']['needs'], [
+        'parse',
+        'bd-compatibility',
+        'declared-floors',
+      ]);
       // The bd-compatibility job gates at the JOB level (a declared action that
       // fails to resolve kills a job at setup regardless of step-level ifs), and
       // the publish job must tolerate the resulting skip for non-beads_dart tags.
@@ -228,6 +247,74 @@ done
         contains("needs.parse.outputs.package == 'beads_dart'"),
       );
       expect(source, contains("needs.bd-compatibility.result == 'skipped'"));
+    });
+
+    test('declared-floors job runs scrub as a hard verdict', () {
+      final source = read('.github/workflows/publish.yml');
+      final job = publishJob('declared-floors');
+      final steps = stepsOf(job);
+      final run = runTextOf(job);
+      expect(job['needs'], 'parse');
+      expect(job['runs-on'], 'ubuntu-latest');
+      expect(
+        steps.map((step) => step['uses']),
+        containsAll(['actions/checkout@v4', 'dart-lang/setup-dart@v1']),
+      );
+      expect(
+        run,
+        contains(
+          'dart pub global run dart_grid_assets:dart_grid_assets dart release '
+          r'scrub --dir packages/${{ needs.parse.outputs.package }} --json',
+        ),
+      );
+      expect(source, isNot(contains('continue-on-error')));
+      expect(run, isNot(contains('|| true')));
+    });
+
+    test('publish requires declared-floors success', () {
+      final job = publishJob('publish');
+      final condition = job['if'] as String;
+      expect(job['needs'], ['parse', 'bd-compatibility', 'declared-floors']);
+      expect(condition, startsWith(r'${{ !cancelled()'));
+      expect(condition, contains("needs.declared-floors.result == 'success'"));
+    });
+
+    test('grid_exploration publish requires declared-floors success', () {
+      final job = publishJob('publish-grid-exploration');
+      final condition = job['if'] as String;
+      expect(job['needs'], ['parse', 'declared-floors']);
+      expect(condition, startsWith(r'${{ !cancelled()'));
+      expect(condition, contains("needs.declared-floors.result == 'success'"));
+      expect(
+        condition,
+        contains("needs.parse.outputs.package == 'grid_exploration'"),
+      );
+    });
+
+    test('declared-floors tool activation is exactly pinned', () {
+      final jobs = publishWorkflow()['jobs'] as YamlMap;
+      final workflowRun = jobs.values
+          .whereType<YamlMap>()
+          .map(runTextOf)
+          .join('\n');
+      final activations = workflowRun
+          .split('\n')
+          .map((line) => line.trim())
+          .where(
+            (line) =>
+                line.startsWith('dart pub global activate dart_grid_assets'),
+          )
+          .toList();
+      expect(activations, ['dart pub global activate dart_grid_assets 0.2.0']);
+    });
+
+    test('declared-floors retry matches release propagation budget', () {
+      final run = runTextOf(publishJob('declared-floors'));
+      expect(run, contains(r'for attempt in $(seq 1 120)'));
+      expect(run, contains(r'status=$?'));
+      expect(run, contains(r'if [[ "$attempt" -lt 120 ]]; then'));
+      expect(run, contains('sleep 5'));
+      expect(run, contains(r'exit "$status"'));
     });
   });
 
