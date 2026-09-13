@@ -166,8 +166,14 @@ jobs:
         run: flutter pub get
       - name: Test Flutter packages
         run: |
-          for pkg in grid_cockpit_ui grid_devtools; do
+          for pkg in grid_cockpit_ui grid_station_client grid_devtools; do
             echo "::group::$pkg"
             (cd packages/$pkg && flutter analyze && flutter test)
             echo "::endgroup::"
           done
+      - name: Test standalone cockpit app
+        working-directory: packages/grid_cockpit
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
