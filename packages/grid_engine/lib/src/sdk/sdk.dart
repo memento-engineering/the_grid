@@ -25,6 +25,7 @@ export 'federation_protocol.dart';
 export 'frontier.dart';
 export 'lease.dart';
 export 'process_session.dart';
+export 'relay.dart';
 export 'rewind.dart';
 export 'route.dart';
 export 'step_signal.dart';

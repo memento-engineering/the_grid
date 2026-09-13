@@ -49,6 +49,10 @@ abstract final class SessionBeadKeys {
   /// `StationBeadWriter.createSession`.
   static const startedAt = 'started_at';
 
+  /// The durable UTC instant at which this live session next needs relay
+  /// observation. This is a LIGHT metadata field, not a terminal marker.
+  static const relayNextObservationAt = 'grid.relay.next_observation_at';
+
   /// Capture-only session lifecycle telemetry — the ISO-8601 UTC instant the
   /// session bead was closed, stamped inside `StationBeadWriter.close`.
   static const closedAt = 'closed_at';
@@ -333,6 +337,14 @@ Map<String, String> sessionCommitOnlyMetadata() => <String, String>{
   SessionBeadKeys.outcome: kSessionOutcomeCommitOnly,
 };
 
+/// The merge-safe metadata payload for a relay-absorbed inspection horizon.
+Map<String, String> relayHorizonMetadata(DateTime nextObservationAt) =>
+    <String, String>{
+      SessionBeadKeys.relayNextObservationAt: nextObservationAt
+          .toUtc()
+          .toIso8601String(),
+    };
+
 Map<String, String> sessionWorkTerminalMetadata() => <String, String>{
   ...sessionCompleteMetadata(),
   SessionBeadKeys.workTerminalReason: kWorkTerminalReasonWorkBeadClosed,
@@ -464,6 +476,8 @@ Map<String, Map<String, String>> mergeOperatorRulings(
 DateTime? _parseDate(Object? wire) =>
     wire == null ? null : DateTime.tryParse(wire.toString());
 
+DateTime? _parseUtcDate(Object? wire) => _parseDate(wire)?.toUtc();
+
 /// Projects a the_grid session [Bead] into the [SessionProjection] the tree
 /// joins against. The session bead's OWN status is the terminal signal
 /// (`closed` ⇒ terminal); the markers + legacy scalar process identity come
@@ -517,6 +531,9 @@ SessionProjection projectSession(Bead sessionBead) {
     // Capture-only session lifecycle telemetry (FT-1) — surfaced typed; null
     // for a legacy bead / an open session.
     startedAt: _parseDate(metadata[SessionBeadKeys.startedAt]),
+    relayNextObservationAt: _parseUtcDate(
+      metadata[SessionBeadKeys.relayNextObservationAt],
+    ),
     closedAt: _parseDate(metadata[SessionBeadKeys.closedAt]),
   );
 }
