@@ -863,10 +863,10 @@ CertificateItem _shapeCoverage(List<BootEvidence> boots, List<String> seats) {
         'round-scope summaries with passes > 1: $measured'
         '${offSeat == 0 ? '' : ', $offSeat on other substations'}'
         '${unjoined == 0 ? '' : ', $unjoined unjoined (no record in the log '
-            'names the session\'s substation)'}'
+                  'names the session\'s substation)'}'
         '${nonRound == 0 ? '' : ', $nonRound non-round summar'
-            '${nonRound == 1 ? 'y' : 'ies'} excluded '
-            '($kBootFinalSummaryScope is not a round)'}',
+                  '${nonRound == 1 ? 'y' : 'ies'} excluded '
+                  '($kBootFinalSummaryScope is not a round)'}',
     failures: failures,
   );
 }

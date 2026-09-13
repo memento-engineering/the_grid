@@ -229,10 +229,7 @@ void main() {
       );
       expect(code, 2);
       expect(_statusOf(lines, 'posture'), 'FAIL');
-      expect(
-        lines.join('\n'),
-        contains('was not live throughout the boot'),
-      );
+      expect(lines.join('\n'), contains('was not live throughout the boot'));
     });
 
     test('a bare live first observation is NOT a latch', () async {
@@ -333,26 +330,29 @@ void main() {
       expect(reader.subjectsRead, ['traj_epoch']);
     });
 
-    test('a session no record anywhere names is UNJOINED, not off-seat', () async {
-      final rows = <TrajectoryEnvelope>[];
-      var seq = 1;
-      for (final epoch in const [50, 51, 52]) {
-        rows.addAll(seededRound(epoch: epoch, seq: seq, seat: 'lenny'));
-        seq += 2;
-      }
-      rows.add(
-        summaryNote(
-          seq: seq,
-          epoch: 52,
-          sessionId: 'tranquility-orphan',
-          body: summaryBody(),
-        ),
-      );
-      final (code, lines) = await _certify(rows: rows);
-      expect(code, 2);
-      expect(_statusOf(lines, 'shape-coverage'), 'FAIL');
-      expect(lines.join('\n'), contains('1 unjoined'));
-    });
+    test(
+      'a session no record anywhere names is UNJOINED, not off-seat',
+      () async {
+        final rows = <TrajectoryEnvelope>[];
+        var seq = 1;
+        for (final epoch in const [50, 51, 52]) {
+          rows.addAll(seededRound(epoch: epoch, seq: seq, seat: 'lenny'));
+          seq += 2;
+        }
+        rows.add(
+          summaryNote(
+            seq: seq,
+            epoch: 52,
+            sessionId: 'tranquility-orphan',
+            body: summaryBody(),
+          ),
+        );
+        final (code, lines) = await _certify(rows: rows);
+        expect(code, 2);
+        expect(_statusOf(lines, 'shape-coverage'), 'FAIL');
+        expect(lines.join('\n'), contains('1 unjoined'));
+      },
+    );
 
     test('a round on a non-target substation reads as off-seat', () async {
       final rows = seededBoots()
@@ -368,19 +368,15 @@ void main() {
     /// The live shape: each boot's last note is the BOOT-FINAL summary, riding
     /// the last terminal session's id with the boot's cumulative pass count.
     List<TrajectoryEnvelope> withBootFinals({int passes = 150}) =>
-        seededBoots()
-          ..addAll([
-            for (final epoch in const [50, 51, 52])
-              summaryNote(
-                seq: 900 + epoch,
-                epoch: epoch,
-                sessionId: 'tranquility-$epoch-lenny',
-                body: summaryBody(
-                  passes: passes,
-                  scope: kBootFinalSummaryScope,
-                ),
-              ),
-          ]);
+        seededBoots()..addAll([
+          for (final epoch in const [50, 51, 52])
+            summaryNote(
+              seq: 900 + epoch,
+              epoch: epoch,
+              sessionId: 'tranquility-$epoch-lenny',
+              body: summaryBody(passes: passes, scope: kBootFinalSummaryScope),
+            ),
+        ]);
 
     test('the boot-final note scores no seat and is reported apart', () async {
       final (code, lines) = await _certify(rows: withBootFinals());
@@ -417,10 +413,7 @@ void main() {
               seq: 901 + epoch * 2,
               epoch: epoch,
               sessionId: 'tranquility-$epoch-lenny',
-              body: summaryBody(
-                passes: 150,
-                scope: kBootFinalSummaryScope,
-              ),
+              body: summaryBody(passes: 150, scope: kBootFinalSummaryScope),
             ),
           ],
         ];
@@ -447,7 +440,10 @@ void main() {
             body: summaryBody(scope: kBootFinalSummaryScope),
           ),
         );
-      final reader = ScriptedReader(rows, epochs: seededClaims(const [50, 51, 52]));
+      final reader = ScriptedReader(
+        rows,
+        epochs: seededClaims(const [50, 51, 52]),
+      );
       final lines = <String>[];
       final code = await runTrajCertify(
         gridHome: '/tmp/grid',

@@ -137,10 +137,7 @@ void main() {
             seq: 99,
             epoch: 50,
             sessionId: 'tranquility-50-lenny',
-            body: summaryBody(
-              passes: 150,
-              scope: kBootFinalSummaryScope,
-            ),
+            body: summaryBody(passes: 150, scope: kBootFinalSummaryScope),
           ),
         );
       final evidence = foldBootEvidence(_window(50, rows));
@@ -226,7 +223,9 @@ void main() {
         seat: 'lenny',
       );
       final window = _window(50, rows);
-      expect(sessionsNeedingWiderRead(window), {'tranquility-49-lenny-carried'});
+      expect(sessionsNeedingWiderRead(window), {
+        'tranquility-49-lenny-carried',
+      });
       expect(foldBootEvidence(window).unjoinedRounds, 1);
 
       final widened = window.withSubstations(const {
