@@ -171,6 +171,7 @@ final class _UnsnapshottedReservation {
     required this.writeState,
     required this.reservationToken,
     required this.since,
+    required this.reclaimedSessionId,
   });
 
   final _ScopeKey scopeKey;
@@ -179,6 +180,7 @@ final class _UnsnapshottedReservation {
   final DateTime since;
   _MountAttemptWriteState writeState;
   String? sessionId;
+  String? reclaimedSessionId;
   bool minting = false;
 }
 
@@ -572,6 +574,36 @@ final class StationAdmissionAuthority {
             continue;
           }
           final sessionId = session.sessionId;
+          if (retiredRound && sessionId != null && sessionId.isNotEmpty) {
+            var successor = _reservations[bead.id];
+            if (successor != null && successor.scopeKey != scopeKey) {
+              waiting.add(candidate);
+              capacityWaiting.add(candidate);
+              continue;
+            }
+            if (successor == null || successor.sessionId == sessionId) {
+              successor = _UnsnapshottedReservation(
+                scopeKey: scopeKey,
+                mountAttempt: null,
+                writeState: _MountAttemptWriteState.recorded,
+                reservationToken: Object(),
+                since: _clock().toUtc(),
+                reclaimedSessionId: sessionId,
+              );
+              _reservations[bead.id] = successor;
+            }
+            if (successor.sessionId == null &&
+                successor.reclaimedSessionId == sessionId) {
+              scope._mountedIds.add(bead.id);
+              admitted.add(
+                _reservationValue(
+                  StationAdmissionCandidate(bead: bead, session: session),
+                  successor,
+                ),
+              );
+              continue;
+            }
+          }
           final awaitsReadmission =
               session.pauseState == SessionPauseState.resumed &&
               !scope._mountedIds.contains(bead.id);
@@ -732,6 +764,7 @@ final class StationAdmissionAuthority {
           writeState: _MountAttemptWriteState.recorded,
           reservationToken: Object(),
           since: _clock().toUtc(),
+          reclaimedSessionId: null,
         );
         _reservations[bead.id] = reservation;
         admitted.add(_reservationValue(candidate, reservation));
@@ -746,6 +779,7 @@ final class StationAdmissionAuthority {
         writeState: _MountAttemptWriteState.writing,
         reservationToken: Object(),
         since: _clock().toUtc(),
+        reclaimedSessionId: null,
       );
       _reservations[bead.id] = reservation;
       scope._mountedIds.add(bead.id);
@@ -845,7 +879,10 @@ final class StationAdmissionAuthority {
   }) {
     final unsnapshotted = _reservations.values.where((reservation) {
       final sessionId = reservation.sessionId;
-      return sessionId == null || !durableLiveIds.contains(sessionId);
+      final reclaimedSessionId = reservation.reclaimedSessionId;
+      return (sessionId == null || !durableLiveIds.contains(sessionId)) &&
+          (reclaimedSessionId == null ||
+              !durableLiveIds.contains(reclaimedSessionId));
     }).length;
     final stationUsed = durableLiveIds.length + unsnapshotted;
     if (!candidateAlreadyCounted && stationUsed >= _maxConcurrentWork) {
@@ -1067,6 +1104,7 @@ final class StationAdmissionAuthority {
         metadata: metadata,
       );
       reservation.sessionId = id;
+      reservation.reclaimedSessionId = null;
       _notifyListeners();
       return (sessionId: id, refusal: null);
     } finally {
