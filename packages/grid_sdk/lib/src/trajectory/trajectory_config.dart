@@ -13,9 +13,8 @@ import 'package:grid_runtime/grid_runtime.dart'
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:meta/meta.dart';
 
-/// §1.3's arming mode. Whatever the mode, a trajectory failure NEVER blocks
-/// the boot — the mode only decides whether the harness tries, and how loud a
-/// degradation is.
+/// §1.3's arming mode. Under shadow, a trajectory failure never blocks boot;
+/// cut separately requires a live harness before execution can start.
 enum TrajectoryConfigMode {
   /// No connection, no claim; the harness is a silent no-op. A station can
   /// always arm without the trajectory.
@@ -103,6 +102,9 @@ const int kDefaultTrajectoryQueueBound = 4096;
 /// shadow-diff attributes the loss as the named non-atomic class.
 const Duration kDefaultShutdownDrainTimeout = Duration(seconds: 30);
 
+/// The destructive G1 rollback posture, resolved once at station assembly.
+const String kGridG1BreakGlass = 'GRID_G1_BREAK_GLASS';
+
 /// The one parameter `assembleStationWork` gains at Stage 1 (§1.3).
 @immutable
 final class TrajectoryConfig {
@@ -121,6 +123,7 @@ final class TrajectoryConfig {
     this.soakWindowEpoch = 0,
     this.reconcileLedgerCloses = true,
   }) : assert(soakWindowEpoch >= 0),
+       breakGlassReason = null,
        _requestedMode = mode,
        _requestedDualRead = dualRead,
        mode = discipline == TrajectoryDiscipline.cut
@@ -131,7 +134,8 @@ final class TrajectoryConfig {
            : dualRead ?? DualReadMode.off;
 
   TrajectoryConfig._disabledFrom(TrajectoryConfig source)
-    : discipline = source.discipline,
+    : breakGlassReason = null,
+      discipline = TrajectoryDiscipline.shadow,
       mode = TrajectoryConfigMode.disabled,
       _requestedMode = source._requestedMode,
       tickInterval = source.tickInterval,
@@ -147,10 +151,30 @@ final class TrajectoryConfig {
       soakWindowEpoch = source.soakWindowEpoch,
       reconcileLedgerCloses = source.reconcileLedgerCloses;
 
+  TrajectoryConfig._breakGlassFrom(
+    TrajectoryConfig source,
+    this.breakGlassReason,
+  ) : discipline = TrajectoryDiscipline.shadow,
+      mode = source.mode,
+      _requestedMode = null,
+      tickInterval = source.tickInterval,
+      obligationQueryExtensions = source.obligationQueryExtensions,
+      gcInterval = source.gcInterval,
+      commitCadence = source.commitCadence,
+      queueBound = source.queueBound,
+      livenessThreshold = source.livenessThreshold,
+      pulseCoalesce = source.pulseCoalesce,
+      shutdownDrainTimeout = source.shutdownDrainTimeout,
+      dualRead = source.dualRead,
+      _requestedDualRead = null,
+      soakWindowEpoch = source.soakWindowEpoch,
+      reconcileLedgerCloses = source.reconcileLedgerCloses;
+
   TrajectoryConfig._withAppendedObligationQueries(
     TrajectoryConfig source,
     Iterable<ObligationQuery> extensions,
-  ) : discipline = source.discipline,
+  ) : breakGlassReason = source.breakGlassReason,
+      discipline = source.discipline,
       mode = source.mode,
       _requestedMode = source._requestedMode,
       tickInterval = source.tickInterval,
@@ -170,6 +194,9 @@ final class TrajectoryConfig {
 
   /// The single trajectory cut lever.
   final TrajectoryDiscipline discipline;
+
+  /// Non-null only for a resolved, destructive break-glass boot.
+  final String? breakGlassReason;
 
   final TrajectoryConfigMode mode;
 
@@ -339,10 +366,24 @@ final class TrajectoryConfig {
   /// teardown step) — see [kDefaultShutdownDrainTimeout].
   final Duration shutdownDrainTimeout;
 
-  /// The same config with trajectory writes disabled for dry-run under both
-  /// disciplines, retaining the source cut-implied [dualRead] posture and the
-  /// caller requests captured by the public constructor.
+  /// The same config with trajectory writes disabled under shadow discipline,
+  /// retaining the source [dualRead] posture and caller requests.
   TrajectoryConfig get asDisabled => TrajectoryConfig._disabledFrom(this);
+
+  /// Resolves dry-run and break-glass into the one immutable assembly value.
+  ///
+  /// Break-glass is ignored for dry-run because it is destructive. Otherwise
+  /// a non-empty, trimmed reason forces shadow discipline and is retained as
+  /// provenance for the destructive startup action.
+  TrajectoryConfig resolveForAssembly({
+    required bool dryRun,
+    String? breakGlassReason,
+  }) {
+    if (dryRun) return asDisabled;
+    final reason = breakGlassReason?.trim();
+    if (reason == null || reason.isEmpty) return this;
+    return TrajectoryConfig._breakGlassFrom(this, reason);
+  }
 
   /// Returns an immutable config with [extensions] appended after every
   /// station-authored obligation query, preserving caller order and all

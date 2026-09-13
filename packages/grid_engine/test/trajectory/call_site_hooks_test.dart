@@ -527,7 +527,7 @@ class _NullTreeContext implements TreeContext {
 void main() {
   group('W5 — the CapabilityHost persist sites (§2.3 step.transition)', () {
     test('a lost running acknowledgement uses the actual open session and node '
-        'gate after the step write', () async {
+        'gate after retiring the cut running bead write', () async {
       final sink = _AckResultSink(const TrajectoryAppendResult.dropped());
       final h = _host(
         const _StartedCap(),
@@ -564,8 +564,8 @@ void main() {
         updates.length,
         h.fakes.runner.metadataOfUpdate,
       ).indexWhere((metadata) => metadata['blocks'] == 'tgdog-s');
-      expect(running, isNonNegative);
-      expect(gate, greaterThan(running));
+      expect(running, -1, reason: 'cut carries running in P2 only');
+      expect(gate, isNonNegative);
       expect(
         h.fakes.runner.metadataOfUpdate(gate),
         containsPair('node', 'tg-1/agent'),

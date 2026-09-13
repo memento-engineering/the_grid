@@ -9,9 +9,11 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart'
     show
         DualReadMode,
+        GridIssueTypes,
         Idle,
         JoinedSnapshot,
         SessionProjection,
+        SessionBeadKeys,
         StationDriver,
         WorkSessionLiveness;
 import 'package:grid_sdk/grid_sdk.dart';
@@ -76,16 +78,6 @@ final class _RegistrarProbe extends StatelessSeed {
   }
 }
 
-final class _BuildProbeDelegate extends GridDelegate {
-  bool built = false;
-
-  @override
-  Seed build(TreeContext context, GridConfiguration configuration) {
-    built = true;
-    return const RawAssetGrid(root: '/probe');
-  }
-}
-
 void _seedStore(String dir, {String? database}) {
   Directory('$dir/.beads').createSync(recursive: true);
   File('$dir/.beads/metadata.json').writeAsStringSync(
@@ -105,6 +97,52 @@ void main() {
   });
 
   tearDown(() => tmp.deleteSync(recursive: true));
+
+  test(
+    'discipline quiesce is bidirectional, station-wide, and includes pause',
+    () {
+      Bead session(
+        String id, {
+        required String discipline,
+        BeadStatus status = BeadStatus.open,
+        bool paused = false,
+      }) => Bead(
+        id: id,
+        issueType: GridIssueTypes.session,
+        status: status,
+        metadata: {
+          SessionBeadKeys.discipline: discipline,
+          SessionBeadKeys.workBead: 'other-seat-$id',
+          if (paused) SessionBeadKeys.pauseState: 'paused',
+        },
+      );
+      final snapshot = GraphSnapshot.fromParts(
+        beads: [
+          session('z-shadow-paused', discipline: 'shadow', paused: true),
+          session('a-cut', discipline: 'cut'),
+          session('closed-cut', discipline: 'cut', status: BeadStatus.closed),
+        ],
+        dependencies: const [],
+        readyIds: const [],
+        capturedAt: DateTime.utc(2026, 9, 13),
+      );
+
+      expect(
+        disciplineQuiesceOffenders(
+          snapshot: snapshot,
+          discipline: TrajectoryDiscipline.cut,
+        ),
+        ['z-shadow-paused'],
+      );
+      expect(
+        disciplineQuiesceOffenders(
+          snapshot: snapshot,
+          discipline: TrajectoryDiscipline.shadow,
+        ),
+        ['a-cut'],
+      );
+    },
+  );
 
   Future<StationWorkRuntime> assemble({
     TrajectoryConfig trajectoryConfig = const TrajectoryConfig(),
@@ -131,7 +169,7 @@ void main() {
   });
 
   test(
-    'cut composes one shared admission halt and shadow composes none',
+    'dry-run resolves cut to disabled shadow and composes no halt',
     () async {
       final cut = await assemble(
         trajectoryConfig: const TrajectoryConfig(
@@ -143,11 +181,8 @@ void main() {
       addTearDown(shadow.shutdown);
 
       final cutScope = cut.wiring.trajectory!;
-      expect(cutScope.admissionHalt, isNotNull);
-      expect(
-        cut.wiring.services.trajectoryAdmissionHalt,
-        same(cutScope.admissionHalt),
-      );
+      expect(cutScope.admissionHalt, isNull);
+      expect(cut.wiring.services.trajectoryAdmissionHalt, isNull);
       expect(shadow.wiring.trajectory!.admissionHalt, isNull);
       expect(shadow.wiring.services.trajectoryAdmissionHalt, isNull);
     },
@@ -433,6 +468,51 @@ void main() {
   test(
     'cut contradiction throws named requested and resolved posture',
     () async {
+      Future<StationWorkRuntime> contradictory() => assembleStationWork(
+        stateStore: GridStateStore.forGridRoot('${tmp.path}/absent'),
+        substations: [
+          SubstationWorkSpec(name: 'never-acquired', root: '/absent'),
+        ],
+        resolver: const _NullResolver(),
+        dryRun: false,
+        trajectoryConfig: const TrajectoryConfig(
+          discipline: TrajectoryDiscipline.cut,
+          dualRead: DualReadMode.observe,
+        ),
+      );
+      for (var attempt = 0; attempt < 2; attempt++) {
+        await expectLater(
+          contradictory(),
+          throwsA(
+            isA<CutPostureRefused>()
+                .having(
+                  (error) => error.requestedDualRead,
+                  'requestedDualRead',
+                  DualReadMode.observe,
+                )
+                .having(
+                  (error) => error.resolvedDualRead,
+                  'resolvedDualRead',
+                  DualReadMode.primary,
+                )
+                .having(
+                  (error) => error.toString(),
+                  'message',
+                  allOf(
+                    contains('requested dualRead=observe'),
+                    contains('resolved dualRead=primary'),
+                  ),
+                ),
+          ),
+        );
+      }
+    },
+  );
+
+  test(
+    'cut refusal runs before trajectory attach and before runGrid',
+    () async {
+      var attached = false;
       final db = _FakeDb();
       final harness = await TrajectoryHarness.build(
         config: const TrajectoryConfig(
@@ -441,65 +521,39 @@ void main() {
         ),
         gridHome: '${tmp.path}/home',
         station: 'tgstate',
-        connect: () async => db,
+        connect: () async {
+          attached = true;
+          return db;
+        },
       );
-      final work = await assemble(trajectoryOverride: harness);
-      addTearDown(work.shutdown);
+      var bundleAcquired = false;
 
       await expectLater(
-        work.start(),
-        throwsA(
-          isA<CutPostureRefused>()
-              .having(
-                (error) => error.requestedDualRead,
-                'requestedDualRead',
-                DualReadMode.observe,
-              )
-              .having(
-                (error) => error.resolvedDualRead,
-                'resolvedDualRead',
-                DualReadMode.primary,
-              )
-              .having(
-                (error) => error.toString(),
-                'message',
-                allOf(
-                  contains('requested dualRead=observe'),
-                  contains('resolved dualRead=primary'),
-                ),
-              ),
+        assembleStationWork(
+          stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
+          substations: [
+            SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj'),
+          ],
+          resolver: const _NullResolver(),
+          dryRun: false,
+          trajectoryConfig: harness.config,
+          trajectoryOverride: harness,
+          bundleBuilder:
+              ({
+                required storeName,
+                required workspace,
+                required buildDefault,
+              }) async {
+                bundleAcquired = true;
+                throw StateError('bundle acquisition must not run');
+              },
         ),
+        throwsA(isA<CutPostureRefused>()),
       );
+      expect(attached, isFalse);
+      expect(bundleAcquired, isFalse);
     },
   );
-
-  test('cut refusal runs after trajectory attach and before runGrid', () async {
-    var attached = false;
-    final db = _FakeDb();
-    final harness = await TrajectoryHarness.build(
-      config: const TrajectoryConfig(
-        discipline: TrajectoryDiscipline.cut,
-        dualRead: DualReadMode.observe,
-      ),
-      gridHome: '${tmp.path}/home',
-      station: 'tgstate',
-      connect: () async {
-        attached = true;
-        return db;
-      },
-    );
-    final work = await assemble(trajectoryOverride: harness);
-    addTearDown(work.shutdown);
-    final delegate = _BuildProbeDelegate();
-
-    await expectLater(() async {
-      await work.start();
-      final grid = await runGrid(delegate);
-      await grid.teardown();
-    }(), throwsA(isA<CutPostureRefused>()));
-    expect(attached, isTrue);
-    expect(delegate.built, isFalse);
-  });
 
   group('W4/W5 — the recorder reaches every observation site (§1.1)', () {
     test(

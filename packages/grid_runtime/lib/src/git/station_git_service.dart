@@ -62,6 +62,16 @@ class BeadWorktree {
   final String branch;
 }
 
+/// The one three-gate, fail-closed worktree reap seam shared by lifecycle,
+/// restart reconciliation, and trajectory tick obligations.
+typedef ReapWorktree =
+    Future<ReapOutcome> Function({
+      required RootCheckout root,
+      required BeadWorktree worktree,
+      bool dryRun,
+      bool overrideUnsafe,
+    });
+
 /// The outcome of a reap attempt — distinguishes a clean removal, a permitted
 /// preview, and a fail-closed REFUSAL, so the caller can assert WHY a worktree
 /// was removed or kept. Every successful outcome preserves the three observed

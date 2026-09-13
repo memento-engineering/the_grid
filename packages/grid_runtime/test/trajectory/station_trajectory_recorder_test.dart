@@ -743,6 +743,21 @@ void main() {
       expect(notes.last.body, '{"hits":1}');
       expect(notes[1].noteOrdinal, greaterThan(notes[0].noteOrdinal));
     });
+
+    test(
+      'break-glass provenance rides the voided session as an attempt note',
+      () {
+        recorder.breakGlassNoted(
+          sessionId: 's-cut',
+          reason: 'operator rollback',
+        );
+
+        final note = expectSchemaClean(single()).record as AttemptNote;
+        expect(note.sessionId, 's-cut');
+        expect(note.channel, kBreakGlassChannel);
+        expect(note.body, 'break-glass:operator rollback');
+      },
+    );
   });
 
   group('process lifecycle', () {

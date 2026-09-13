@@ -32,7 +32,10 @@ library;
 import 'dart:io' as io;
 
 import 'package:grid_trajectory/grid_trajectory.dart';
+import 'package:path/path.dart' as p;
 
+import '../git/git_ops.dart' show GateOutcome;
+import '../git/station_git_service.dart';
 import '../runtime/process_group.dart';
 import 'station_trajectory_recorder.dart';
 import 'worktree_pulse_scanner.dart';
@@ -97,6 +100,7 @@ const String kUnknownTerminalSettlementObligation =
     'unknown-terminal-settlement';
 const String kExternalCloseTerminalObligation = 'external-close-terminal';
 const String kWorktreeReapedBackfillObligation = 'worktree-reaped-backfill';
+const String kLiveWorktreeReapObligation = 'live-worktree-reap';
 const String kLivenessDetectorObligation = 'liveness-detector';
 
 /// How long a ledger-closed session must stay closed-in-bd / open-in-P1 before
@@ -126,6 +130,9 @@ const Duration kDefaultPulseCoalesce = Duration(seconds: 30);
 /// station whose whole storm is a handful of concurrent sessions.
 const int kObligationBatchSize = 64;
 
+/// Resolves the one registered root that strictly contains a P6 worktree.
+typedef WorktreeRootSupplier = RootCheckout? Function(String worktreePath);
+
 /// Builds the Stage-1 obligation set, in §2.4's order.
 ///
 /// [bootEpoch] is the CLAIMED epoch of the running process — the detector's
@@ -149,6 +156,8 @@ List<ObligationQuery> buildStage1ObligationQueries({
   Duration pulseCoalesce = kDefaultPulseCoalesce,
   Duration externalCloseGrace = kDefaultExternalCloseGrace,
   DateTime Function()? clock,
+  ReapWorktree? reapWorktree,
+  WorktreeRootSupplier? worktreeRoot,
 }) => [
   UnknownTerminalSettlementObligation(
     recorder: recorder,
@@ -164,6 +173,13 @@ List<ObligationQuery> buildStage1ObligationQueries({
     grace: externalCloseGrace,
   ),
   WorktreeReapedBackfillObligation(recorder: recorder),
+  if (reapWorktree != null && worktreeRoot != null)
+    LiveWorktreeReapObligation(
+      recorder: recorder,
+      sessionClosure: sessionClosure,
+      reapWorktree: reapWorktree,
+      worktreeRoot: worktreeRoot,
+    ),
   LivenessDetectorObligation(
     recorder: recorder,
     db: db,
@@ -515,6 +531,122 @@ final class WorktreeReapedBackfillObligation extends ObligationQuery {
     }
     return appends;
   }
+}
+
+/// Cut's sole filesystem owner for live P6 worktrees of terminal sessions.
+final class LiveWorktreeReapObligation extends ObligationQuery {
+  LiveWorktreeReapObligation({
+    required StationTrajectoryRecorder recorder,
+    required SessionClosureProbe? sessionClosure,
+    required ReapWorktree reapWorktree,
+    required WorktreeRootSupplier worktreeRoot,
+    this.batch = kObligationBatchSize,
+  }) : _recorder = recorder,
+       _sessionClosure = sessionClosure,
+       _reapWorktree = reapWorktree,
+       _worktreeRoot = worktreeRoot;
+
+  final StationTrajectoryRecorder _recorder;
+  final SessionClosureProbe? _sessionClosure;
+  final ReapWorktree _reapWorktree;
+  final WorktreeRootSupplier _worktreeRoot;
+  final int batch;
+
+  @override
+  String get name => kLiveWorktreeReapObligation;
+
+  @override
+  String get sql =>
+      'SELECT p.session_id AS session_id, p.worktree AS worktree, '
+      'p.branch AS branch, p.last_seq AS last_seq, h.status AS head_status '
+      'FROM proj_process_identity p '
+      'LEFT JOIN proj_session_head h ON h.session_id = p.session_id '
+      "WHERE p.worktree IS NOT NULL AND p.worktree_state = 'live' "
+      'ORDER BY p.last_seq LIMIT $batch';
+
+  @override
+  Future<List<ObligationAppend>> repair(List<Map<String, String?>> rows) async {
+    final appends = <ObligationAppend>[];
+    final seen = <String>{};
+    for (final row in rows) {
+      final sessionId = row['session_id'];
+      final path = row['worktree'];
+      if (sessionId == null || path == null) continue;
+      if (!seen.add('$sessionId\u0000$path')) continue;
+      final terminal =
+          row['head_status'] == 'closed' ||
+          _sessionClosure?.call(sessionId) != null;
+      if (!terminal) continue;
+
+      final diskType = io.FileSystemEntity.typeSync(path, followLinks: true);
+      if (diskType == io.FileSystemEntityType.notFound) {
+        appends.add(
+          ObligationAppend(
+            _recorder
+                .buildWorktreeReaped(
+                  sessionId: sessionId,
+                  worktree: path,
+                  branch: row['branch'],
+                )
+                .record,
+          ),
+        );
+        continue;
+      }
+      if (diskType != io.FileSystemEntityType.directory) {
+        throw StateError('live worktree "$path" is not a directory');
+      }
+
+      final root = _worktreeRoot(path);
+      if (root == null) {
+        throw StateError('no registered root contains live worktree "$path"');
+      }
+      final worktreesRoot = WorktreeLayout.worktreesRoot(root.path);
+      if (!isStrictlyUnderDir(worktreesRoot, path)) {
+        throw StateError(
+          'live worktree "$path" is not strictly under "$worktreesRoot"',
+        );
+      }
+      final beadId = WorktreeLayout.beadIdFromName(p.basename(path));
+      if (beadId == null || beadId.isEmpty) {
+        throw StateError('live worktree "$path" has no bead-shaped basename');
+      }
+      final outcome = await _reapWorktree(
+        root: root,
+        worktree: BeadWorktree(
+          beadId: beadId,
+          path: path,
+          branch: row['branch'] ?? '',
+        ),
+      );
+      appends.add(
+        ObligationAppend(
+          (outcome.removed
+                  ? _recorder.buildWorktreeReaped(
+                      sessionId: sessionId,
+                      worktree: path,
+                      branch: row['branch'],
+                    )
+                  : _recorder.buildWorktreeHeld(
+                      sessionId: sessionId,
+                      worktree: path,
+                      branch: row['branch'],
+                      uncommitted: _gateEvidence(outcome.uncommitted),
+                      unpushed: _gateEvidence(outcome.unpushed),
+                      stashes: _gateEvidence(outcome.stashed),
+                    ))
+              .record,
+        ),
+      );
+    }
+    return appends;
+  }
+
+  static int? _gateEvidence(GateOutcome outcome) => switch (outcome) {
+    GateOutcome.clear => 0,
+    GateOutcome.present => 1,
+    GateOutcome.probeError => null,
+  };
 }
 
 /// §2.4 obligation 3 — the liveness detector: beats into `traj_pulse`,

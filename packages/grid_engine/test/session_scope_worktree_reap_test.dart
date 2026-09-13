@@ -103,11 +103,31 @@ _mount({
   required _RecordingReap reap,
   bool terminal = true,
   bool breakerExhausted = false,
+  bool cut = false,
   List<String>? eventLog,
 }) {
   const beadId = 'tg-work';
   const sessionId = 'tgdog-session';
-  final fakes = buildFakes(createdId: sessionId, eventLog: eventLog);
+  var fakes = buildFakes(createdId: sessionId, eventLog: eventLog);
+  if (cut) {
+    final halt = TrajectoryAdmissionHalt(
+      writer: fakes.ctx.writer,
+      stateSubstation: stateSubstation,
+      bootEpoch: () => 7,
+    );
+    fakes = (
+      ctx: StationServices(
+        provider: fakes.provider,
+        writer: fakes.ctx.writer,
+        stateSubstation: stateSubstation,
+        trajectoryAdmissionHalt: halt,
+      ),
+      runner: fakes.runner,
+      provider: fakes.provider,
+      git: fakes.git,
+      pr: fakes.pr,
+    );
+  }
   final transport = RecordingExplorationTransport();
   final owner = TreeOwner();
   final session = breakerExhausted
@@ -197,6 +217,27 @@ void main() {
     expect(reapIndex, isNonNegative);
     expect(closeIndex, isNonNegative);
     expect(reapIndex, lessThan(closeIndex));
+  });
+
+  test('cut closes the session without inline filesystem reap', () async {
+    final reap = _RecordingReap(ReapOutcome.removed());
+    final mounted = _mount(reap: reap, cut: true);
+    addTearDown(mounted.owner.dispose);
+
+    await _pumpUntil(
+      mounted.owner,
+      () => mounted.fakes.runner
+          .callsFor('close')
+          .any((call) => call[1] == 'tgdog-session'),
+    );
+
+    expect(reap.calls, isEmpty);
+    expect(
+      mounted.fakes.runner
+          .callsFor('close')
+          .where((call) => call[1] == 'tgdog-session'),
+      hasLength(1),
+    );
   });
 
   test('breaker-exhaustion escalation never reaps the worktree', () async {

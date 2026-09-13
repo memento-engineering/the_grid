@@ -16,7 +16,12 @@
 library;
 
 export 'package:grid_runtime/grid_runtime.dart'
-    show GridIssueTypes, GridIssueTypeClassification, StepFailureClass;
+    show
+        GridIssueTypes,
+        GridIssueTypeClassification,
+        ReapWorktree,
+        SessionDisciplineStamp,
+        StepFailureClass;
 
 export 'src/diagnostics/diagnosable.dart';
 export 'src/diagnostics/diagnostics_tree_walker.dart';

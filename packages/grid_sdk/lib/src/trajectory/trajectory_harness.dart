@@ -40,12 +40,14 @@ import 'package:grid_runtime/grid_runtime.dart'
         Exited,
         LastActivityPoll,
         RuntimeEvent,
+        ReapWorktree,
         SessionClosureProbe,
         SessionStarted,
         StationTrajectoryRecorder,
         StuckObligationAccountant,
         TrajectoryAckRecordSink,
         TrajectoryAppendResult,
+        WorktreeRootSupplier,
         buildStage1ObligationQueries;
 import 'package:grid_engine/grid_engine.dart'
     show
@@ -53,11 +55,13 @@ import 'package:grid_engine/grid_engine.dart'
         TerminalReconcileOutcome,
         TerminalReconcileRequest,
         TrajectoryHeadSnapshot,
+        TrajectoryProcessIdentitySnapshot,
         TrajectoryStepSnapshot;
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:meta/meta.dart';
 import 'package:state_notifier/state_notifier.dart' show RemoveListener;
 
+import 'process_identity_mirror.dart';
 import 'session_head_mirror.dart';
 import 'step_cursor_mirror.dart';
 import 'trajectory_config.dart';
@@ -247,6 +251,8 @@ class TrajectoryHarness {
     required List<ObligationQuery>? tickQueries,
     required LastActivityPoll? lastActivity,
     required SessionClosureProbe? sessionClosure,
+    required ReapWorktree? reapWorktree,
+    required WorktreeRootSupplier? worktreeRoot,
     required Stream<RuntimeEvent>? runtimeEvents,
     required Timer Function(Duration, void Function()) scheduleTimer,
     required DateTime Function() clock,
@@ -263,6 +269,8 @@ class TrajectoryHarness {
        _tickQueries = tickQueries,
        _lastActivity = lastActivity,
        _sessionClosure = sessionClosure,
+       _reapWorktree = reapWorktree,
+       _worktreeRoot = worktreeRoot,
        _runtimeEvents = runtimeEvents,
        _scheduleTimer = scheduleTimer,
        _clock = clock,
@@ -291,6 +299,8 @@ class TrajectoryHarness {
     List<ObligationQuery>? tickQueries,
     LastActivityPoll? lastActivity,
     SessionClosureProbe? sessionClosure,
+    ReapWorktree? reapWorktree,
+    WorktreeRootSupplier? worktreeRoot,
     Stream<RuntimeEvent>? runtimeEvents,
     Timer Function(Duration, void Function())? scheduleTimer,
     DateTime Function()? clock,
@@ -326,6 +336,8 @@ class TrajectoryHarness {
       tickQueries: tickQueries,
       lastActivity: lastActivity,
       sessionClosure: sessionClosure,
+      reapWorktree: reapWorktree,
+      worktreeRoot: worktreeRoot,
       runtimeEvents: runtimeEvents,
       scheduleTimer: scheduleTimer ?? Timer.new,
       clock: clock ?? DateTime.now,
@@ -412,6 +424,8 @@ class TrajectoryHarness {
   /// one lookup per candidate row per tick. Null (a bare harness) leaves that
   /// obligation inert — it never heals on no evidence.
   final SessionClosureProbe? _sessionClosure;
+  final ReapWorktree? _reapWorktree;
+  final WorktreeRootSupplier? _worktreeRoot;
 
   /// `RuntimeProvider.events` — §1.1's runtime-event subscriber (harness-
   /// internal): the observation surface for §2.3's `attempt.process.started`
@@ -532,6 +546,9 @@ class TrajectoryHarness {
   /// from an honest inventory; wave-1 consumers read only the cursor state.
   final StepCursorMirror _stepCursors = StepCursorMirror();
 
+  /// P6's process/worktree identity mirror, on the same post-ACK rails.
+  final ProcessIdentityMirror _processIdentities = ProcessIdentityMirror();
+
   /// The reseed guard's watched set: every `proj_meta` row's
   /// `(projection, fold_version, rebuilt_at)` triple as of the seed. The
   /// appender never writes `rebuilt_at` and all three in-tree replays do, so
@@ -565,6 +582,18 @@ class TrajectoryHarness {
     void Function(TrajectoryStepSnapshot snapshot) listener, {
     bool fireImmediately = false,
   }) => _stepCursors.addListener(listener, fireImmediately: fireImmediately);
+
+  /// The current typed P6 snapshot.
+  TrajectoryProcessIdentitySnapshot get processIdentities =>
+      _processIdentities.snapshot;
+
+  RemoveListener onProcessIdentitiesChanged(
+    void Function(TrajectoryProcessIdentitySnapshot snapshot) listener, {
+    bool fireImmediately = false,
+  }) => _processIdentities.addListener(
+    listener,
+    fireImmediately: fireImmediately,
+  );
 
   TrajectoryHarnessMode get mode => _mode;
 
@@ -722,8 +751,8 @@ class TrajectoryHarness {
       // fails the boot.
       //
       // POSTURE-GATED (r13): at `off` nothing reads the mirrors, so seeding
-      // them would be five boot SELECTs (`readFoldLag`,
-      // `readProjectionGenerations`, both scans, and the epoch-era read) spent
+      // them would be six boot SELECTs (`readFoldLag`,
+      // `readProjectionGenerations`, three scans, and the epoch-era read) spent
       // on state no consumer is wired to. The snapshots stay at their
       // never-seeded `refused` health, which is the honest reading.
       if (_dualReadArmed) await _seedSessionHeads();
@@ -769,6 +798,8 @@ class TrajectoryHarness {
     // no ledger to read, so it heals nothing.
     sessionClosure: config.reconcileLedgerCloses ? _sessionClosure : null,
     appendQueued: hasQueuedAppendForAttemptOrSession,
+    reapWorktree: _reapWorktree,
+    worktreeRoot: _worktreeRoot,
     livenessThreshold: config.livenessThreshold,
     pulseCoalesce: config.pulseCoalesce,
     clock: _clock,
@@ -919,8 +950,8 @@ class TrajectoryHarness {
   // ── the fold mirrors (cut-wiring C1 + C4 / §0.2) ─────────────────────────
 
   /// The boot seed: the lag rule, the generation set, the era boundary, and
-  /// one scan EACH of `proj_session_head` (P1) and `proj_step_cursor` (P2) —
-  /// all on the serialized connection, both under one verdict.
+  /// one scan each of P1, P2, and P6 — all on the serialized connection and
+  /// under one verdict.
   ///
   /// The lag rule reads the shared `'fold'` `proj_meta` row ONLY (the
   /// appender's live cursor); the `'step_cursor'`/`'process_identity'` rows
@@ -938,12 +969,15 @@ class TrajectoryHarness {
         () => readProjectionGenerations(_requireDb()),
       );
       final rows = await _serialize(() => scanSessionHeads(_requireDb()));
-      // The P2 seed rides the SAME lag verdict, the SAME generation set, and
-      // the SAME serialized lane — one boot read, two mirrors. Reading the
+      // The P2/P6 seeds ride the SAME lag verdict, the SAME generation set,
+      // and the SAME serialized lane — one boot read, three mirrors. Reading
       // step rows here rather than on their own pass is what keeps the two
       // snapshots consistent with each other at the instant the mode goes
       // live: a step row can never describe a session the head seed missed.
       final stepRows = await _serialize(() => scanStepCursors(_requireDb()));
+      final processRows = await _serialize(
+        () => scanProcessIdentityRows(_requireDb()),
+      );
       final firstEpochAt = await _serialize(_readFirstEpochClaimedAt);
       _foldGenerations = {for (final row in generations) row.generation};
       _generationsReadAt = _clock();
@@ -960,6 +994,12 @@ class TrajectoryHarness {
         stale: lag.isStale,
         firstEpochClaimedAt: firstEpochAt,
       );
+      _processIdentities.seed(
+        rows: processRows,
+        seededAt: seededAt,
+        stale: lag.isStale,
+        foldHeadSeq: lag.maxSeq,
+      );
       if (lag.isStale) {
         _flare('trajectory.staleFold', {
           'appliedSeq': '${lag.appliedSeq}',
@@ -967,7 +1007,7 @@ class TrajectoryHarness {
           'records': '${lag.records}',
           'ageMs': '${lag.age.inMilliseconds}',
           'effect':
-              'P1/P2 snapshots refused for this boot; legacy stays primary',
+              'P1/P2/P6 snapshots refused for this boot; legacy stays primary',
         });
       }
     } on Object catch (error) {
@@ -1008,6 +1048,7 @@ class TrajectoryHarness {
       _latchMirrorCompromised('harness mode ${_mode.name}');
       return;
     }
+    if (pass.ran) _processIdentities.noteTickAt(_clock().toUtc());
     _evictClosedStepCursors();
     unawaited(_checkFoldGeneration());
   }
@@ -1055,19 +1096,31 @@ class TrajectoryHarness {
       if (_setsEqual(current, seeded)) return;
       final rows = await _serialize(() => scanSessionHeads(_requireDb()));
       final stepRows = await _serialize(() => scanStepCursors(_requireDb()));
+      final processRows = await _serialize(
+        () => scanProcessIdentityRows(_requireDb()),
+      );
+      final lag = await _serialize(
+        () => readFoldLag(_requireDb(), clock: _clock),
+      );
       _foldGenerations = current;
       final seededAt = _clock().toUtc();
-      // BOTH mirrors re-seed on ANY moved triple, deliberately: the guard
+      // ALL mirrors re-seed on ANY moved triple, deliberately: the guard
       // watches the full `proj_meta` row set precisely because a per-projection
       // replay is expressible, and a mirror left on the old generation while
       // its sibling adopted the new one is two folds in one process.
       _sessionHeads.reseed(rows: rows, seededAt: seededAt);
       _stepCursors.reseed(rows: stepRows, seededAt: seededAt);
+      _processIdentities.reseed(
+        rows: processRows,
+        seededAt: seededAt,
+        foldHeadSeq: lag.maxSeq,
+      );
       _flare('trajectory.mirrorReseeded', {
         'seeded': _renderGenerations(seeded),
         'observed': _renderGenerations(current),
         'rows': '${rows.length}',
         'stepRows': '${stepRows.length}',
+        'processRows': '${processRows.length}',
       });
     } on Object catch (error) {
       // A failed generation read is a transient, not a fold fact: flare
@@ -1078,7 +1131,7 @@ class TrajectoryHarness {
 
   /// The COMPROMISED latch — one flare on the transition, by the latch.
   ///
-  /// BOTH mirrors latch together and the flare fires if EITHER transitioned:
+  /// ALL mirrors latch together and the flare fires if ANY transitioned:
   /// a dropped decision-bearing append is a hole in the fold, and the two
   /// overlays share one station-health verdict rather than serving different
   /// authorities. One station, one health.
@@ -1088,12 +1141,13 @@ class TrajectoryHarness {
     if (!_dualReadArmed) return;
     final head = _sessionHeads.latchCompromised();
     final step = _stepCursors.latchCompromised();
-    if (!head && !step) return;
+    final process = _processIdentities.latchCompromised();
+    if (!head && !step && !process) return;
     _flare('trajectory.dualReadCompromised', {
       'reason': reason,
       'dropped': '$_droppedTotal',
       'suppressed': '$_suppressed',
-      'effect': 'P1/P2 overlays disengaged for this boot; legacy stays primary',
+      'effect': 'P1/P2/P6 mirrors compromised for this boot',
     });
   }
 
@@ -1455,18 +1509,7 @@ class TrajectoryHarness {
           // POSTURE-GATED (r13): at `off` the mirrors were never seeded, so
           // applying a delta to them would be maintaining a fold nobody reads
           // — one more per-append cost the rollback posture must not pay.
-          if (_dualReadArmed) {
-            final converted =
-                request.record.isSettling !=
-                (envelope.resolvesRecordId != null);
-            final decoded = converted ? null : request.record;
-            _sessionHeads.applyAppended(envelope, seq: seq, decoded: decoded);
-            // The step delta rides the SAME acked envelope at the SAME
-            // ordinal. It is a second pure fold over one record, never a
-            // second write: `stepCursorDeltaFor` returns null for every
-            // non-step family, so a session record costs one family check.
-            _stepCursors.applyAppended(envelope, seq: seq, decoded: decoded);
-          }
+          _applyCommittedEnvelope(request.record, envelope, seq);
           _ack(entry);
         case AppendDeduped():
           // Applies NOTHING: the original row either landed this boot (already
@@ -1530,6 +1573,20 @@ class TrajectoryHarness {
   }
 
   int get _droppedTotal => _decisionBearingDropped + _fireAndForgetDropped;
+
+  /// The one post-ACK mirror path shared by queue and tick appends.
+  void _applyCommittedEnvelope(
+    TrajectoryRecord record,
+    TrajectoryEnvelope envelope,
+    int seq,
+  ) {
+    if (!_dualReadArmed) return;
+    final converted = record.isSettling != (envelope.resolvesRecordId != null);
+    final decoded = converted ? null : record;
+    _sessionHeads.applyAppended(envelope, seq: seq, decoded: decoded);
+    _stepCursors.applyAppended(envelope, seq: seq, decoded: decoded);
+    _processIdentities.applyAppended(envelope, seq: seq, decoded: decoded);
+  }
 
   void _ack(_TrajectoryQueueEntry entry) {
     _settle(entry, const TrajectoryAppendResult.acked());
@@ -1997,15 +2054,21 @@ final class _SerializedTickAppender implements TickAppender {
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
     DateTime? occurredAt,
-  }) => _harness._serialize(
-    () => _appender.append(
-      record,
-      substation: substation,
-      provenance: provenance,
-      occurredAt: occurredAt,
-      provenanceBasis: provenanceBasis,
-    ),
-  );
+  }) async {
+    final outcome = await _harness._serialize(
+      () => _appender.append(
+        record,
+        substation: substation,
+        provenance: provenance,
+        occurredAt: occurredAt,
+        provenanceBasis: provenanceBasis,
+      ),
+    );
+    if (outcome case Appended(:final envelope, :final seq)) {
+      _harness._applyCommittedEnvelope(record, envelope, seq);
+    }
+    return outcome;
+  }
 
   @override
   Future<void> doltCommitIfDue() =>

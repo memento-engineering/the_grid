@@ -233,6 +233,39 @@ abstract interface class TrajectoryStepSnapshot {
   Iterable<StepCursorView> byP2SessionId(String sessionId);
 }
 
+/// One dependency-neutral P6 process/worktree identity row.
+abstract interface class ProcessIdentityView {
+  String get attemptId;
+  String get sessionId;
+  int get round;
+  String get stepPath;
+  int get stepRound;
+  int get incarnation;
+  int? get pid;
+  int? get pgid;
+  String? get leaseState;
+  String? get worktree;
+  String? get branch;
+  String? get baseSha;
+  bool? get adoptedExisting;
+  String? get worktreeState;
+  String? get predecessorAttemptId;
+  int get lastSeq;
+}
+
+/// One immutable, versioned read of the P6 mirror.
+abstract interface class TrajectoryProcessIdentitySnapshot {
+  int get version;
+  TrajectorySnapshotHealth get health;
+  DateTime? get seededAt;
+
+  /// Published only after a Stage-1 tick pass actually ran.
+  DateTime? get lastTickAt;
+
+  Iterable<ProcessIdentityView> get rows;
+  Iterable<ProcessIdentityView> bySessionId(String sessionId);
+}
+
 /// What [TrajectoryHeadSnapshot.byWorkBead] resolved to.
 @immutable
 sealed class SessionHeadWinner {

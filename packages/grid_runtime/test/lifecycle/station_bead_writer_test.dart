@@ -74,12 +74,16 @@ void main() {
 
   StationBeadWriter writer({
     void Function(String, Map<String, String>)? onFlare,
+    SessionDisciplineStamp sessionDiscipline = SessionDisciplineStamp.shadow,
+    String? sessionBreakGlassReason,
   }) => StationBeadWriter(
     bd: bd,
     reader: runner,
     ownership: predicate(),
     onRefusal: refusals.add,
     onFlare: onFlare ?? (name, data) => flares.add((name: name, data: data)),
+    sessionDiscipline: sessionDiscipline,
+    sessionBreakGlassReason: sessionBreakGlassReason,
   );
 
   setUp(() {
@@ -349,6 +353,8 @@ void main() {
       expect(stamped['rig'], 'tgdog');
       expect(stamped['work_bead'], 'tgdog-work1');
       expect(stamped['state'], 'start_pending');
+      expect(stamped[kSessionDisciplineKey], 'shadow');
+      expect(stamped, isNot(contains(kSessionBreakGlassKey)));
       expect(flares.single.name, 'session.minted');
       expect(flares.single.data['sessionId'], 'tgdog-sess1');
       expect(flares.single.data['workBeadId'], 'tgdog-work1');
@@ -356,6 +362,26 @@ void main() {
       // Safety invariants.
       expect(runner.everyMutationHasActor, isTrue);
       expect(runner.neverCalledShow, isTrue);
+    });
+
+    test('createSession seals cut and break-glass birth facts', () async {
+      await writer(
+        sessionDiscipline: SessionDisciplineStamp.cut,
+        sessionBreakGlassReason: 'operator rollback',
+      ).createSession(
+        substation: 'tgdog',
+        title: 'cut session',
+        workBeadId: 'tgdog-work1',
+        metadata: const {
+          kSessionDisciplineKey: 'shadow',
+          kSessionBreakGlassKey: 'caller-value',
+        },
+      );
+
+      final stamped =
+          jsonDecode(runner.metadataOfUpdate(0)!) as Map<String, dynamic>;
+      expect(stamped[kSessionDisciplineKey], 'cut');
+      expect(stamped[kSessionBreakGlassKey], 'operator rollback');
     });
 
     test('update issues exactly one atomic metadata merge', () async {

@@ -1221,8 +1221,10 @@ The session bead survives as a human-readable index card in `bd list -t session`
 | `grid.head.last_seq` | pointer into the trajectory |
 | `grid.head.epoch` | **the ledger-side fence** (§5): the writing authority's epoch; a lower-epoch writer's stamp is refused |
 
-Dropped: pgid/pid/token, `grid.result.*` copies, escalation/void/decline merges, operator-ruling
-merges (retirement items 9–13). **Writer rule:** the fenced service is the sole writer — now with a
+Dropped: pgid/pid/token and `grid.result.*` copies at their assigned stages;
+**held-derivation merge drop — Stage 4 with R2/R7** covers the
+escalation/void/decline and operator-ruling merges (retirement items 9–13).
+**Writer rule:** the fenced service is the sole writer — now with a
 mechanism, not just intent: every head write is epoch-stamped, epoch-compared, and read back (§5).
 Hand-edits are made harmless, not prevented: no fold, admission, or lifecycle read consumes the
 head (they read P1); divergence is a standing obligation query keyed on bd's state, repaired on the
@@ -1322,6 +1324,11 @@ operator either **boots the previous epoch's code to drain** (the rollback line 
 double duty as the drain procedure — the outgoing discipline's writers run until its sessions
 reach terminal) or **closes/harvests the open sessions directly** (the standing harvest-review /
 close-session playbooks). There is no third path; a stage cut never proceeds over open sessions.
+
+**Wave-2 named exception.** Cut-wiring §W2.2 keeps exactly four step-bead
+writes during G1: `{complete, failed, gated, ready}`. The narrow exception is
+explicitly ratified by Q10; it does not imply another partial cut and expires
+only at those writes' assigned later stages.
 
 **Legacy reads: a code-level dual-read, not a view (major fix).** The draft's `v_session_legacy`
 is retired — the legacy read shape is a Dart disposition rule (`session_disposition.dart:80-116`,

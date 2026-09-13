@@ -40,8 +40,8 @@ enum StationWorkStartStage {
   /// Starts the trajectory harness.
   trajectoryStart,
 
-  /// Refuses a trajectory cut paired with a contradictory posture.
-  cutPostureCheck,
+  /// Verifies that a cut boot obtained its required live trajectory harness.
+  trajectoryAvailability,
 
   /// Waits for every controller's fresh baseline.
   freshnessBarrier,
@@ -52,8 +52,75 @@ enum StationWorkStartStage {
   /// Replays the terminal tail of sessions interrupted during teardown.
   teardownReplay,
 
+  /// Destructively voids cut-era sessions for a break-glass shadow boot.
+  breakGlassEntry,
+
+  /// Refuses an open session whose durable era crosses the boot discipline.
+  disciplineQuiesce,
+
   /// Starts the bridge-owning station driver.
   driverStart,
+}
+
+/// A cut boot whose required trajectory harness did not become live.
+@immutable
+final class CutTrajectoryUnavailable implements Exception {
+  const CutTrajectoryUnavailable({required this.mode, required this.cause});
+
+  /// The harness posture observed immediately after `start` returned.
+  final TrajectoryHarnessMode mode;
+
+  /// The harness's concrete degradation/refusal reason, when present.
+  final String? cause;
+
+  @override
+  String toString() =>
+      'CutTrajectoryUnavailable(mode: ${mode.name}, cause: $cause)';
+}
+
+/// A boot whose discipline disagrees with one or more open session eras.
+@immutable
+final class DisciplineQuiesceRefused implements Exception {
+  DisciplineQuiesceRefused({
+    required this.discipline,
+    required Iterable<String> offendingSessionIds,
+  }) : offendingSessionIds = List<String>.unmodifiable(
+         offendingSessionIds.toList(growable: false)..sort(),
+       );
+
+  /// The once-resolved station discipline for this boot.
+  final TrajectoryDiscipline discipline;
+
+  /// Every station-wide open session crossing that boundary, sorted.
+  final List<String> offendingSessionIds;
+
+  @override
+  String toString() =>
+      'DisciplineQuiesceRefused(discipline: ${discipline.name}, '
+      'sessions: ${offendingSessionIds.join(',')})';
+}
+
+/// Computes the station-wide bidirectional discipline boundary over raw beads.
+///
+/// Paused sessions remain in this set: pause releases capacity but preserves
+/// the open session/cursor that can later resume, so it cannot cross carriers.
+List<String> disciplineQuiesceOffenders({
+  required GraphSnapshot snapshot,
+  required TrajectoryDiscipline discipline,
+}) {
+  final ids = <String>[
+    for (final bead in snapshot.beads)
+      if (bead.issueType == GridIssueTypes.session &&
+          bead.status == BeadStatus.open &&
+          switch (discipline) {
+            TrajectoryDiscipline.cut =>
+              sessionDisciplineOf(bead.metadata) != SessionDisciplineStamp.cut,
+            TrajectoryDiscipline.shadow =>
+              sessionDisciplineOf(bead.metadata) == SessionDisciplineStamp.cut,
+          })
+        bead.id,
+  ]..sort();
+  return List<String>.unmodifiable(ids);
 }
 
 /// The immutable lifecycle of one [StationWorkRuntime].
@@ -178,6 +245,11 @@ class StationWorkRuntime implements SubstationProvisioner {
     required Future<void> Function() sourcesStart,
     required Future<void> Function() sourcesShutdown,
     required Future<void> Function() freshnessBarrier,
+    required Future<void> Function() stateRequery,
+    required GraphSnapshot Function() stateSnapshot,
+    required StationBeadWriter stateWriter,
+    required TrajectoryConfig trajectoryConfig,
+    required void Function(String, Map<String, String>)? onFlare,
     required Map<String, GraphSyncStats> Function() syncStats,
     required Map<String, MemberFreshness> Function() workFreshness,
     required BeadOwnershipPredicate stateOwnership,
@@ -200,6 +272,11 @@ class StationWorkRuntime implements SubstationProvisioner {
        _sourcesStart = sourcesStart,
        _sourcesShutdown = sourcesShutdown,
        _freshnessBarrier = freshnessBarrier,
+       _stateRequery = stateRequery,
+       _stateSnapshot = stateSnapshot,
+       _stateWriter = stateWriter,
+       _trajectoryConfig = trajectoryConfig,
+       _onFlare = onFlare,
        _syncStats = syncStats,
        _workFreshness = workFreshness,
        _stateOwnership = stateOwnership,
@@ -267,6 +344,11 @@ class StationWorkRuntime implements SubstationProvisioner {
   final Future<void> Function() _sourcesStart;
   final Future<void> Function() _sourcesShutdown;
   final Future<void> Function() _freshnessBarrier;
+  final Future<void> Function() _stateRequery;
+  final GraphSnapshot Function() _stateSnapshot;
+  final StationBeadWriter _stateWriter;
+  final TrajectoryConfig _trajectoryConfig;
+  final void Function(String, Map<String, String>)? _onFlare;
   final Map<String, GraphSyncStats> Function() _syncStats;
   final Map<String, MemberFreshness> Function() _workFreshness;
   final BeadOwnershipPredicate _stateOwnership;
@@ -419,16 +501,17 @@ class StationWorkRuntime implements SubstationProvisioner {
         );
       }
 
-      stage = StationWorkStartStage.cutPostureCheck;
+      stage = StationWorkStartStage.trajectoryAvailability;
       _lifecycle = StationWorkRuntimeState.starting(stage: stage);
-      // The cut is one lever: a caller cannot pair it with a weaker requested
-      // posture. This read belongs after trajectory attachment but before the
-      // freshness/restart rails and tree build, so a contradiction neither
-      // reaches attempt admission nor mints a mount-attempt write. It throws
-      // outside the harness catch because this is a named boot refusal, not a
-      // non-fatal trajectory failure.
-      final cutPostureRefusal = trajectory.config.cutPostureRefusal;
-      if (cutPostureRefusal != null) throw cutPostureRefusal;
+      if (_trajectoryConfig.discipline == TrajectoryDiscipline.cut &&
+          trajectory.status.mode != TrajectoryHarnessMode.live) {
+        final refusal = CutTrajectoryUnavailable(
+          mode: trajectory.status.mode,
+          cause: trajectory.status.cause,
+        );
+        await trajectory.shutdown();
+        throw refusal;
+      }
 
       stage = StationWorkStartStage.freshnessBarrier;
       _lifecycle = StationWorkRuntimeState.starting(stage: stage);
@@ -463,11 +546,87 @@ class StationWorkRuntime implements SubstationProvisioner {
         _onRefusal('teardown replay failed (station still booting) — $error');
       }
 
+      // Requery AFTER replay: this is the complete raw state carrier for both
+      // break-glass and quiescence. SessionProjection intentionally has no
+      // metadata map and gains no discipline field.
+      await _stateRequery();
+      var state = _stateSnapshot();
+
+      if (_trajectoryConfig.breakGlassReason case final reason?) {
+        stage = StationWorkStartStage.breakGlassEntry;
+        _lifecycle = StationWorkRuntimeState.starting(stage: stage);
+        final cutSessions = _openSessions(state)
+            .where(
+              (bead) =>
+                  sessionDisciplineOf(bead.metadata) ==
+                  SessionDisciplineStamp.cut,
+            )
+            .toList(growable: false);
+        final workBeads = <String, String>{};
+        for (final session in cutSessions) {
+          final workBeadId = session.metadata[SessionBeadKeys.workBead];
+          if (workBeadId is! String || workBeadId.isEmpty) {
+            throw StateError(
+              'break-glass session ${session.id} has no work_bead',
+            );
+          }
+          workBeads[session.id] = workBeadId;
+        }
+        for (final session in cutSessions) {
+          final workBeadId = workBeads[session.id]!;
+          await _stateWriter.update(
+            session.id,
+            metadata: voidRetireMetadata(
+              workBeadId: workBeadId,
+              deadSessionId: session.id,
+              reason: 'break-glass:$reason',
+            ),
+          );
+          await _stateWriter.close(session.id, reason: 'break-glass:$reason');
+          await trajectory.recorder.sessionVoided(
+            sessionId: session.id,
+            workBeadId: workBeadId,
+            reason: 'break-glass:$reason',
+          );
+          trajectory.recorder.breakGlassNoted(
+            sessionId: session.id,
+            reason: reason,
+          );
+        }
+        _onRefusal(
+          'grid: BREAK-GLASS reason=$reason voided=${cutSessions.length}',
+        );
+        _onFlare?.call('trajectory.breakGlass', {
+          'reason': reason,
+          'voided': '${cutSessions.length}',
+        });
+        await _stateRequery();
+        state = _stateSnapshot();
+      }
+
+      stage = StationWorkStartStage.disciplineQuiesce;
+      _lifecycle = StationWorkRuntimeState.starting(stage: stage);
+      final offending = disciplineQuiesceOffenders(
+        snapshot: state,
+        discipline: _trajectoryConfig.discipline,
+      );
+      if (offending.isNotEmpty) {
+        final refusal = DisciplineQuiesceRefused(
+          discipline: _trajectoryConfig.discipline,
+          offendingSessionIds: offending,
+        );
+        await trajectory.shutdown();
+        throw refusal;
+      }
+
       stage = StationWorkStartStage.driverStart;
       _lifecycle = StationWorkRuntimeState.starting(stage: stage);
       _driver.start();
       _lifecycle = const StationWorkRuntimeState.started();
     } on Object catch (error, stackTrace) {
+      if (stage == StationWorkStartStage.breakGlassEntry) {
+        await trajectory.shutdown();
+      }
       _lifecycle = StationWorkRuntimeState.failed(
         stage: stage,
         error: error,
@@ -476,6 +635,16 @@ class StationWorkRuntime implements SubstationProvisioner {
       Error.throwWithStackTrace(error, stackTrace);
     }
   }
+
+  /// All OPEN station session beads, deliberately including operator-paused
+  /// sessions. Pause releases capacity but preserves the session/cursor; an
+  /// era crossing would make a later resume read the wrong carrier.
+  static Iterable<Bead> _openSessions(GraphSnapshot snapshot) =>
+      snapshot.beads.where(
+        (bead) =>
+            bead.issueType == GridIssueTypes.session &&
+            bead.status == BeadStatus.open,
+      );
 
   /// The `runGrid(onFlushed:)` hook — the driver's post-flush cooldown +
   /// unclaimed-frontier re-scans (D-5/F1), then the roster drain settle.
@@ -891,11 +1060,19 @@ Future<StationWorkRuntime> assembleStationWork({
   Duration syncFloorInterval = kDefaultSyncFloorInterval,
   TrajectoryConfig trajectoryConfig = const TrajectoryConfig(),
   TrajectoryHarness? trajectoryOverride,
+  Map<String, String>? environment,
   StationWorkBundleBuilder? bundleBuilder,
   StationWorkFederatedSourceBuilder? federatedSourceBuilder,
   StationWorkJoinBridgeBuilder? joinBridgeBuilder,
   StationWorkDriverBuilder? driverBuilder,
 }) async {
+  final resolvedTrajectoryConfig = trajectoryConfig.resolveForAssembly(
+    dryRun: dryRun,
+    breakGlassReason: (environment ?? systemEnvironment())[kGridG1BreakGlass],
+  );
+  final cutPostureRefusal = resolvedTrajectoryConfig.cutPostureRefusal;
+  if (cutPostureRefusal != null) throw cutPostureRefusal;
+
   if (registry != null &&
       (registryBuilder != null || registryBuilderWithSpecWriter != null)) {
     throw ArgumentError(
@@ -1022,7 +1199,7 @@ Future<StationWorkRuntime> assembleStationWork({
       wedgeThreshold: wedgeThreshold,
       wedgePollInterval: wedgePollInterval,
       syncFloorInterval: syncFloorInterval,
-      trajectoryConfig: trajectoryConfig,
+      trajectoryConfig: resolvedTrajectoryConfig,
       trajectoryOverride: trajectoryOverride,
       bundleBuilder: bundleBuilder,
       federatedSourceBuilder: federatedSourceBuilder,
@@ -1193,6 +1370,10 @@ Future<StationWorkRuntime> _acquireStationWork({
     // transport for the partition that mints every session bead. That is
     // exactly the evidence the dual-read gates read.
     onFlare: transport?.flare,
+    sessionDiscipline: trajectoryConfig.discipline == TrajectoryDiscipline.cut
+        ? SessionDisciplineStamp.cut
+        : SessionDisciplineStamp.shadow,
+    sessionBreakGlassReason: trajectoryConfig.breakGlassReason,
   );
 
   // The relay horizon is the only write this coordinator can perform. Expiry
@@ -1217,6 +1398,12 @@ Future<StationWorkRuntime> _acquireStationWork({
     disposers.add((step: 'runtime provider dispose', dispose: dispose));
   }
 
+  // The harness starts only after assembly returns, so these late-bound DI
+  // closures can share the one git service/root registry constructed below
+  // without putting either service into the tree.
+  late final StationGitService git;
+  final rootsByName = <String, RootCheckout>{};
+
   late final TrajectoryHarness trajectory;
   final trajectoryAdmissionHalt =
       trajectoryConfig.discipline == TrajectoryDiscipline.cut
@@ -1238,8 +1425,7 @@ Future<StationWorkRuntime> _acquireStationWork({
   // --- the trajectory harness (stage1-wiring §1.1), built beside the state
   // writer — the one place that knows everything the fenced service needs:
   // the grid home, the state partition, the substation allow-set, and the flare
-  // transport. Dry-run forces `disabled` (§1.3): a dry arm must not claim an
-  // epoch or write anything — same physics as the recording no-op bd.
+  // transport. Assembly already resolved dry-run into disabled shadow.
   // [trajectoryOverride] is a TEST seam, like every other per-seam override.
   final stationTrajectoryConfig = trajectoryConfig
       .withAppendedObligationQueries([
@@ -1248,9 +1434,7 @@ Future<StationWorkRuntime> _acquireStationWork({
   trajectory =
       trajectoryOverride ??
       await TrajectoryHarness.build(
-        config: dryRun
-            ? stationTrajectoryConfig.asDisabled
-            : stationTrajectoryConfig,
+        config: stationTrajectoryConfig,
         gridHome: stateStore.gridRoot,
         station: stateSubstation,
         substationPrefixes: allowSet,
@@ -1280,6 +1464,35 @@ Future<StationWorkRuntime> _acquireStationWork({
           final bead = stateSource.current?.beadsById[sessionId];
           return bead == null ? null : sessionClosureOf(bead);
         },
+        reapWorktree: trajectoryConfig.discipline != TrajectoryDiscipline.cut
+            ? null
+            : ({
+                required root,
+                required worktree,
+                dryRun = false,
+                overrideUnsafe = false,
+              }) => git.reap(
+                root: root,
+                worktree: worktree,
+                dryRun: dryRun,
+                overrideUnsafe: overrideUnsafe,
+              ),
+        worktreeRoot: trajectoryConfig.discipline != TrajectoryDiscipline.cut
+            ? null
+            : (path) {
+                RootCheckout? match;
+                for (final root in rootsByName.values) {
+                  if (!isStrictlyUnderDir(
+                    WorktreeLayout.worktreesRoot(root.path),
+                    path,
+                  )) {
+                    continue;
+                  }
+                  if (match != null) return null;
+                  match = root;
+                }
+                return match;
+              },
         // §1.1's runtime-event subscriber (harness-internal, over
         // `provider.events`): the observation surface for
         // `attempt.process.started`/`.exited` (§2.3 rows 2–3). The harness
@@ -1424,7 +1637,7 @@ Future<StationWorkRuntime> _acquireStationWork({
   // --- the transports (ONE dry/live posture, per-seam overrides = tests).
   // The provider itself is built above, beside the trajectory harness that
   // polls it.
-  final git =
+  git =
       gitOverride ??
       (dryRun
           ? buildDryStationGitService()
@@ -1440,7 +1653,6 @@ Future<StationWorkRuntime> _acquireStationWork({
   // --- the registered roots. Dry-run registers nothing (the inert service
   // provisions nothing) but the restart sweep still runs over the REAL root
   // path — no sentinel (v3 kills those). Live probes/pins the head.
-  final rootsByName = <String, RootCheckout>{};
   for (final s in substations) {
     if (dryRun) {
       rootsByName[s.name] = RootCheckout(
@@ -1568,6 +1780,7 @@ Future<StationWorkRuntime> _acquireStationWork({
     // `off` (r13) — the pass never reaches the mirror, so it is the pre-cut
     // pass, teardown-replay observer append included.
     headSnapshot: dualReadArmed ? () => trajectory.sessionHeads : null,
+    stepSnapshot: dualReadArmed ? () => trajectory.stepCursors : null,
     dualReadAccounting: dualReadAccounting,
     // C3: the reconciler serves the SAME overlay under the SAME posture — a
     // disposition must not depend on which pass asked for it.
@@ -1702,6 +1915,11 @@ Future<StationWorkRuntime> _acquireStationWork({
       );
     },
     freshnessBarrier: freshnessBarrier,
+    stateRequery: stateBundle.runtime.requery,
+    stateSnapshot: () => stateSource.current ?? _emptyGraphSnapshot(),
+    stateWriter: writer,
+    trajectoryConfig: trajectoryConfig,
+    onFlare: transport?.flare,
     syncStats: () => {
       for (final e in bundles.entries) e.key: e.value.runtime.stats,
       'state': stateBundle.runtime.stats,
