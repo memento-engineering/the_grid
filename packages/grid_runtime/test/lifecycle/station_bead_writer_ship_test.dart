@@ -91,6 +91,40 @@ void main() {
     expect(runner.callsFor('ship'), hasLength(1));
   });
 
+  test('a capability the bead ALREADY provides is not re-shipped — the '
+      'observer can run every flush', () async {
+    runner.exportBeads = [
+      _work(
+        'tgdog-1',
+        labels: const [
+          'export:tgdog-1',
+          'provides:tgdog-1',
+          'export:release-gate',
+        ],
+        status: BeadStatus.closed,
+      ),
+    ];
+
+    expect(await writer().shipExports('tgdog-1'), ['release-gate']);
+    expect(runner.callsFor('ship'), [
+      ['ship', 'release-gate', '--json', '--actor', 'grid-controller'],
+    ]);
+  });
+
+  test('a fully shipped bead spawns no process at all', () async {
+    runner.exportBeads = [
+      _work(
+        'tgdog-1',
+        labels: const ['export:tgdog-1', 'provides:tgdog-1'],
+        status: BeadStatus.closed,
+      ),
+    ];
+
+    expect(await writer().shipExports('tgdog-1'), isEmpty);
+    expect(runner.callsFor('ship'), isEmpty);
+    expect(flares, isEmpty);
+  });
+
   test(
     'shipExports is fail-closed on ownership and silent on an absent bead',
     () async {

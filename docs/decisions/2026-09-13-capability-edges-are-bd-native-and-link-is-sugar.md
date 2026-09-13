@@ -13,6 +13,8 @@ register:
     - "packages/grid_engine/lib/src/domain/external_dep.dart"
     - "packages/grid_engine/lib/src/bridge/federated_snapshot_source.dart"
     - "packages/grid_runtime/lib/src/lifecycle/station_bead_writer.dart"
+    - "packages/grid_sdk/lib/src/command/station_command_handler.dart"
+    - "packages/grid_sdk/lib/src/work/work_assembly.dart"
     - "packages/grid_cli/lib/src/link_command.dart"
   obsoletes:
     - "cross-store-dep-rows-are-refused-not-honoured"
@@ -91,17 +93,32 @@ prerequisites, per the previous entry's fan-in rule.
   the origin store's own `bd ready`, exactly as a same-store row is. Reporting
   it was only ever a pointer at the `link` verb, and the verb no longer authors
   the thing it pointed at.
-* **Ship on close.** The station writer runs `bd ship <capability>` once per
-  `export:<capability>` label the closing bead carries. It reads the bead's
-  CURRENT labels, so it is driven by the closed STATE rather than by a close
-  event: run against a bead an operator closed by hand, it ships exactly the
-  same capabilities. A bead carrying no `export:` label spawns no process.
+* **Ship on close, on TWO rails, through ONE chokepoint.** The station writer
+  runs `bd ship <capability>` once per owed `export:<capability>` label, reading
+  the bead's CURRENT labels — driven by the closed STATE, not by a close event.
+  Rail one is `StationBeadWriter.close`, which ships whatever the station itself
+  closes. Rail two is the POST-FLUSH SETTLE
+  (`StationCommandHandler.settleCapabilityExports`, on the same `onFlushed` rail
+  as the roster drain settle): it reads each work store's resident snapshot,
+  takes the CLOSED beads that carry an `export:` with no matching `provides:`,
+  and ships them through that same writer. That rail is what makes "a bead
+  closed by an operator BY HAND is shipped the next time the station observes
+  the close" true of the running station rather than of a method nobody calls —
+  agents close their own work beads in their worktrees, so without it the
+  capability would have no automated producer at all. Rising-edge, like the
+  refusal log: one `bd ship` per observed owing bead, the key dropped as soon as
+  the snapshot stops reporting it owed. A capability the bead already provides,
+  and a bead carrying no `export:` label, spawn no process.
 * **`link` is sugar.** `link <from> --blocked-by <to>` resolves `<to>`'s store
   from the roster, adds `export:<to>` to `<to>` if absent, and runs
   `bd dep add <from> external:<project>:<to>`. It mints no bead and never
   touches the station's own state store. `--prefix`, `--grid-root`, `--reason`
   and `--actor` retire with the link bead that carried them: the roster resolves
-  prefixes, and `bd` owns the audit trail. `link ls` lists external rows.
+  prefixes, and `bd` owns the audit trail. `link ls` lists external rows, and it
+  reads SHIPPED exactly as the frontier does — a LABEL scan for a CLOSED bead
+  carrying `provides:<capability>`, never a bead-id lookup — so the verb and the
+  engine can never disagree about one edge, including the fan-in form where the
+  capability is not any bead's id.
 * **A SAME-store pair is refused**, pointing at `bd dep add <from> <to>`. A
   self-referential `external:` row resolves in no store, and a same-store
   blocker needs nothing this verb adds.
@@ -127,6 +144,17 @@ prerequisites, per the previous entry's fan-in rule.
 * Bad, because the frontier's satisfaction test now reads bd LABELS, so a store
   whose labels are stale reads as unshipped. Fail-closed is the right direction
   for that error, but it is a new way to be wrong.
+* Bad, because the post-flush settle is a bd WRITE on the flush rail. It is
+  bounded by the rising edge and by the owed set being empty in steady state
+  (the common flush spawns nothing), it rides the handler's serialized tail like
+  every other resident write, and a failure is reported through the refusal sink
+  without stopping the flush — but it is the first write the flush rail makes on
+  its own initiative.
+* Bad, because `grid_cli`'s `LinkCommand`/`LinkEndpointStore` constructors
+  change shape (`stateStorePrefix` and the bare `prefix` endpoint go; the roster
+  `name` arrives). The hard cut forbids a shim, so every composer adopts on the
+  next `grid_cli` version — `space_station_assets`'s `buildSpaceLinkCommands` is
+  the one that exists today.
 
 ### What this obsoletes and updates
 

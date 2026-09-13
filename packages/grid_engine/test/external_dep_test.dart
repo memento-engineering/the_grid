@@ -82,6 +82,45 @@ void main() {
         );
       },
     );
+
+    test('a capability is shipped by a bead that is not named after it — the '
+        'FAN-IN form', () {
+      expect(
+        capabilityShipped('release-gate', [
+          closed('pow-9', labels: const ['provides:release-gate']),
+        ]),
+        isTrue,
+      );
+    });
+
+    test(
+      'unshipped capabilities are the exports with no matching provides',
+      () {
+        expect(
+          unshippedCapabilities(const [
+            'export:a',
+            'provides:a',
+            'export:b',
+            'provides:c',
+          ]),
+          ['b'],
+        );
+      },
+    );
+
+    test('unshippedExports is the CLOSED beads still owing a bd ship', () {
+      final owed = unshippedExports([
+        closed('pow-1', labels: const ['export:pow-1']),
+        closed('pow-2', labels: const ['export:pow-2', 'provides:pow-2']),
+        closed('pow-3', labels: const ['export:pow-3', 'export:release-gate']),
+        closed('pow-4'),
+        bead('pow-5').copyWith(labels: const ['export:pow-5']),
+      ]);
+      expect(owed, {
+        'pow-1': ['pow-1'],
+        'pow-3': ['pow-3', 'release-gate'],
+      });
+    });
   });
 
   group('applyExternalDeps', () {

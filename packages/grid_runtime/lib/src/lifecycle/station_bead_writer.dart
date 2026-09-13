@@ -1404,19 +1404,21 @@ class StationBeadWriter {
     });
   }
 
-  /// SHIPS every capability [id] exports — `bd ship <capability>` once per
-  /// `export:<capability>` label the bead carries (tg-xh5d,
+  /// SHIPS every capability [id] exports and does not yet provide — one
+  /// `bd ship <capability>` per owed `export:<capability>` label (tg-xh5d,
   /// `the_grid#the-grid-is-a-beads-controller`).
   ///
   /// This is what publishes `provides:<capability>` and so unblocks every
   /// external consumer whose `bd dep` row names it. The grid adds only the
-  /// TRIGGER — bd owns the label write, the closed-ness validation and the
-  /// idempotence (re-shipping re-adds a label the bead already carries).
+  /// TRIGGER — bd owns the label write and the closed-ness validation.
   ///
   /// Reads the CURRENT bead, so it is driven by the bead's closed STATE rather
-  /// than by a close event: calling it on a bead an operator closed by hand
-  /// ships exactly the same capabilities. A bead carrying no `export:` label
-  /// spawns no process at all.
+  /// than by a close event: calling it on a bead an operator closed BY HAND
+  /// ships exactly the same capabilities, which is how the station's
+  /// post-flush observer (`StationCommandHandler.settleCapabilityExports`)
+  /// ships a hand-closed bead. Idempotent by the same reading: a capability
+  /// the bead already provides is shipped, so it spawns NO process, and a bead
+  /// carrying no `export:` label spawns none either.
   ///
   /// Fail-closed on ownership, like every other write here, and serialized
   /// per-id (D-1) — except when called from [close], which already holds the
@@ -1435,7 +1437,7 @@ class StationBeadWriter {
     );
     if (bead == null) return const [];
     final shipped = <String>[];
-    for (final capability in exportedCapabilities(bead.labels)) {
+    for (final capability in unshippedCapabilities(bead.labels)) {
       await _bd.ship(capability);
       shipped.add(capability);
     }

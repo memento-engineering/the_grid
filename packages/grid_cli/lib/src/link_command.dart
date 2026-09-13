@@ -319,21 +319,33 @@ Future<List<Map<String, String>>> _externalRowsOf(
   return rows;
 }
 
-/// Whether [capability] is SHIPPED in [endpoint]'s store.
+/// Whether [capability] is SHIPPED in [endpoint]'s store — the FRONTIER's
+/// reading, so the verb and the engine never disagree about one edge.
+///
+/// Shipped means what [capabilityShipped] means: the store holds a CLOSED bead
+/// carrying `provides:<capability>`. That is a LABEL scan, not an id lookup,
+/// so a NAMED (fan-in) capability — a container bead whose own id is not the
+/// capability — reads SHIPPED exactly when the frontier admits its consumers.
+///
+/// Only when the capability is unshipped is its id-shaped convention consulted,
+/// and then only to say WHY: by convention the capability IS the exporting
+/// bead's id, so naming that bead's status is the useful answer; a named
+/// capability resolves to no bead and says so.
 Future<String> _capabilityState(
   LinkEndpointStore endpoint,
   String capability,
   _StoreProbes probes,
 ) async {
   final probe = await probes.of(endpoint);
-  // The capability IS the exporting bead's id by convention; a NAMED
-  // capability resolves to no bead here and reads as PENDING, which is what an
-  // unshipped capability is.
-  final bead = await probe.reader.beadById(capability, types: probe.types);
-  if (bead == null) return 'PENDING (unshipped)';
-  return capabilityShipped(capability, [bead])
-      ? 'SHIPPED (inert)'
-      : 'PENDING (${bead.status.wire})';
+  final providers = await probe.bd.query(
+    'label=${providesLabel(capability)}',
+    includeClosed: true,
+  );
+  if (capabilityShipped(capability, providers)) return 'SHIPPED (inert)';
+  final exporter = await probe.reader.beadById(capability, types: probe.types);
+  return exporter == null
+      ? 'PENDING (unshipped)'
+      : 'PENDING (${exporter.status.wire})';
 }
 
 /// The endpoint owning [id], or `null` after reporting why none does.

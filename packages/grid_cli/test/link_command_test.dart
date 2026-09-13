@@ -275,6 +275,48 @@ void main() {
     expect(shipped['edgeState'], contains('SHIPPED'));
   });
 
+  test('link ls reads SHIPPED the way the FRONTIER does — a fan-in capability '
+      'is not a bead id', () async {
+    tg.dependencies.add(
+      const BeadDependency(
+        issueId: 'tg-q9k',
+        dependsOnId: 'external:power_station:release-gate',
+      ),
+    );
+    // The NAMED (fan-in) form: a container bead whose own id is NOT the
+    // capability ships it. Resolving the capability as a bead id would render
+    // this PENDING while the frontier admits the consumer.
+    pow.beads[0] = pow.beads[0].copyWith(
+      status: BeadStatus.closed,
+      labels: const ['export:release-gate', 'provides:release-gate'],
+    );
+    final human = <String>[];
+    expect(
+      await runLink(
+        arguments: _linkArgs(['ls']),
+        endpoints: endpoints,
+        bdFactory: factory,
+        out: human.add,
+      ),
+      0,
+    );
+    expect(human.single, contains('SHIPPED'));
+
+    // An OPEN bead carrying provides: is `bd ship --force` — not shipped.
+    pow.beads[0] = pow.beads[0].copyWith(status: BeadStatus.open);
+    human.clear();
+    expect(
+      await runLink(
+        arguments: _linkArgs(['ls']),
+        endpoints: endpoints,
+        bdFactory: factory,
+        out: human.add,
+      ),
+      0,
+    );
+    expect(human.single, contains('PENDING (unshipped)'));
+  });
+
   test('link ls accepts nothing but --json', () async {
     final errors = <String>[];
     expect(
@@ -539,15 +581,18 @@ class _FakeStore implements BdRunner {
         );
       case 'query':
         final expression = args[1];
-        if (!expression.startsWith('id=')) {
-          throw StateError('unexpected bd query: $args');
-        }
-        final id = expression.substring('id='.length);
+        // The two expressions the verb authors: an id lookup, and the LABEL
+        // scan that answers "is this capability shipped?" the way the frontier
+        // answers it.
+        final match = switch (expression.split('=')) {
+          ['id', final String id] => (Bead bead) => bead.id == id,
+          ['label', final String label] => (Bead bead) => bead.labels.contains(
+            label,
+          ),
+          _ => throw StateError('unexpected bd query: $args'),
+        };
         return _listEnvelope(
-          beads
-              .where((bead) => bead.id == id)
-              .map((bead) => bead.toJson())
-              .toList(),
+          beads.where(match).map((bead) => bead.toJson()).toList(),
         );
       case 'dep':
         if (args[1] == 'list') {

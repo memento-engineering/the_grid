@@ -602,12 +602,25 @@ class BdCliService {
     await _runEnvelope(depAddArgs(issueId, dependsOnId, type));
   }
 
-  /// `bd label add <id> <label> … --json` — adds every label in [labels] to
-  /// [id], leaving the ones already present untouched (bd's add is a set
-  /// union, so the call is idempotent). An empty [labels] is a no-op.
+  /// `bd label add <id> <label>[,<label>…] --json` — adds every label in
+  /// [labels] to [id] in ONE call, leaving the ones already present untouched
+  /// (bd's add is a set union, so the call is idempotent).
+  ///
+  /// bd takes the labels as a single comma-separated final argument, so a
+  /// label containing a comma is not expressible and is REFUSED here rather
+  /// than silently split into two. An empty [labels] is a no-op.
   Future<void> addLabels(String id, Iterable<String> labels) async {
     final wanted = labels.toList(growable: false);
     if (wanted.isEmpty) return;
+    for (final label in wanted) {
+      if (label.contains(',')) {
+        throw ArgumentError.value(
+          label,
+          'labels',
+          'bd separates labels with commas, so a label cannot contain one',
+        );
+      }
+    }
     await _runEnvelope(addLabelsArgs(id, wanted));
   }
 
@@ -922,11 +935,17 @@ class BdCliService {
     ..._actorArgs,
   ];
 
+  /// `bd label add <id> <label>[,<label>…] --json`.
+  ///
+  /// bd's grammar is `bd label add [issue-id...] [label[,label...]]`: the
+  /// ISSUE IDS come first and the FINAL argument carries every label,
+  /// comma-separated. Passing labels as separate arguments would make bd read
+  /// all but the last one as issue ids.
   List<String> addLabelsArgs(String id, List<String> labels) => [
     'label',
     'add',
     id,
-    ...labels,
+    labels.join(','),
     '--json',
     ..._actorArgs,
   ];

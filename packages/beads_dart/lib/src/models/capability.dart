@@ -13,6 +13,8 @@
 /// spelling (`the_grid#the-grid-is-a-beads-controller`).
 library;
 
+import 'bead.dart';
+
 /// The `external:` dependency-row form: a blocker that lives in another bd
 /// project, named by a capability rather than by a foreign bead id.
 class ExternalDepRef {
@@ -88,4 +90,35 @@ Iterable<String> providedCapabilities(Iterable<String> labels) sync* {
       yield label.substring('provides:'.length);
     }
   }
+}
+
+/// The capabilities [labels] EXPORTS but does not yet PROVIDE — what
+/// `bd ship` still owes for the bead carrying them, in the order given.
+///
+/// The one spelling of "this capability is still unshipped", so the station's
+/// writer and the frontier's ship observer cannot drift apart.
+Iterable<String> unshippedCapabilities(Iterable<String> labels) sync* {
+  final provided = providedCapabilities(labels).toSet();
+  for (final capability in exportedCapabilities(labels)) {
+    if (!provided.contains(capability)) yield capability;
+  }
+}
+
+/// Every CLOSED bead in [beads] that still owes a `bd ship`, keyed by bead id
+/// and carrying exactly the capabilities it owes.
+///
+/// CLOSED, because `bd ship` validates that the exporting issue is closed: an
+/// open exporter is not shippable work yet. Already-provided capabilities drop
+/// out, so an observer driven by this list is idempotent without spawning a
+/// process to re-add a label the bead already carries.
+Map<String, List<String>> unshippedExports(Iterable<Bead> beads) {
+  final owed = <String, List<String>>{};
+  for (final bead in beads) {
+    if (!bead.isClosed) continue;
+    final capabilities = unshippedCapabilities(
+      bead.labels,
+    ).toList(growable: false);
+    if (capabilities.isNotEmpty) owed[bead.id] = capabilities;
+  }
+  return owed;
 }

@@ -419,6 +419,8 @@ void main() {
         ..stubCommand('update', _okEnvelope())
         ..stubCommand('close', _okEnvelope())
         ..stubSub('dep', 'add', _okEnvelope())
+        ..stubSub('label', 'add', _okEnvelope())
+        ..stubCommand('ship', _okEnvelope())
         ..stubCommand('batch', _okEnvelope());
       service = BdCliService(runner);
     });
@@ -1177,6 +1179,49 @@ void main() {
     test('batch([]) is a no-op (no spawn)', () async {
       await service.batch(const []);
       expect(runner.calls, isEmpty);
+    });
+
+    // bd's grammar is `bd label add [issue-id...] [label[,label...]]` — issue
+    // ids FIRST, every label in the final comma-separated argument. Spelling
+    // the labels as separate argv entries makes bd read all but the last one
+    // as an ISSUE ID (tg-xh5d).
+    test(
+      'addLabels() passes every label in ONE comma-separated argument',
+      () async {
+        await service.addLabels('tg-1', const [
+          'export:tg-1',
+          'export:release-gate',
+        ]);
+        final argv = runner.calls.single;
+        expect(argv.take(4), [
+          'label',
+          'add',
+          'tg-1',
+          'export:tg-1,export:release-gate',
+        ]);
+        expectActor(argv);
+      },
+    );
+
+    test(
+      'addLabels([]) is a no-op, and a comma inside a label is REFUSED',
+      () async {
+        await service.addLabels('tg-1', const []);
+        expect(runner.calls, isEmpty);
+        await expectLater(
+          service.addLabels('tg-1', const ['export:a,b']),
+          throwsA(isA<ArgumentError>()),
+        );
+        expect(runner.calls, isEmpty);
+      },
+    );
+
+    test('ship() names the capability and never forces', () async {
+      await service.ship('pow-60g');
+      final argv = runner.calls.single;
+      expect(argv.take(2), ['ship', 'pow-60g']);
+      expect(argv, isNot(contains('--force')));
+      expectActor(argv);
     });
   });
 

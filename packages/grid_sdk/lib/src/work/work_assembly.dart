@@ -676,11 +676,12 @@ class StationWorkRuntime implements SubstationProvisioner {
       );
 
   /// The `runGrid(onFlushed:)` hook — the driver's post-flush cooldown +
-  /// unclaimed-frontier re-scans (D-5/F1), then the roster drain settle.
+  /// unclaimed-frontier re-scans (D-5/F1), then the roster drain settle and
+  /// the capability-export settle.
   void afterFlush() {
     try {
       _driver.afterFlush();
-      unawaited(_settleRosterDrainsGuarded());
+      unawaited(_settlePostFlushGuarded());
     } finally {
       // The first flush occurs only after the authored tree (and any relay
       // asset) mounted. The trajectory boot pass therefore remains inert.
@@ -688,21 +689,33 @@ class StationWorkRuntime implements SubstationProvisioner {
     }
   }
 
-  /// Settles draining roster seats, reporting a failure instead of raising it.
+  /// Settles the two post-flush passes, reporting a failure instead of
+  /// raising it.
   ///
-  /// The settle is ASYNC and rides the handler's serialized tail, so a failure
-  /// cannot surface at [afterFlush]'s synchronous call site: fire-and-forget
-  /// would let it escape to the ROOT ZONE and take the resident down. The
-  /// posture composes with `runGrid`'s guarded post-flush rail: this async
-  /// settle reports LOUD through the refusal sink while the sole production
-  /// flush coordinator keeps flushing.
-  Future<void> _settleRosterDrainsGuarded() async {
+  /// Both settles are ASYNC and ride the handler's serialized tail, so a
+  /// failure cannot surface at [afterFlush]'s synchronous call site:
+  /// fire-and-forget would let it escape to the ROOT ZONE and take the
+  /// resident down. The posture composes with `runGrid`'s guarded post-flush
+  /// rail: these settles report LOUD through the refusal sink while the sole
+  /// production flush coordinator keeps flushing. One failing settle never
+  /// skips the other.
+  Future<void> _settlePostFlushGuarded() async {
+    await _settleGuarded('roster drain', _handler.settleRosterDrains);
+    // tg-xh5d WHAT #2: the OTHER half of ship-on-close — a work bead an
+    // operator closed by hand ships the next time the station observes the
+    // close, and a flush is that observation.
+    await _settleGuarded('capability export', _handler.settleCapabilityExports);
+  }
+
+  Future<void> _settleGuarded(
+    String what,
+    Future<void> Function() settle,
+  ) async {
     try {
-      await _handler.settleRosterDrains();
+      await settle();
     } on Object catch (error) {
       _onRefusal(
-        'grid: roster drain settle failed (the station keeps flushing) — '
-        '$error',
+        'grid: $what settle failed (the station keeps flushing) — $error',
       );
     }
   }
