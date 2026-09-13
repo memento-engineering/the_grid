@@ -31,6 +31,15 @@
 ///     certifies nothing") and an empty `health_transitions` gate for the same
 ///     reason: a row demoted to REPORTED is a row that cannot fail, and a
 ///     certificate whose signal cannot fail is a runbook with extra steps.
+///   * **ONLY A ROUND-SCOPE NOTE IS A ROUND** — a boot emits one BOOT-FINAL
+///     summary at the clean-down fixpoint, carrying the whole boot's
+///     cumulative pass count and riding the sessionId of the boot's LAST
+///     terminal session (lunar epoch 72's read `passes 150`). Counted as a
+///     round it scores that one seat again off a note that summarises every
+///     round of the boot, so `shape-coverage` counts ONLY round-scope notes
+///     (RULING 2026-09-13, governor, wave A verify). That same boot-final
+///     note still GOVERNS `posture` and `clean`: it is the last `passes > 1`
+///     note and it carries the cumulative twins.
 ///
 /// One row does NOT track the doc: `shape-coverage` here is tg-2gt1's
 /// redefinition — one round with `passes > 1` per ruling seat — and §W2.5's
@@ -54,6 +63,27 @@ import '../codec/trajectory_record.dart';
 
 /// The `attempt.note` channel the durable round summaries ride (§0.4).
 const String kRoundSummaryNoteChannel = 'dual-read-round-summary';
+
+/// §0.4's PER-ROUND summary scope — the ONLY note `shape-coverage` counts.
+///
+/// `_emitTerminalSummaries` (`grid_engine`, `dual_read_pass.dart`) writes one
+/// note at every session TERMINAL: one round, one note. The RULING
+/// (2026-09-13, governor, wave A verify) names that scope `round`; §0.4's
+/// producer spells it `session-terminal` and spells the other one
+/// [kBootFinalSummaryScope]. The ruling's operative clause is "never the
+/// BOOT-FINAL note", and NOTHING in the tree emits the literal `round`, so
+/// gating on that string would score zero rounds on every real boot and fail
+/// the row forever — the "soak is always a blocker" shape this verb exists to
+/// kill. The constant is therefore stated against the producer; if an emitter
+/// ever does write `round`, this is the one line that moves.
+const String kRoundSummaryScope = 'session-terminal';
+
+/// §0.4's BOOT-FINAL summary scope — one note at the clean-down fixpoint,
+/// riding the sessionId of the boot's LAST terminal session and carrying the
+/// WHOLE boot's cumulative counters (`dual_read_pass.dart`, `finish`).
+///
+/// It GOVERNS `posture` and `clean` and is never a round.
+const String kBootFinalSummaryScope = 'boot-final';
 
 /// The seats Q1 scoped the soak to (`wave-2-flip-scope-soak-and-kill-date`).
 ///
@@ -173,8 +203,8 @@ const List<String> kCertificateHumanItems = [
   'the §W2.5 EVENT shape checklist across the counted boots — at least one '
       'rework, one void, one escalation or decline, one gate-park + re-arm '
       'cycle, and one deliberate bounce (NOT the `shape-coverage` row above, '
-      'which is tg-2gt1\'s seat redefinition: one round with passes > 1 per '
-      'ruling seat; nothing in the log decides "deliberate")',
+      'which is tg-2gt1\'s seat redefinition: one round-scope summary with '
+      'passes > 1 per ruling seat; nothing in the log decides "deliberate")',
   'the §W2.5 per-field in-window divergence row (`isTerminal`, `completed`, '
       '`humanHeld`, `closedAt`, `disposition`, `fences`) — the gate above '
       'reads the `unexplained` twin, which carves out the adjudicated classes '
@@ -227,9 +257,17 @@ class RoundSummaryNote {
   /// The note's decoded JSON body.
   final Map<String, Object?> body;
 
-  /// `boot-final` or `session-terminal` (§0.4), or null on a body that
-  /// declared no scope.
+  /// [kRoundSummaryScope] or [kBootFinalSummaryScope] (§0.4), or null on a
+  /// body that declared no scope.
   String? get scope => stringOf('scope');
+
+  /// This note summarises ONE ROUND — the only shape `shape-coverage` counts
+  /// (RULING 2026-09-13, governor, wave A verify).
+  ///
+  /// A [kBootFinalSummaryScope] note is not one, and neither is a note that
+  /// declared no scope at all: an undeclared scope is not evidence of a
+  /// round, exactly as an absent counter is not a zero.
+  bool get isRoundScoped => scope == kRoundSummaryScope;
 
   /// The comparator's pass count — the read rule's discriminator.
   int get passes => intOf('passes') ?? 0;
@@ -318,6 +356,7 @@ class BootEvidence {
     required this.seatRounds,
     required this.offSeatRounds,
     required this.unjoinedRounds,
+    required this.nonRoundNotes,
     this.governing,
   });
 
@@ -344,6 +383,15 @@ class BootEvidence {
   /// Rounds with `passes > 1` whose session NO record in the log attributed
   /// to a substation, in this window or outside it — the real join failure.
   final int unjoinedRounds;
+
+  /// Summaries with `passes > 1` that `shape-coverage` did NOT count because
+  /// they are not [RoundSummaryNote.isRoundScoped] — the boot-final note, and
+  /// any note that declared no scope.
+  ///
+  /// Reported, never gating: the ruling excludes them from the count, and a
+  /// reader who cannot see the exclusion is left wondering where a round
+  /// went. [governing] is normally one of them.
+  final int nonRoundNotes;
 
   /// The measured numbers, gating first, absent keys carried as null so a
   /// reader can tell "zero" from "never emitted".
@@ -377,6 +425,7 @@ class BootEvidence {
     'seat_rounds': Map<String, int>.from(seatRounds),
     'off_seat_rounds': offSeatRounds,
     'unjoined_rounds': unjoinedRounds,
+    'non_round_notes': nonRoundNotes,
   };
 }
 
@@ -509,6 +558,10 @@ Set<String> sessionsNeedingWiderRead(BootWindow window) {
   for (final envelope in window.records) {
     final note = roundSummaryOf(envelope);
     if (note == null || note.passes <= 1) continue;
+    // Only a round-scope note is counted (RULING 2026-09-13), so only a
+    // round-scope note is worth a second read: attributing the boot-final
+    // note would buy a seat nothing scores.
+    if (!note.isRoundScoped) continue;
     if (known.containsKey(note.sessionId)) continue;
     pending.add(note.sessionId);
   }
@@ -533,9 +586,19 @@ BootEvidence foldBootEvidence(
   final seatRounds = <String, int>{for (final seat in seats) seat: 0};
   var offSeat = 0;
   var unjoined = 0;
+  var nonRound = 0;
   for (final note in notes) {
     if (note.passes <= 1) continue;
     governing = note;
+    // THE RULING (2026-09-13, governor, wave A verify): only a round-scope
+    // note is a round. The boot-final note carries the boot's cumulative pass
+    // count on the LAST terminal session's id, so counting it scores that one
+    // seat again off a summary of every round in the boot. It still governs
+    // above — the counters are exactly what it is for.
+    if (!note.isRoundScoped) {
+      nonRound++;
+      continue;
+    }
     final substation = substationOf[note.sessionId];
     if (substation == null) {
       unjoined++;
@@ -559,6 +622,7 @@ BootEvidence foldBootEvidence(
     seatRounds: seatRounds,
     offSeatRounds: offSeat,
     unjoinedRounds: unjoined,
+    nonRoundNotes: nonRound,
   );
 }
 
@@ -774,17 +838,20 @@ CertificateItem _shapeCoverage(List<BootEvidence> boots, List<String> seats) {
   final totals = <String, int>{for (final seat in seats) seat: 0};
   var offSeat = 0;
   var unjoined = 0;
+  var nonRound = 0;
   for (final boot in boots) {
     for (final entry in boot.seatRounds.entries) {
       totals[entry.key] = (totals[entry.key] ?? 0) + entry.value;
     }
     offSeat += boot.offSeatRounds;
     unjoined += boot.unjoinedRounds;
+    nonRound += boot.nonRoundNotes;
   }
   final failures = <String>[
     for (final seat in seats)
       if ((totals[seat] ?? 0) == 0)
-        'seat $seat: no round with passes > 1 across the counted boots',
+        'seat $seat: no round-scope ($kRoundSummaryScope) summary with '
+            'passes > 1 across the counted boots',
   ];
   final measured = [
     for (final seat in seats) '$seat ${totals[seat] ?? 0}',
@@ -793,10 +860,13 @@ CertificateItem _shapeCoverage(List<BootEvidence> boots, List<String> seats) {
     row: CertificateRow.shapeCoverage,
     status: failures.isEmpty ? CertificateStatus.pass : CertificateStatus.fail,
     detail:
-        'rounds with passes > 1: $measured'
+        'round-scope summaries with passes > 1: $measured'
         '${offSeat == 0 ? '' : ', $offSeat on other substations'}'
         '${unjoined == 0 ? '' : ', $unjoined unjoined (no record in the log '
-            'names the session\'s substation)'}',
+            'names the session\'s substation)'}'
+        '${nonRound == 0 ? '' : ', $nonRound non-round summar'
+            '${nonRound == 1 ? 'y' : 'ies'} excluded '
+            '($kBootFinalSummaryScope is not a round)'}',
     failures: failures,
   );
 }

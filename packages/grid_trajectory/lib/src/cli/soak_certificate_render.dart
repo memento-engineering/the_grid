@@ -89,7 +89,8 @@ List<String> renderSoakCertificate(SoakCertificate certificate) {
         '      seats    '
         '${[for (final entry in boot.seatRounds.entries) '${entry.key} ${entry.value}'].join(' · ')}'
         '${boot.offSeatRounds == 0 ? '' : ' · other substations ${boot.offSeatRounds}'}'
-        '${boot.unjoinedRounds == 0 ? '' : ' · unjoined ${boot.unjoinedRounds}'}',
+        '${boot.unjoinedRounds == 0 ? '' : ' · unjoined ${boot.unjoinedRounds}'}'
+        '${boot.nonRoundNotes == 0 ? '' : ' · non-round summaries ${boot.nonRoundNotes}'}',
       );
   }
   lines.addAll(renderCertificateChecklist());

@@ -364,6 +364,103 @@ void main() {
     });
   });
 
+  group('AC-1 — only a round-scope summary is a round (RULING 2026-09-13)', () {
+    /// The live shape: each boot's last note is the BOOT-FINAL summary, riding
+    /// the last terminal session's id with the boot's cumulative pass count.
+    List<TrajectoryEnvelope> withBootFinals({int passes = 150}) =>
+        seededBoots()
+          ..addAll([
+            for (final epoch in const [50, 51, 52])
+              summaryNote(
+                seq: 900 + epoch,
+                epoch: epoch,
+                sessionId: 'tranquility-$epoch-lenny',
+                body: summaryBody(
+                  passes: passes,
+                  scope: kBootFinalSummaryScope,
+                ),
+              ),
+          ]);
+
+    test('the boot-final note scores no seat and is reported apart', () async {
+      final (code, lines) = await _certify(rows: withBootFinals());
+      final text = lines.join('\n');
+      expect(code, 0, reason: text);
+      expect(_statusOf(lines, 'shape-coverage'), 'PASS');
+      // Three boots x one round per seat — NOT four for lenny.
+      expect(text, contains('butane 3, lenny 3'));
+      expect(text, contains('3 non-round summaries excluded'));
+      // And it still GOVERNS: the counters come off it, cumulative passes and
+      // all.
+      expect(text, contains('passes 150'));
+      expect(text, contains('($kBootFinalSummaryScope, session'));
+    });
+
+    test(
+      'a boot whose ONLY passes>1 note is boot-final certifies no round',
+      () async {
+        // The false green the ruling kills: the boot measures clean and
+        // posture fine off the boot-final note, and covers NO seat.
+        final rows = <TrajectoryEnvelope>[
+          for (final epoch in const [50, 51, 52]) ...[
+            envelope(
+              recordType: 'attempt.session.started',
+              family: TrajectoryFamily.attempt,
+              seq: 900 + epoch * 2,
+              bootEpoch: epoch,
+              sessionId: 'tranquility-$epoch-lenny',
+              workBeadId: 'lenny-1',
+              substation: 'lenny',
+              attemptId: 'attempt-$epoch-lenny',
+            ),
+            summaryNote(
+              seq: 901 + epoch * 2,
+              epoch: epoch,
+              sessionId: 'tranquility-$epoch-lenny',
+              body: summaryBody(
+                passes: 150,
+                scope: kBootFinalSummaryScope,
+              ),
+            ),
+          ],
+        ];
+        final (code, lines) = await _certify(rows: rows);
+        final text = lines.join('\n');
+        expect(code, 2, reason: text);
+        expect(_statusOf(lines, 'shape-coverage'), 'FAIL');
+        expect(_statusOf(lines, 'clean'), 'PASS');
+        expect(_statusOf(lines, 'posture'), 'PASS');
+        expect(text, contains('no round-scope ($kRoundSummaryScope) summary'));
+        expect(text, contains('butane 0, lenny 0'));
+      },
+    );
+
+    test('a boot-final note is never given a second read', () async {
+      // Its session is deliberately unattributable in-window; nothing scores
+      // it, so nothing pays for it.
+      final rows = seededBoots()
+        ..add(
+          summaryNote(
+            seq: 999,
+            epoch: 52,
+            sessionId: 'tranquility-51-lenny-bounced',
+            body: summaryBody(scope: kBootFinalSummaryScope),
+          ),
+        );
+      final reader = ScriptedReader(rows, epochs: seededClaims(const [50, 51, 52]));
+      final lines = <String>[];
+      final code = await runTrajCertify(
+        gridHome: '/tmp/grid',
+        open: openerFor(TrajectoryOpened(reader)),
+        out: lines.add,
+        err: lines.add,
+      );
+      expect(code, 0, reason: lines.join('\n'));
+      expect(reader.subjectsRead, ['traj_epoch']);
+      expect(lines.join('\n'), isNot(contains('unjoined')));
+    });
+  });
+
   group('AC-2 — a dirty counter fails the clean row', () {
     test('p2_miss_total = 1 exits 2 and names the epoch and the row', () async {
       final (code, lines) = await _certify(
@@ -460,7 +557,10 @@ void main() {
       expect(_statusOf(lines, 'shape-coverage'), 'FAIL');
       expect(
         lines.join('\n'),
-        contains('seat butane: no round with passes > 1'),
+        contains(
+          'seat butane: no round-scope ($kRoundSummaryScope) summary with '
+          'passes > 1',
+        ),
       );
     });
 
@@ -542,6 +642,7 @@ void main() {
         expect(boot['seat_rounds'], {'butane': 1, 'lenny': 1});
         expect(boot['off_seat_rounds'], 0);
         expect(boot['unjoined_rounds'], 0);
+        expect(boot['non_round_notes'], 0);
         // The two structural gate values ride the JSON as themselves, never
         // as a counter that happens to read 0.
         expect(boot['health_transitions'], ['live']);

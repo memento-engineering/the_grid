@@ -1889,8 +1889,11 @@ boots claimed. **The soak is therefore: three back-to-back scoped boots,
 `lunar_station-uu8`'s hand-read runbook is replaced by it.
 
 What gates where: `posture` takes `mode`, `overlay_engaged`,
-`overlay_disengaged_for_boot` and the whole health row (`live` at boot-final AND
-`health_transitions` empty); `clean` takes every scalar row above that carries a gate value —
+`overlay_disengaged_for_boot` and the whole health row — `live` at boot-final AND no state
+but `live` named anywhere in `health_transitions`, which is how the row's second half is
+reachable at all: `_noteHealth` records the FIRST health it observes as a bare state name,
+so a perfectly healthy boot carries `['live']` and never `[]`; `clean` takes every scalar
+row above that carries a gate value —
 the two miss twins, `null_started_at`, the two in-window unexplained-divergence twins, the
 scoped `cardinality_breaches`/`terminal_lag_open`/`retirement_lag_open` rows, `step_lag_open`
 and the three append-loss counters — plus the structural refusal on a null
@@ -1903,6 +1906,16 @@ twin, which carves out the adjudicated classes the incumbent rule excepts), and 
 checklist immediately below — the verb's `shape-coverage` ROW is tg-2gt1's narrower
 redefinition, at least one round with `passes > 1` on each ruling seat, not these five
 events.
+
+**What counts as a round (RULING 2026-09-13, governor, wave A verify).** `shape-coverage`
+counts ONLY the per-round summaries — the `scope: session-terminal` notes §0.4 writes one of
+per session terminal — and NEVER the boot-final note. The boot-final note rides the
+sessionId of the boot's LAST terminal session and carries the boot's CUMULATIVE pass count
+(lunar epoch 72 read `passes 150`), so counting it scores that one seat a second time off a
+summary of every round in the boot. It still GOVERNS `posture` and `clean`: it is the last
+note with `passes > 1` and the cumulative twins are exactly what it is for. Summaries the
+rule excluded are reported beside the count (`non-round summaries N`, `non_round_notes` in
+`--json`), never gated.
 
 **Shape coverage (Q1: a checklist, driven deliberately, not a wait):** across the three
 boots — at least one rework, one void, one escalation or decline, one gate-park + re-arm

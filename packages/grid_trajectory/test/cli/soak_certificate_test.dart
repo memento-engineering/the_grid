@@ -121,8 +121,74 @@ void main() {
       expect(evidence.seatRounds, {'lenny': 1, 'butane': 1});
       expect(evidence.offSeatRounds, 0);
       expect(evidence.unjoinedRounds, 0);
+      expect(evidence.nonRoundNotes, 0);
       expect(evidence.summaries, 2);
       expect(evidence.governing?.sessionId, 'tranquility-50-butane');
+    });
+
+    test('the BOOT-FINAL note governs the counters but is never a round', () {
+      // RULING 2026-09-13 (governor, wave A verify). The boot-final note
+      // rides the LAST terminal session's id and carries the boot's
+      // CUMULATIVE pass count, so counting it scores lenny twice off a
+      // summary of every round in the boot.
+      final rows = seededBoots(epochs: const [50])
+        ..add(
+          summaryNote(
+            seq: 99,
+            epoch: 50,
+            sessionId: 'tranquility-50-lenny',
+            body: summaryBody(
+              passes: 150,
+              scope: kBootFinalSummaryScope,
+            ),
+          ),
+        );
+      final evidence = foldBootEvidence(_window(50, rows));
+      expect(evidence.seatRounds, {'lenny': 1, 'butane': 1});
+      expect(evidence.nonRoundNotes, 1);
+      expect(evidence.offSeatRounds, 0);
+      expect(evidence.unjoinedRounds, 0);
+      // Still the governing note: it is the last `passes > 1` note and the
+      // cumulative twins are exactly what it is for.
+      expect(evidence.governing?.seq, 99);
+      expect(evidence.governing?.passes, 150);
+      expect(evidence.governing?.scope, kBootFinalSummaryScope);
+    });
+
+    test('a summary that declares NO scope is not a round either', () {
+      // An undeclared scope is not evidence of a round, exactly as an absent
+      // counter is not a zero.
+      final body = summaryBody()..remove('scope');
+      final rows = [
+        ...seededRound(epoch: 50, seq: 1, seat: 'lenny'),
+        summaryNote(
+          seq: 9,
+          epoch: 50,
+          sessionId: 'tranquility-50-lenny',
+          body: body,
+        ),
+      ];
+      final evidence = foldBootEvidence(_window(50, rows));
+      expect(evidence.governing?.scope, isNull);
+      expect(evidence.seatRounds, {'lenny': 1, 'butane': 0});
+      expect(evidence.nonRoundNotes, 1);
+    });
+
+    test('a boot-final note never asks for a wider read', () {
+      // Nothing scores it, so buying an attribution for it is a read the
+      // verb does not need.
+      final rows = [
+        summaryNote(
+          seq: 1,
+          epoch: 50,
+          sessionId: 'tranquility-orphan',
+          body: summaryBody(scope: kBootFinalSummaryScope),
+        ),
+      ];
+      final window = _window(50, rows);
+      expect(sessionsNeedingWiderRead(window), isEmpty);
+      expect(foldBootEvidence(window).unjoinedRounds, 0);
+      expect(foldBootEvidence(window).nonRoundNotes, 1);
     });
 
     test('counts a round whose session no record attributed', () {
