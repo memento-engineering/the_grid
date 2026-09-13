@@ -13,55 +13,53 @@ import 'operator_text_file.dart';
 
 /// One observable work store in the composing station's armed roster.
 class LinkEndpointStore {
-  const LinkEndpointStore({required this.prefix, required this.store});
+  const LinkEndpointStore({
+    required this.name,
+    required this.prefix,
+    required this.store,
+  });
 
+  /// The substation's ROSTER NAME — the `<project>` token an
+  /// `external:<project>:<capability>` row carries, and the same token bd
+  /// resolves through its own `external_projects` config.
+  final String name;
+
+  /// The substation's bead-id prefix — how an endpoint id resolves to a store.
   final String prefix;
+
   final SubstationWorkStore store;
 }
 
 typedef LinkBdFactory = BdCliService Function(BeadsWorkspace workspace);
 
 class LinkCommand extends Command<int> {
-  LinkCommand({
-    required this.stateStorePrefix,
-    required Iterable<LinkEndpointStore> endpoints,
-    Stream<List<int>>? input,
-  }) : endpoints = List.unmodifiable(endpoints),
-       _input = input {
+  LinkCommand({required Iterable<LinkEndpointStore> endpoints})
+    : endpoints = List.unmodifiable(endpoints) {
     argParser
-      ..addOption('grid-root')
-      ..addMultiOption(
-        'prefix',
-        help:
-            'Repeatable; must include every endpoint prefix named by '
-            '<from-bead> and --blocked-by.',
-      )
       ..addOption('blocked-by')
-      ..addOption('reason')
-      ..addOption('reason-file')
-      ..addOption('actor')
       ..addFlag('json', negatable: false);
   }
 
-  final String stateStorePrefix;
   final List<LinkEndpointStore> endpoints;
-  final Stream<List<int>>? _input;
 
   @override
   final String name = 'link';
 
   @override
   final String description =
-      'Mint or list cross-repository links. $kCrossLinkTargetCloseRule';
+      'Wire a cross-store blocker as a bd external dependency. '
+      '$kExternalDepSugarRule';
 
   @override
-  Future<int> run() => runLink(
-    arguments: argResults!,
-    stateStorePrefix: stateStorePrefix,
-    endpoints: endpoints,
-    input: _input,
-  );
+  Future<int> run() => runLink(arguments: argResults!, endpoints: endpoints);
 }
+
+/// What the `link` verb is, stated where an operator reads it.
+const kExternalDepSugarRule =
+    'Convenience only: it labels the target `export:<target>` and runs '
+    '`bd dep add <from> external:<project>:<target>`. It performs nothing '
+    '`bd dep` does not, and mints no bead. The edge lifts when the target '
+    'ships — `bd ship <target>` on a CLOSED target.';
 
 class UnlinkCommand extends Command<int> {
   UnlinkCommand({
@@ -102,15 +100,23 @@ class UnlinkCommand extends Command<int> {
   );
 }
 
+/// `grid link <from> --blocked-by <to>` — SUGAR over `bd dep add` (tg-xh5d,
+/// `the_grid#the-grid-is-a-beads-controller`).
+///
+/// Three bd writes and nothing else: the target is labelled
+/// `export:<target>` if it is not already, and the consumer gains the
+/// dependency row `external:<project>:<target>`, where `<project>` is the
+/// target substation's ROSTER NAME. No bead is minted; the station's own
+/// state store is never touched.
+///
+/// `grid link ls` lists the external rows the roster's stores carry.
 Future<int> runLink({
   required ArgResults arguments,
-  required String stateStorePrefix,
   required Iterable<LinkEndpointStore> endpoints,
   void Function(String)? out,
   void Function(String)? err,
   DirectoryProbe? dirExists,
   LinkBdFactory? bdFactory,
-  Stream<List<int>>? input,
 }) async {
   final void Function(String) write =
       out ?? (message) => stdout.writeln(message);
@@ -124,74 +130,30 @@ Future<int> runLink({
   }
   final roster = _roster(endpoints, writeErr, 'link');
   if (roster == null) return 64;
+  final factory = bdFactory ?? _processBd;
 
   if (isList) {
-    if (_hasValue(arguments, 'blocked-by') ||
-        _hasValue(arguments, 'reason') ||
-        _hasValue(arguments, 'reason-file') ||
-        _hasValue(arguments, 'actor') ||
-        arguments.multiOption('prefix').isNotEmpty) {
-      writeErr('grid link ls: only --grid-root and --json are accepted.');
+    if (_hasValue(arguments, 'blocked-by')) {
+      writeErr('grid link ls: only --json is accepted.');
       return 64;
     }
-    final stateStore = _stateStore(arguments, writeErr, 'link ls');
-    if (stateStore == null) return 64;
     try {
-      final factory = bdFactory ?? _processBd;
-      final stateWorkspace = openStateStore(stateStore, dirExists: dirExists);
-      final stateProbe = await _probeReader(factory(stateWorkspace));
-      final links = await _openLinkBeads(stateProbe);
-      final statuses = <String, String>{};
-      final endpointIds = <String>{
-        for (final bead in links) ...[
-          _metadata(bead, CrossLinkKeys.from),
-          _metadata(bead, CrossLinkKeys.to),
-        ],
-      };
+      final probes = _StoreProbes(factory, dirExists);
+      final rows = <Map<String, String>>[];
       for (final endpoint in roster.values) {
-        final workspace = openWorkStore(
-          endpoint.store,
-          substationName: endpoint.prefix,
-          dirExists: dirExists,
-        );
-        final probe = await _probeReader(factory(workspace));
-        final ownedIds = endpointIds.where(
-          (id) =>
-              BeadOwnershipPredicate.ownedPrefixOf(id, roster.keys) ==
-              endpoint.prefix,
-        );
-        for (final id in ownedIds) {
-          final bead = await probe.reader.beadById(id, types: probe.types);
-          if (bead != null) statuses[id] = bead.status.wire;
-        }
+        rows.addAll(await _externalRowsOf(endpoint, roster, probes));
       }
-      final rows = links
-          .map((bead) {
-            final from = _metadata(bead, CrossLinkKeys.from);
-            final to = _metadata(bead, CrossLinkKeys.to);
-            final fromStatus = statuses[from] ?? 'unobserved';
-            final toStatus = statuses[to] ?? 'unobserved';
-            final edgeState = toStatus == BeadStatus.closed.wire
-                ? 'INERT (target closed)'
-                : 'ACTIVE';
-            return <String, String>{
-              'id': bead.id,
-              'from': from,
-              'fromStatus': fromStatus,
-              'to': to,
-              'toStatus': toStatus,
-              'edgeState': edgeState,
-            };
-          })
-          .toList(growable: false);
+      rows.sort((a, b) {
+        final byFrom = a['from']!.compareTo(b['from']!);
+        return byFrom != 0 ? byFrom : a['to']!.compareTo(b['to']!);
+      });
       if (json) {
         write(jsonEncode(rows));
       } else {
         for (final row in rows) {
           write(
-            '${row['id']} ${row['from']} [${row['fromStatus']}] '
-            '--blocked-by ${row['to']} [${row['toStatus']}] '
-            '— ${row['edgeState']}',
+            '${row['from']} [${row['fromStatus']}] --blocked-by '
+            '${row['to']} — ${row['edgeState']}',
           );
         }
       }
@@ -205,104 +167,212 @@ Future<int> runLink({
     }
   }
 
-  if (arguments.rest.length != 1 || arguments.rest.single == 'ls') {
+  if (arguments.rest.length != 1) {
     writeErr('grid link: exactly one <from-bead> is required.');
     return 64;
   }
   final from = arguments.rest.single;
   final to = arguments.option('blocked-by')?.trim() ?? '';
-  final String? reason;
-  final reasonFile = arguments.options.contains('reason-file')
-      ? arguments.option('reason-file')
-      : null;
-  try {
-    reason = await selectOperatorText(
-      inlineFlag: '--reason',
-      fileFlag: '--reason-file',
-      inlineValue: arguments.option('reason'),
-      filePath: reasonFile,
-      input: input,
-    );
-  } on OperatorTextUsage catch (error) {
-    writeErr('grid link: ${error.message}.');
+  if (to.isEmpty) {
+    writeErr('grid link: --blocked-by is required.');
     return 64;
-  } on FileSystemException catch (error) {
+  }
+  final consumer = _endpointOf(from, roster, writeErr, 'link');
+  final provider = _endpointOf(to, roster, writeErr, 'link');
+  if (consumer == null || provider == null) return 64;
+  if (identical(consumer, provider)) {
+    // A same-store blocker needs nothing this verb adds: bd's own dependency
+    // row already blocks it, and a self-referential `external:` row is one no
+    // store can resolve. The grid adds only what bd lacks.
     writeErr(
-      'grid link: cannot read --reason-file $reasonFile: ${error.message}',
-    );
-    return 64;
-  } on FormatException catch (error) {
-    writeErr(
-      'grid link: --reason-file $reasonFile is not valid UTF-8: ${error.message}',
+      'grid link: "$from" and "$to" are both in substation '
+      '"${consumer.name}" — a same-store blocker is a plain '
+      '`bd dep add $from $to`, not a cross-project capability.',
     );
     return 64;
   }
-  final actor = arguments.option('actor')?.trim() ?? '';
-  final stateStore = _stateStore(arguments, writeErr, 'link');
-  if (to.isEmpty ||
-      reason == null ||
-      reason.trim().isEmpty ||
-      actor.isEmpty ||
-      stateStore == null) {
-    writeErr(
-      'grid link: --blocked-by, --reason, --actor, and --grid-root are required.',
-    );
-    return 64;
-  }
-  final armed = arguments.multiOption('prefix').toSet();
-  if (armed.isEmpty) {
-    writeErr('grid link: at least one --prefix is required.');
-    return 64;
-  }
-  if (!_endpointsArmed(from, to, roster, armed, writeErr, 'link')) return 64;
 
   try {
-    final workspace = openStateStore(stateStore, dirExists: dirExists);
-    final bd = (bdFactory ?? _processBd)(workspace);
-    final probe = await _probeReader(bd);
-    final refusal = crossLinkTypeRefusal(
-      await bd.types(),
-      store: stateStore.beadsDir,
+    final providerBd = factory(
+      openWorkStore(
+        provider.store,
+        substationName: provider.name,
+        dirExists: dirExists,
+      ),
     );
-    if (refusal != null) {
-      writeErr(refusal);
+    final providerProbe = await _probeReader(providerBd);
+    final target = await providerProbe.reader.beadById(
+      to,
+      types: providerProbe.types,
+    );
+    if (target == null) {
+      writeErr(
+        'grid link: "$to" is not observable in substation '
+        '"${provider.name}" — nothing to export.',
+      );
       return 1;
     }
-    final existing = await _openLinkBeads(
-      probe,
-      metadataAll: {CrossLinkKeys.from: from, CrossLinkKeys.to: to},
-    );
-    if (existing.isNotEmpty) {
-      write(
-        '${existing.first.id} '
-        '(already wired; returned existing link, minted nothing)',
-      );
-      return 0;
+    final label = exportLabel(to);
+    if (!target.labels.contains(label)) {
+      await providerBd.addLabels(to, [label]);
     }
-    final writer = StationBeadWriter(
-      bd: bd,
-      reader: probe.reader,
-      ownership: BeadOwnershipPredicate({...armed, stateStorePrefix}),
+
+    final consumerBd = factory(
+      openWorkStore(
+        consumer.store,
+        substationName: consumer.name,
+        dirExists: dirExists,
+      ),
     );
-    final id = await writer.createLink(
-      substation: stateStorePrefix,
-      from: from,
-      to: to,
-      reason: reason,
-      actor: actor,
+    final ref = ExternalDepRef(project: provider.name, capability: to);
+    await consumerBd.depAdd(from, ref.wire);
+
+    final configRefusal = externalProjectConfigRefusal(
+      project: provider.name,
+      configured: await consumerBd.externalProjects(),
+      store: consumer.store.root,
     );
-    write(id);
+    if (configRefusal != null) writeErr(configRefusal);
+
+    write('$from --blocked-by ${ref.wire}');
     return 0;
   } on StoreRefusal catch (e) {
     writeErr('grid link: ${e.message}');
-    return 1;
-  } on OwnershipRefused catch (e) {
-    writeErr('grid link: $e');
     return 1;
   } on BdException catch (e) {
     writeErr('grid link: ${e.message}');
     return 1;
   }
+}
+
+/// One opened bd service + type set per endpoint, for the whole `link ls`
+/// pass.
+///
+/// Every store's `bd types` discovery is a process spawn, and the listing
+/// consults a target store once per ROW; without this, a roster with a fan-in
+/// re-probes the same store N times for one listing.
+class _StoreProbes {
+  _StoreProbes(this._factory, this._dirExists);
+
+  final LinkBdFactory _factory;
+  final DirectoryProbe? _dirExists;
+  final Map<String, _StoreProbe> _opened = {};
+
+  Future<_StoreProbe> of(LinkEndpointStore endpoint) async {
+    final cached = _opened[endpoint.name];
+    if (cached != null) return cached;
+    final bd = _factory(
+      openWorkStore(
+        endpoint.store,
+        substationName: endpoint.name,
+        dirExists: _dirExists,
+      ),
+    );
+    final probe = await _probeReader(bd);
+    return _opened[endpoint.name] = (
+      bd: bd,
+      reader: probe.reader,
+      types: probe.types,
+    );
+  }
+}
+
+typedef _StoreProbe = ({
+  BdCliService bd,
+  CliBeadProbeReader reader,
+  Set<IssueType> types,
+});
+
+/// Every `external:` dependency row [endpoint]'s store carries on an OPEN
+/// bead, with the edge's current state.
+///
+/// The rows come from [BdCliService.externalDepRows] — the SAME read the
+/// FRONTIER takes them from on the CLI path, so the listing and the engine
+/// cannot disagree about which edges exist. bd's resolving dependency reads
+/// (`bd dep list`, `bd show`) answer with the issue record a row points at and
+/// therefore return NO external row at all; listing off one of those would
+/// have printed an empty roster over a store full of edges.
+///
+/// Open-scoped: a consumer still waiting on a capability is open, so a closed
+/// bead's historical row is not an edge anyone is held by, and a row whose
+/// consumer this store does not observe as open is skipped.
+Future<List<Map<String, String>>> _externalRowsOf(
+  LinkEndpointStore endpoint,
+  Map<String, LinkEndpointStore> roster,
+  _StoreProbes probes,
+) async {
+  final probe = await probes.of(endpoint);
+  final open = await probe.reader.openBeads(types: probe.types);
+  if (open.isEmpty) return const [];
+  final statusOf = {for (final bead in open) bead.id: bead.status.wire};
+  final rows = <Map<String, String>>[];
+  for (final dep in await probe.bd.externalDepRows()) {
+    if (!dep.type.affectsBlocking) continue;
+    final status = statusOf[dep.issueId];
+    if (status == null) continue;
+    final ref = ExternalDepRef.parse(dep.dependsOnId);
+    if (ref == null) continue;
+    final target = roster.values
+        .where((candidate) => candidate.name == ref.project)
+        .firstOrNull;
+    rows.add({
+      'from': dep.issueId,
+      'fromStatus': status,
+      'to': ref.wire,
+      'project': ref.project,
+      'edgeState': target == null
+          ? 'UNARMED (no "${ref.project}" substation)'
+          : await _capabilityState(target, ref.capability, probes),
+    });
+  }
+  return rows;
+}
+
+/// Whether [capability] is SHIPPED in [endpoint]'s store — the FRONTIER's
+/// reading, so the verb and the engine never disagree about one edge.
+///
+/// Shipped means what [capabilityShipped] means: the store holds a CLOSED bead
+/// carrying `provides:<capability>`. That is a LABEL scan, not an id lookup,
+/// so a NAMED (fan-in) capability — a container bead whose own id is not the
+/// capability — reads SHIPPED exactly when the frontier admits its consumers.
+///
+/// Only when the capability is unshipped is its id-shaped convention consulted,
+/// and then only to say WHY: by convention the capability IS the exporting
+/// bead's id, so naming that bead's status is the useful answer; a named
+/// capability resolves to no bead and says so.
+Future<String> _capabilityState(
+  LinkEndpointStore endpoint,
+  String capability,
+  _StoreProbes probes,
+) async {
+  final probe = await probes.of(endpoint);
+  final providers = await probe.bd.query(
+    'label=${providesLabel(capability)}',
+    includeClosed: true,
+  );
+  if (capabilityShipped(capability, providers)) return 'SHIPPED (inert)';
+  final exporter = await probe.reader.beadById(capability, types: probe.types);
+  return exporter == null
+      ? 'PENDING (unshipped)'
+      : 'PENDING (${exporter.status.wire})';
+}
+
+/// The endpoint owning [id], or `null` after reporting why none does.
+LinkEndpointStore? _endpointOf(
+  String id,
+  Map<String, LinkEndpointStore> roster,
+  void Function(String) err,
+  String verb,
+) {
+  final prefix = BeadOwnershipPredicate.ownedPrefixOf(id, roster.keys);
+  if (prefix == null) {
+    err(
+      'grid $verb: endpoint "$id" has no prefix in the configured endpoint '
+      'roster (${roster.keys.join(', ')}).',
+    );
+    return null;
+  }
+  return roster[prefix];
 }
 
 Future<int> runUnlink({
@@ -545,8 +615,3 @@ bool _endpointsArmed(
 bool _hasValue(ArgResults arguments, String name) =>
     arguments.options.contains(name) &&
     (arguments.option(name)?.trim() ?? '').isNotEmpty;
-
-String _metadata(Bead bead, String key) {
-  final value = bead.metadata[key];
-  return value is String ? value : '';
-}

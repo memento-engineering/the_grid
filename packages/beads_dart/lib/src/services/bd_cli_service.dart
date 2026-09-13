@@ -8,6 +8,7 @@ import '../errors/bd_exception.dart';
 import '../models/bead.dart';
 import '../models/bead_dependency.dart';
 import '../models/bead_status.dart';
+import '../models/capability.dart';
 import '../models/bd_query_result.dart';
 import '../models/dependency_type.dart';
 import '../models/graph_apply_plan.dart';
@@ -136,6 +137,27 @@ class BdCliService {
     return _beadsFromList(env.dataList);
   }
 
+  /// `bd query "<expr>" --json` — the same read as [query], returning the
+  /// dependency ROWS bd embeds in each record beside the beads.
+  ///
+  /// bd's RECORD surface carries a row's target as `depends_on_id`, its own
+  /// COALESCE over the three typed target columns (MEASURED on
+  /// bd HEAD-a45199a: a row whose target lives in `depends_on_wisp_id`
+  /// surfaces there, so a `depends_on_external` target takes the same path).
+  /// Its RESOLVING surface (`bd dep list --json`, `bd show --json`) answers
+  /// with the ISSUE RECORD a dependency points at instead, and a cross-project
+  /// target has no issue in this store to resolve to — which is why the
+  /// external rows are read HERE and not off [depList].
+  Future<({List<Bead> beads, List<BeadDependency> dependencies})> queryGraph(
+    String expr, {
+    bool includeClosed = false,
+  }) async {
+    final env = await _runEnvelope(
+      queryArgs(expr, includeClosed: includeClosed),
+    );
+    return _parseIssueList(env.dataList);
+  }
+
   /// Runs [expression] with an independent positive control when it is empty.
   ///
   /// An exit-zero empty target is never returned as proof of absence by
@@ -235,6 +257,38 @@ class BdCliService {
     }
     return edges.values.toList(growable: false);
   }
+
+  /// Every `external:` dependency row this store carries — bd's NATIVE
+  /// cross-project blockers, on the CLI read path (tg-xh5d,
+  /// `the_grid#capability-edges-are-bd-native-and-link-is-sugar`).
+  ///
+  /// Two reads, because ONE of them cannot carry the rows and the other one
+  /// proves it: [queryGraph] is bd's RECORD surface (each bead record embeds
+  /// its dependency ROWS, whose target bd emits as its own COALESCE over
+  /// `depends_on_issue_id` / `depends_on_wisp_id` / `depends_on_external`),
+  /// and [depList] is bd's RESOLVING surface, the control. See
+  /// [externalDepRowsFrom] for what the pair decides and why an empty record
+  /// surface beside a non-empty resolving read REFUSES.
+  Future<List<BeadDependency>> externalDepRows() async {
+    final records = await queryGraph(allStatusesQuery, includeClosed: true);
+    // The control only spawns when the record surface came back with nothing
+    // to classify — it answers "no rows here" vs "not carrying rows".
+    final resolved = records.dependencies.isNotEmpty || records.beads.isEmpty
+        ? const <BeadDependency>[]
+        : await depList([for (final bead in records.beads) bead.id]);
+    return externalDepRowsFrom(
+      records: records.dependencies,
+      resolved: resolved,
+      call: ['bd', ...queryArgs(allStatusesQuery, includeClosed: true)],
+    );
+  }
+
+  /// The broad graph expression both external-row readers run: every status,
+  /// so the read is the COMPLETE graph and a closed consumer's row is in scope
+  /// with an open one's.
+  static const String allStatusesQuery =
+      'status=open OR status=in_progress OR status=blocked OR '
+      'status=deferred OR status=closed';
 
   /// `bd statuses --json` — the workspace's status definitions (object
   /// envelope: `built_in_statuses`, …).
@@ -602,6 +656,64 @@ class BdCliService {
     await _runEnvelope(depAddArgs(issueId, dependsOnId, type));
   }
 
+  /// `bd label add <id> <label>[,<label>…] --json` — adds every label in
+  /// [labels] to [id] in ONE call, leaving the ones already present untouched
+  /// (bd's add is a set union, so the call is idempotent).
+  ///
+  /// bd takes the labels as a single comma-separated final argument, so a
+  /// label containing a comma is not expressible and is REFUSED here rather
+  /// than silently split into two. An empty [labels] is a no-op.
+  Future<void> addLabels(String id, Iterable<String> labels) async {
+    final wanted = labels.toList(growable: false);
+    if (wanted.isEmpty) return;
+    for (final label in wanted) {
+      if (label.contains(',')) {
+        throw ArgumentError.value(
+          label,
+          'labels',
+          'bd separates labels with commas, so a label cannot contain one',
+        );
+      }
+    }
+    await _runEnvelope(addLabelsArgs(id, wanted));
+  }
+
+  /// `bd ship <capability> --json` — bd's capability publication: it finds the
+  /// issue carrying `export:<capability>`, validates that it is CLOSED, and
+  /// adds `provides:<capability>`, which is the fact every external consumer's
+  /// dependency row resolves against.
+  ///
+  /// Idempotent by construction: re-shipping an already-shipped capability
+  /// re-adds a label the issue already carries.
+  Future<void> ship(String capability) async {
+    await _runEnvelope(shipArgs(capability));
+  }
+
+  /// `bd config get external_projects --json` — the project→store map bd
+  /// resolves an `external:<project>:<capability>` row through.
+  ///
+  /// Returns the configured project names. bd stores the value as a
+  /// comma-separated `name=path` list and reports an UNSET key as an empty
+  /// string, which decodes to the empty set (never an error): a store that has
+  /// never been configured is a diagnosable state, not a read failure.
+  Future<Set<String>> externalProjects() async {
+    final env = await _runEnvelope(externalProjectsArgs());
+    final raw = env.dataMap['value'];
+    if (raw is! String || raw.trim().isEmpty) return const <String>{};
+    return {
+      for (final entry in raw.split(','))
+        if (_externalProjectName(entry) case final String name) name,
+    };
+  }
+
+  static String? _externalProjectName(String entry) {
+    final trimmed = entry.trim();
+    if (trimmed.isEmpty) return null;
+    final separator = trimmed.indexOf('=');
+    final name = separator < 0 ? trimmed : trimmed.substring(0, separator);
+    return name.isEmpty ? null : name;
+  }
+
   /// `bd batch` — runs a line-oriented mutation [script] as one dolt
   /// transaction / one `DOLT_COMMIT` (ADR-0001 D4: grouped mutations go through
   /// batch, never per-issue loops).
@@ -875,6 +987,39 @@ class BdCliService {
     type.wire,
     '--json',
     ..._actorArgs,
+  ];
+
+  /// `bd label add <id> <label>[,<label>…] --json`.
+  ///
+  /// bd's grammar is `bd label add [issue-id...] [label[,label...]]`: the
+  /// ISSUE IDS come first and the FINAL argument carries every label,
+  /// comma-separated. Passing labels as separate arguments would make bd read
+  /// all but the last one as issue ids.
+  List<String> addLabelsArgs(String id, List<String> labels) => [
+    'label',
+    'add',
+    id,
+    labels.join(','),
+    '--json',
+    ..._actorArgs,
+  ];
+
+  /// `bd ship <capability> --json`. No `--force`: the grid ships a capability
+  /// only when its exporting bead is genuinely closed, and lets bd refuse
+  /// otherwise.
+  List<String> shipArgs(String capability) => [
+    'ship',
+    capability,
+    '--json',
+    ..._actorArgs,
+  ];
+
+  /// `bd config get external_projects --json` — a READ, so no `--actor`.
+  List<String> externalProjectsArgs() => const [
+    'config',
+    'get',
+    'external_projects',
+    '--json',
   ];
 
   List<String> batchArgs() => ['batch', '--json', ..._actorArgs];

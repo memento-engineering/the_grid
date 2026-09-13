@@ -8,6 +8,7 @@ import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
 
 void main() {
+  _shipObserverGroup();
   group('resident command dispatch', () {
     setUp(BdCliService.resetGuardedWriteCapabilityForTesting);
 
@@ -2161,6 +2162,139 @@ Bead _resultStep(
     ...nodeResultMetadata('$sessionId/review/$capability', result),
   },
 );
+
+/// tg-xh5d WHAT #2, the OTHER producer: the station SHIPS a work bead an
+/// operator closed BY HAND, the next time it observes the close.
+void _shipObserverGroup() {
+  group('post-flush capability-export settle', () {
+    setUp(BdCliService.resetGuardedWriteCapabilityForTesting);
+
+    Bead exporter(
+      String id, {
+      required BeadStatus status,
+      List<String> labels = const [],
+    }) => Bead(
+      id: id,
+      issueType: IssueType.task,
+      status: status,
+      labels: labels,
+      metadata: const {'rig': 'tg'},
+    );
+
+    test('a hand-closed export-labelled bead ships once, through the '
+        'writer\'s own path', () async {
+      final closed = exporter(
+        'tg-9',
+        status: BeadStatus.closed,
+        labels: const ['export:tg-9', 'export:release-gate'],
+      );
+      final workRunner = _RecordingRunner(exportBeads: [closed]);
+      final work = _Source(_snapshot([closed]));
+      final handler = _handler(
+        state: _Source(_snapshot(const [])),
+        work: work,
+        stateRunner: _RecordingRunner(),
+        workRunner: workRunner,
+      );
+
+      await handler.settleCapabilityExports();
+
+      expect(workRunner.calls.where((call) => call.first == 'ship'), [
+        ['ship', 'tg-9', '--json', '--actor', 'grid-controller'],
+        ['ship', 'release-gate', '--json', '--actor', 'grid-controller'],
+      ]);
+      expect(
+        workRunner.calls.where((call) => call.first == 'close'),
+        isEmpty,
+        reason: 'the operator already closed it; the station only ships',
+      );
+
+      // RISING EDGE: the store has not re-read yet, so the same snapshot is
+      // observed again. A flush must not re-spawn the ship.
+      await handler.settleCapabilityExports();
+      expect(
+        workRunner.calls.where((call) => call.first == 'ship'),
+        hasLength(2),
+      );
+    });
+
+    test(
+      'an OPEN exporter and an already-shipped one are never shipped',
+      () async {
+        final beads = [
+          exporter(
+            'tg-8',
+            status: BeadStatus.open,
+            labels: const ['export:tg-8'],
+          ),
+          exporter(
+            'tg-9',
+            status: BeadStatus.closed,
+            labels: const ['export:tg-9', 'provides:tg-9'],
+          ),
+        ];
+        final workRunner = _RecordingRunner(exportBeads: beads);
+        final handler = _handler(
+          state: _Source(_snapshot(const [])),
+          work: _Source(_snapshot(beads)),
+          stateRunner: _RecordingRunner(),
+          workRunner: workRunner,
+        );
+
+        await handler.settleCapabilityExports();
+
+        expect(workRunner.calls, isEmpty, reason: 'no bd process at all');
+      },
+    );
+
+    test('a capability that goes back to unshipped is shipped AGAIN', () async {
+      final owed = exporter(
+        'tg-9',
+        status: BeadStatus.closed,
+        labels: const ['export:tg-9'],
+      );
+      final shipped = exporter(
+        'tg-9',
+        status: BeadStatus.closed,
+        labels: const ['export:tg-9', 'provides:tg-9'],
+      );
+      final workRunner = _RecordingRunner(exportBeads: [owed]);
+      final work = _Source(_snapshot([owed]));
+      final handler = _handler(
+        state: _Source(_snapshot(const [])),
+        work: work,
+        stateRunner: _RecordingRunner(),
+        workRunner: workRunner,
+      );
+
+      await handler.settleCapabilityExports();
+      work.push(_snapshot([shipped]));
+      await handler.settleCapabilityExports();
+      work.push(_snapshot([owed]));
+      await handler.settleCapabilityExports();
+
+      expect(
+        workRunner.calls.where((call) => call.first == 'ship'),
+        hasLength(2),
+        reason: 'the edge fell and rose again',
+      );
+    });
+
+    test('a store with no snapshot yet is skipped, not refused', () async {
+      final workRunner = _RecordingRunner();
+      final handler = _handler(
+        state: _Source(_snapshot(const [])),
+        work: _Source(null),
+        stateRunner: _RecordingRunner(),
+        workRunner: workRunner,
+      );
+
+      await handler.settleCapabilityExports();
+
+      expect(workRunner.calls, isEmpty);
+    });
+  });
+}
 
 GraphSnapshot _workSnapshot([String id = 'tg-1']) => _snapshot([
   Bead(id: id, issueType: IssueType.task, metadata: const {'rig': 'tg'}),

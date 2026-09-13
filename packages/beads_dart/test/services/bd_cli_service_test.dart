@@ -419,6 +419,8 @@ void main() {
         ..stubCommand('update', _okEnvelope())
         ..stubCommand('close', _okEnvelope())
         ..stubSub('dep', 'add', _okEnvelope())
+        ..stubSub('label', 'add', _okEnvelope())
+        ..stubCommand('ship', _okEnvelope())
         ..stubCommand('batch', _okEnvelope());
       service = BdCliService(runner);
     });
@@ -1178,6 +1180,164 @@ void main() {
       await service.batch(const []);
       expect(runner.calls, isEmpty);
     });
+
+    // bd's grammar is `bd label add [issue-id...] [label[,label...]]` — issue
+    // ids FIRST, every label in the final comma-separated argument. Spelling
+    // the labels as separate argv entries makes bd read all but the last one
+    // as an ISSUE ID (tg-xh5d).
+    test(
+      'addLabels() passes every label in ONE comma-separated argument',
+      () async {
+        await service.addLabels('tg-1', const [
+          'export:tg-1',
+          'export:release-gate',
+        ]);
+        final argv = runner.calls.single;
+        expect(argv.take(4), [
+          'label',
+          'add',
+          'tg-1',
+          'export:tg-1,export:release-gate',
+        ]);
+        expectActor(argv);
+      },
+    );
+
+    test(
+      'addLabels([]) is a no-op, and a comma inside a label is REFUSED',
+      () async {
+        await service.addLabels('tg-1', const []);
+        expect(runner.calls, isEmpty);
+        await expectLater(
+          service.addLabels('tg-1', const ['export:a,b']),
+          throwsA(isA<ArgumentError>()),
+        );
+        expect(runner.calls, isEmpty);
+      },
+    );
+
+    test('ship() names the capability and never forces', () async {
+      await service.ship('pow-60g');
+      final argv = runner.calls.single;
+      expect(argv.take(2), ['ship', 'pow-60g']);
+      expect(argv, isNot(contains('--force')));
+      expectActor(argv);
+    });
+
+    // tg-xh5d RULING 2026-09-13: bd STORES a cross-project row and resolves
+    // nothing against it, and its RESOLVING reads (`bd dep list --json`,
+    // `bd show --json`) answer with the ISSUE RECORD a dependency points at —
+    // which an `external:` target has none of. The rows are therefore read off
+    // bd's RECORD surface, and a record surface that stops carrying rows
+    // REFUSES rather than reporting "no external blockers".
+    test(
+      'externalDepRows() reads the RECORD surface, not `dep list`',
+      () async {
+        runner.stubCommand(
+          'query',
+          BdReply(
+            stdout: jsonEncode({
+              'schema_version': 1,
+              'data': [
+                {
+                  'id': 'tg-consumer',
+                  'issue_type': 'task',
+                  'status': 'open',
+                  'dependencies': [
+                    {
+                      'issue_id': 'tg-consumer',
+                      'depends_on_id': 'external:power_station:pow-cap',
+                      'type': 'blocks',
+                    },
+                    {
+                      'issue_id': 'tg-consumer',
+                      'depends_on_id': 'tg-local',
+                      'type': 'blocks',
+                    },
+                  ],
+                },
+              ],
+            }),
+          ),
+        );
+
+        final rows = await service.externalDepRows();
+
+        expect(rows.single.issueId, 'tg-consumer');
+        expect(rows.single.dependsOnId, 'external:power_station:pow-cap');
+        expect(rows.single.type, DependencyType.blocks);
+        final argv = runner.calls.single;
+        expect(argv.take(2), ['query', BdCliService.allStatusesQuery]);
+        expect(argv, contains('--all'));
+        expect(
+          runner.calls.any((call) => call.first == 'dep'),
+          isFalse,
+          reason:
+              'the control only runs when the record surface came back empty',
+        );
+      },
+    );
+
+    test(
+      'externalDepRows() REFUSES a record surface that drops rows',
+      () async {
+        runner
+          ..stubCommand(
+            'query',
+            BdReply(
+              stdout: jsonEncode({
+                'schema_version': 1,
+                'data': [
+                  {'id': 'tg-consumer', 'issue_type': 'task', 'status': 'open'},
+                ],
+              }),
+            ),
+          )
+          ..stubSub(
+            'dep',
+            'list',
+            BdReply(
+              stdout: jsonEncode({
+                'schema_version': 1,
+                'data': [
+                  {
+                    'issue_id': 'tg-consumer',
+                    'depends_on_id': 'tg-local',
+                    'type': 'blocks',
+                  },
+                ],
+              }),
+            ),
+          );
+
+        await expectLater(
+          service.externalDepRows(),
+          throwsA(
+            isA<BdExternalDepSurfaceUnavailable>()
+                .having(
+                  (e) => e.detail,
+                  'detail',
+                  contains('the record surface returned no dependency rows'),
+                )
+                .having((e) => e.call.first, 'call', 'bd'),
+          ),
+        );
+      },
+    );
+
+    test(
+      'externalDepRows() reads an EMPTY store as empty, not refused',
+      () async {
+        runner.stubCommand(
+          'query',
+          BdReply(
+            stdout: jsonEncode({'schema_version': 1, 'data': <dynamic>[]}),
+          ),
+        );
+
+        expect(await service.externalDepRows(), isEmpty);
+      },
+    );
   });
 
   group('BdCliService is structurally SQL-free (PDR §6.6 / ADR-0001 D4)', () {
@@ -1226,6 +1386,11 @@ void main() {
       await service.statuses();
       await service.types();
       await service.depList(['tg-1']);
+      // tg-xh5d's external-row read is a bd RECORD read, never raw SQL: the
+      // CLI path stays structurally SQL-free even though the rows it needs
+      // live in `dependencies.depends_on_external`.
+      await service.queryGraph('x');
+      await service.externalDepRows();
       await service.create(title: 't');
       await service.update('tg-1', priority: 1);
       await service.close('tg-1');

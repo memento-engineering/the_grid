@@ -449,21 +449,24 @@ void main() {
     );
   });
 
-  group('FederatedSnapshotSource — cross-store dep rows are REFUSED, never '
-      'blocking (tg-mspw)', () {
-    test('a cross-store blocking row is reported LOUDLY and leaves the '
-        'candidate READY — a dep row is not an edge', () async {
+  group("FederatedSnapshotSource — bd's native external: rows BLOCK "
+      '(tg-xh5d)', () {
+    test('an external row holds its consumer out of ready until the target '
+        'store closes an issue carrying provides:<capability>', () async {
       final loud = <String>[];
-      final tg = FakeSnapshotSource();
-      final dash = FakeSnapshotSource();
+      final grid = FakeSnapshotSource();
+      final power = FakeSnapshotSource();
       final union = FederatedSnapshotSource({
-        'tg': tg,
-        'dash': dash,
+        'the_grid': grid,
+        'power_station': power,
       }, onUnresolvedExternalDep: loud.add);
       addTearDown(union.dispose);
 
-      const dep = BeadDependency(issueId: 'tg-1', dependsOnId: 'dash-1');
-      tg.push(
+      const dep = BeadDependency(
+        issueId: 'tg-1',
+        dependsOnId: 'external:power_station:pow-9',
+      );
+      grid.push(
         graphOf(
           [bead('tg-1')],
           dependencies: [dep],
@@ -471,49 +474,152 @@ void main() {
           tick: 1,
         ),
       );
-      dash.push(graphOf([bead('dash-1')], tick: 1));
+      power.push(graphOf([bead('pow-9')], tick: 1));
       await settle();
 
       expect(
         union.current!.readyIds,
-        contains('tg-1'),
-        reason: 'link beads are the only cross-store block (tg-hof7 Q1)',
+        isNot(contains('tg-1')),
+        reason: 'pow-9 is open and unshipped',
       );
-      expect(loud.single, contains('REFUSED'));
-      expect(loud.single, contains('tg-1'));
-      expect(loud.single, contains('dash-1'));
-      expect(loud.single, contains('grid link'));
-      expect(loud.single, contains('tg-xh5d'));
-    });
+      expect(loud, isEmpty, reason: 'an unshipped prerequisite is not a fault');
 
-    test('a row whose target NO member observes is refused LOUDLY too — never '
-        'a silent pass', () async {
-      final loud = <String>[];
-      final tg = FakeSnapshotSource();
-      final union = FederatedSnapshotSource({
-        'tg': tg,
-      }, onUnresolvedExternalDep: loud.add);
-      addTearDown(union.dispose);
+      // CLOSED but not shipped still blocks — the capability is the fact,
+      // not the bead's status.
+      power.push(
+        graphOf([closedBead('pow-9')], readyIds: const <String>{}, tick: 2),
+      );
+      await settle();
+      expect(union.current!.readyIds, isNot(contains('tg-1')));
 
-      const dep = BeadDependency(issueId: 'tg-1', dependsOnId: 'dash-999');
-      tg.push(
+      // `bd ship pow-9` adds provides:pow-9 to the CLOSED bead.
+      power.push(
+        graphOf(
+          [
+            closedBead('pow-9', labels: const ['provides:pow-9']),
+          ],
+          readyIds: const <String>{},
+          tick: 3,
+        ),
+      );
+      grid.push(
         graphOf(
           [bead('tg-1')],
           dependencies: [dep],
+          readyIds: {'tg-1'},
+          tick: 3,
+        ),
+      );
+      await settle();
+      expect(union.current!.readyIds, contains('tg-1'));
+      expect(loud, isEmpty);
+    });
+
+    test('a provides: label on an OPEN bead does NOT ship the capability '
+        '(bd ship --force is not a finished prerequisite)', () async {
+      final grid = FakeSnapshotSource();
+      final power = FakeSnapshotSource();
+      final union = FederatedSnapshotSource({
+        'the_grid': grid,
+        'power_station': power,
+      });
+      addTearDown(union.dispose);
+
+      grid.push(
+        graphOf(
+          [bead('tg-1')],
+          dependencies: const [
+            BeadDependency(
+              issueId: 'tg-1',
+              dependsOnId: 'external:power_station:pow-9',
+            ),
+          ],
+          readyIds: {'tg-1'},
+          tick: 1,
+        ),
+      );
+      power.push(
+        graphOf([
+          Bead(
+            id: 'pow-9',
+            issueType: IssueType.task,
+            status: BeadStatus.open,
+            labels: const ['provides:pow-9'],
+          ),
+        ], tick: 1),
+      );
+      await settle();
+
+      expect(union.current!.readyIds, isNot(contains('tg-1')));
+    });
+
+    test('the capability must be shipped BY the named project — a same-named '
+        'label in another store never satisfies it', () async {
+      final grid = FakeSnapshotSource();
+      final power = FakeSnapshotSource();
+      final union = FederatedSnapshotSource({
+        'the_grid': grid,
+        'power_station': power,
+      });
+      addTearDown(union.dispose);
+
+      grid.push(
+        graphOf(
+          [
+            bead('tg-1'),
+            closedBead('tg-decoy', labels: const ['provides:pow-9']),
+          ],
+          dependencies: const [
+            BeadDependency(
+              issueId: 'tg-1',
+              dependsOnId: 'external:power_station:pow-9',
+            ),
+          ],
+          readyIds: {'tg-1'},
+          tick: 1,
+        ),
+      );
+      power.push(graphOf([bead('pow-9')], tick: 1));
+      await settle();
+
+      expect(union.current!.readyIds, isNot(contains('tg-1')));
+    });
+
+    test('a project the roster does not arm is the LOUD hard refusal — '
+        'blocked fail-closed, never a silent pass', () async {
+      final loud = <String>[];
+      final grid = FakeSnapshotSource();
+      final union = FederatedSnapshotSource(
+        {'the_grid': grid},
+        memberPrefixes: const {'the_grid': 'tg'},
+        onUnresolvedExternalDep: loud.add,
+      );
+      addTearDown(union.dispose);
+
+      grid.push(
+        graphOf(
+          [bead('tg-1')],
+          dependencies: const [
+            BeadDependency(
+              issueId: 'tg-1',
+              dependsOnId: 'external:dashboard:dash-1',
+            ),
+          ],
           readyIds: {'tg-1'},
           tick: 1,
         ),
       );
       await settle();
 
-      expect(union.current!.readyIds, contains('tg-1'));
+      expect(union.current!.readyIds, isNot(contains('tg-1')));
+      expect(loud.single, contains('REFUSED'));
+      expect(loud.single, contains('external:dashboard:dash-1'));
       expect(loud.single, contains('tg-1'));
-      expect(loud.single, contains('dash-999'));
-      expect(loud.single, contains('tg(tg)'));
+      expect(loud.single, contains('the_grid(tg)'));
     });
 
-    test('a SAME-store blocking row is left to the origin store\'s own '
-        '`bd ready` — never re-classified, never reported', () async {
+    test('an ORDINARY same-store row is left to the origin store\'s own '
+        '`bd ready` — never re-judged, never reported', () async {
       final loud = <String>[];
       final tg = FakeSnapshotSource();
       final union = FederatedSnapshotSource({
@@ -536,8 +642,8 @@ void main() {
       expect(loud, isEmpty);
     });
 
-    test('an ALIASED member (name != prefix) resolves its own ids: the '
-        'same-store row is silent, the cross-store row is refused', () async {
+    test('a RAW foreign bead-id row is not an external row — the origin '
+        "store's own ready semantics govern it", () async {
       final loud = <String>[];
       final grid = FakeSnapshotSource();
       final power = FakeSnapshotSource();
@@ -550,92 +656,45 @@ void main() {
 
       grid.push(
         graphOf(
-          [bead('tg-1'), bead('tg-2')],
+          [bead('tg-1')],
           dependencies: const [
-            BeadDependency(issueId: 'tg-1', dependsOnId: 'tg-2'),
             BeadDependency(issueId: 'tg-1', dependsOnId: 'pow-9'),
           ],
-          readyIds: {'tg-1', 'tg-2'},
+          readyIds: {'tg-1'},
           tick: 1,
         ),
       );
       power.push(graphOf([bead('pow-9')], tick: 1));
       await settle();
 
-      expect(union.current!.readyIds, {'tg-1', 'tg-2', 'pow-9'});
-      expect(loud, hasLength(1));
-      expect(loud.single, contains('pow-9'));
-      expect(loud.single, contains('the_grid(tg), power_station(pow)'));
+      expect(union.current!.readyIds, contains('tg-1'));
+      expect(loud, isEmpty);
     });
 
     test(
-      'hyphenated prefixes still distinguish same from cross store',
+      'a non-blocking dependency type (`related`) never blocks or refuses',
       () async {
         final loud = <String>[];
-        final infer = FakeSnapshotSource();
-        final train = FakeSnapshotSource();
+        final grid = FakeSnapshotSource();
         final union = FederatedSnapshotSource({
-          'swift-infer': infer,
-          'swift-train': train,
+          'the_grid': grid,
         }, onUnresolvedExternalDep: loud.add);
         addTearDown(union.dispose);
 
-        infer.push(
-          graphOf(
-            [bead('swift-infer-001'), bead('swift-infer-002')],
-            dependencies: const [
-              BeadDependency(
-                issueId: 'swift-infer-001',
-                dependsOnId: 'swift-infer-002',
-              ),
-              BeadDependency(
-                issueId: 'swift-infer-001',
-                dependsOnId: 'swift-train-001',
-              ),
-            ],
-            readyIds: {'swift-infer-001', 'swift-infer-002'},
-            tick: 1,
-          ),
-        );
-        train.push(graphOf([bead('swift-train-001')], tick: 1));
-        await settle();
-
-        expect(union.current!.readyIds, {
-          'swift-infer-001',
-          'swift-infer-002',
-          'swift-train-001',
-        });
-        expect(loud, hasLength(1));
-        expect(loud.single, contains('swift-train-001'));
-      },
-    );
-
-    test(
-      'a non-blocking dependency type (`related`) is never refused',
-      () async {
-        final loud = <String>[];
-        final tg = FakeSnapshotSource();
-        final dash = FakeSnapshotSource();
-        final union = FederatedSnapshotSource({
-          'tg': tg,
-          'dash': dash,
-        }, onUnresolvedExternalDep: loud.add);
-        addTearDown(union.dispose);
-
-        const dep = BeadDependency(
-          issueId: 'tg-1',
-          dependsOnId: 'dash-1',
-          type: DependencyType.related,
-        );
-        tg.push(
+        grid.push(
           graphOf(
             [bead('tg-1')],
-            dependencies: [dep],
+            dependencies: const [
+              BeadDependency(
+                issueId: 'tg-1',
+                dependsOnId: 'external:dashboard:dash-1',
+                type: DependencyType.related,
+              ),
+            ],
             readyIds: {'tg-1'},
             tick: 1,
           ),
         );
-        dash.push(graphOf([bead('dash-1')], tick: 1));
         await settle();
 
         expect(union.current!.readyIds, contains('tg-1'));
@@ -643,17 +702,20 @@ void main() {
       },
     );
 
-    test('one authored row is reported ONCE across recomputes, and again '
+    test('one refused row is reported ONCE across recomputes, and again '
         'after it disappears and returns', () async {
       final loud = <String>[];
-      final tg = FakeSnapshotSource();
+      final grid = FakeSnapshotSource();
       final union = FederatedSnapshotSource({
-        'tg': tg,
+        'the_grid': grid,
       }, onUnresolvedExternalDep: loud.add);
       addTearDown(union.dispose);
 
-      const dep = BeadDependency(issueId: 'tg-1', dependsOnId: 'dash-999');
-      tg.push(
+      const dep = BeadDependency(
+        issueId: 'tg-1',
+        dependsOnId: 'external:dashboard:dash-1',
+      );
+      grid.push(
         graphOf(
           [bead('tg-1')],
           dependencies: [dep],
@@ -662,7 +724,7 @@ void main() {
         ),
       );
       await settle();
-      tg.push(
+      grid.push(
         graphOf(
           [bead('tg-1'), bead('tg-2')],
           dependencies: [dep],
@@ -674,9 +736,9 @@ void main() {
       expect(loud, hasLength(1), reason: 'rising edge, not per-recompute spam');
 
       // The operator deletes the row, then re-authors it: reported again.
-      tg.push(graphOf([bead('tg-1')], readyIds: {'tg-1'}, tick: 3));
+      grid.push(graphOf([bead('tg-1')], readyIds: {'tg-1'}, tick: 3));
       await settle();
-      tg.push(
+      grid.push(
         graphOf(
           [bead('tg-1')],
           dependencies: [dep],
@@ -688,32 +750,59 @@ void main() {
       expect(loud, hasLength(2));
     });
 
-    test('addMember carries the new member\'s prefix', () async {
-      final loud = <String>[];
-      final grid = FakeSnapshotSource();
-      final power = FakeSnapshotSource();
-      final union = FederatedSnapshotSource(
-        {'the_grid': grid},
-        memberPrefixes: const {'the_grid': 'tg'},
-        onUnresolvedExternalDep: loud.add,
-      );
-      addTearDown(union.dispose);
-      union.addMember('power_station', power, prefix: 'pow');
+    test(
+      'addMember arms a project the roster refused a moment earlier',
+      () async {
+        final loud = <String>[];
+        final grid = FakeSnapshotSource();
+        final power = FakeSnapshotSource();
+        final union = FederatedSnapshotSource(
+          {'the_grid': grid},
+          memberPrefixes: const {'the_grid': 'tg'},
+          onUnresolvedExternalDep: loud.add,
+        );
+        addTearDown(union.dispose);
 
-      power.push(
-        graphOf(
-          [bead('pow-9'), bead('pow-10')],
-          dependencies: const [
-            BeadDependency(issueId: 'pow-9', dependsOnId: 'pow-10'),
-          ],
-          readyIds: {'pow-9', 'pow-10'},
-          tick: 1,
-        ),
-      );
-      await settle();
+        const dep = BeadDependency(
+          issueId: 'tg-1',
+          dependsOnId: 'external:power_station:pow-9',
+        );
+        grid.push(
+          graphOf(
+            [bead('tg-1')],
+            dependencies: [dep],
+            readyIds: {'tg-1'},
+            tick: 1,
+          ),
+        );
+        await settle();
+        expect(loud, hasLength(1));
+        expect(union.current!.readyIds, isNot(contains('tg-1')));
 
-      expect(union.members, {'the_grid', 'power_station'});
-      expect(loud, isEmpty, reason: 'pow-9 → pow-10 is a SAME-store row');
-    });
+        union.addMember('power_station', power, prefix: 'pow');
+        power.push(
+          graphOf(
+            [
+              closedBead('pow-9', labels: const ['provides:pow-9']),
+            ],
+            readyIds: const <String>{},
+            tick: 2,
+          ),
+        );
+        await settle();
+
+        expect(union.members, {'the_grid', 'power_station'});
+        expect(union.current!.readyIds, contains('tg-1'));
+        expect(loud, hasLength(1), reason: 'the refusal did not repeat');
+      },
+    );
   });
 }
+
+/// A CLOSED task bead — the shape a shipped capability's provider carries.
+Bead closedBead(String id, {List<String> labels = const []}) => Bead(
+  id: id,
+  issueType: IssueType.task,
+  status: BeadStatus.closed,
+  labels: labels,
+);

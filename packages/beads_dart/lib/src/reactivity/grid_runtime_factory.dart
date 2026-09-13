@@ -69,11 +69,12 @@ class GridRuntimeFactory {
     DoltQueryService Function(DoltEndpoint endpoint)? doltQueryServiceFactory,
     Set<IssueType> lifecycleTypes = const {},
     void Function(String source)? onDirtySourceClosed,
+    void Function(String message)? onReadRefusal,
   }) async {
     final bd = BdCliService(
       runner ?? ProcessBdRunner(workspaceRoot: workspace.root),
     );
-    final cliReader = CliSnapshotReader(bd);
+    final cliReader = CliSnapshotReader(bd, onRefusal: onReadRefusal);
     final dirtySources = <DirtySignalSource>[
       WorkspaceBeadsWatcher(workspace.beadsDir),
     ];

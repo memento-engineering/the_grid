@@ -361,6 +361,41 @@ class BdTimeoutException extends BdException {
       'bd timed out after ${timeout.inMilliseconds}ms: ${command.join(' ')}';
 }
 
+/// bd's read surfaces did not carry this store's `external:` dependency rows —
+/// the CLI read path's refusal (tg-xh5d,
+/// `the_grid#capability-edges-are-bd-native-and-link-is-sugar`).
+///
+/// bd STORES a cross-project row (`dependencies.depends_on_external`) and
+/// resolves nothing against it in any released build, and its RESOLVING reads
+/// (`bd dep list --json`, `bd show --json`) answer with the ISSUE RECORD a
+/// dependency points at — which an `external:` target has none of. Only bd's
+/// RECORD surface carries the row, so a record read that comes back with no
+/// dependency rows while the resolving read has some is a surface that is
+/// dropping them. A read path that cannot see an external blocker would admit
+/// the work it blocks, so it refuses instead: never fail open.
+class BdExternalDepSurfaceUnavailable extends BdException {
+  /// Records the read that could not carry external rows.
+  BdExternalDepSurfaceUnavailable({
+    required List<String> call,
+    required this.detail,
+  }) : call = List<String>.unmodifiable(call);
+
+  /// The exact argv that was executed, including `bd`.
+  final List<String> call;
+
+  /// What the surface returned instead of the rows.
+  final String detail;
+
+  @override
+  String get message =>
+      'grid: REFUSED to read this store on the bd CLI path — no bd surface '
+      'carried its `external:` dependency rows (${jsonEncode(call)}: $detail). '
+      'bd keeps a cross-project blocker in `dependencies.depends_on_external` '
+      'and only its record surface returns one, so admitting work behind a '
+      'blocker this path cannot see is the one outcome it will not produce. '
+      'Upgrade bd, or read this store over SQL.';
+}
+
 /// bd output (or a SQL row payload) could not be parsed.
 class BdParseException extends BdException {
   const BdParseException(this.message, [this.source = '']);

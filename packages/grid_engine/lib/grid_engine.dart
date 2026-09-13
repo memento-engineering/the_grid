@@ -34,8 +34,8 @@ export 'src/bridge/snapshot_source.dart';
 // The federated work-source union (tg-nsj) — fans N LOCAL beads workspaces
 // into the ONE SnapshotSource the bridge's `work` axis observes.
 export 'src/bridge/federated_snapshot_source.dart';
-// The ONE cross-store block enforcement, shared by the union's dependency-row
-// edges and the join's state-owned link beads.
+// The join's block enforcement over the state-owned link beads that stay
+// authoritative until the one-pass migration retires them.
 export 'src/bridge/block_guard.dart';
 export 'src/bridge/trust_guard.dart';
 
@@ -94,6 +94,9 @@ export 'src/molecule/molecule_schema.dart'
 // because the authoring verbs mint and close these beads and must name the ONE
 // definition of the wire keys.
 export 'src/domain/cross_link.dart';
+// bd's NATIVE cross-project edge (tg-xh5d): the `external:` row's reading, the
+// capability-shipped test, and the roster/`external_projects` diagnostic.
+export 'src/domain/external_dep.dart';
 export 'src/domain/joined_snapshot.dart';
 export 'src/domain/linked_sessions.dart';
 // The rework-round contract (tg-o90) — the ONE cap + retired-round key shape

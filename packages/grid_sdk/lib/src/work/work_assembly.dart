@@ -676,11 +676,12 @@ class StationWorkRuntime implements SubstationProvisioner {
       );
 
   /// The `runGrid(onFlushed:)` hook — the driver's post-flush cooldown +
-  /// unclaimed-frontier re-scans (D-5/F1), then the roster drain settle.
+  /// unclaimed-frontier re-scans (D-5/F1), then the roster drain settle and
+  /// the capability-export settle.
   void afterFlush() {
     try {
       _driver.afterFlush();
-      unawaited(_settleRosterDrainsGuarded());
+      unawaited(_settlePostFlushGuarded());
     } finally {
       // The first flush occurs only after the authored tree (and any relay
       // asset) mounted. The trajectory boot pass therefore remains inert.
@@ -688,21 +689,40 @@ class StationWorkRuntime implements SubstationProvisioner {
     }
   }
 
-  /// Settles draining roster seats, reporting a failure instead of raising it.
+  /// Settles the two post-flush passes, reporting a failure instead of
+  /// raising it.
   ///
-  /// The settle is ASYNC and rides the handler's serialized tail, so a failure
-  /// cannot surface at [afterFlush]'s synchronous call site: fire-and-forget
-  /// would let it escape to the ROOT ZONE and take the resident down. The
-  /// posture composes with `runGrid`'s guarded post-flush rail: this async
-  /// settle reports LOUD through the refusal sink while the sole production
-  /// flush coordinator keeps flushing.
-  Future<void> _settleRosterDrainsGuarded() async {
+  /// Both settles are ASYNC and ride the handler's serialized tail, so a
+  /// failure cannot surface at [afterFlush]'s synchronous call site:
+  /// fire-and-forget would let it escape to the ROOT ZONE and take the
+  /// resident down. The posture composes with `runGrid`'s guarded post-flush
+  /// rail: these settles report LOUD through the refusal sink while the sole
+  /// production flush coordinator keeps flushing. One failing settle never
+  /// skips the other.
+  Future<void> _settlePostFlushGuarded() async {
+    await _settleGuarded('roster drain', _handler.settleRosterDrains);
+    // tg-xh5d WHAT #2: the OTHER half of ship-on-close — a work bead an
+    // operator closed by hand ships the next time the station observes the
+    // close, and a flush is that observation.
+    //
+    // SUPPRESSED under --dry-run (RULING 2026-09-13): `bd ship` publishes a
+    // capability to every other store's frontier, which is exactly the class
+    // of outcome a dry run withholds. The observer itself stands — the next
+    // live flush ships whatever the dry run observed, because the rising edge
+    // it keys on was never marked.
+    if (_dryRun) return;
+    await _settleGuarded('capability export', _handler.settleCapabilityExports);
+  }
+
+  Future<void> _settleGuarded(
+    String what,
+    Future<void> Function() settle,
+  ) async {
     try {
-      await _handler.settleRosterDrains();
+      await settle();
     } on Object catch (error) {
       _onRefusal(
-        'grid: roster drain settle failed (the station keeps flushing) — '
-        '$error',
+        'grid: $what settle failed (the station keeps flushing) — $error',
       );
     }
   }
@@ -1285,6 +1305,15 @@ Future<StationWorkRuntime> _acquireStationWork({
   required void Function(String message) refusalSink,
   required List<({String step, FutureOr<void> Function() dispose})> disposers,
 }) async {
+  // ONE sink for EVERY cross-store report — the union's UNARMED-project
+  // refusals (tg-xh5d: an `external:` row naming a substation this station
+  // does not arm blocks fail-closed and says so), the CLI read path's
+  // external-row refusal (a store bd cannot be read for cross-project rows
+  // publishes no snapshot, and says which store), and the join's state-owned
+  // link beads, authoritative until the migration retires them.
+  final unresolvedSink =
+      onUnresolvedExternalDep ?? (String m) => stdout.writeln(m);
+
   // --- the controllers (one per work store + the state store).
   final bundles = <String, GridRuntimeBundle>{};
   for (final entry in workspacesByName.entries) {
@@ -1298,6 +1327,7 @@ Future<StationWorkRuntime> _acquireStationWork({
         'sync.dirtySignalsClosed',
         {'substation': storeName, 'source': source},
       ),
+      onReadRefusal: (message) => unresolvedSink('[$storeName] $message'),
     );
     final bundle =
         await (bundleBuilder?.call(
@@ -1321,6 +1351,7 @@ Future<StationWorkRuntime> _acquireStationWork({
       'sync.dirtySignalsClosed',
       {'substation': 'state', 'source': source},
     ),
+    onReadRefusal: (message) => unresolvedSink('[state] $message'),
   );
   final stateBundle =
       await (bundleBuilder?.call(
@@ -1335,22 +1366,15 @@ Future<StationWorkRuntime> _acquireStationWork({
     'state=${stateBundle.readPath.name}',
   ].join(', ');
 
-  // ONE sink for BOTH cross-store reports — the union's REFUSED dependency
-  // rows (tg-mspw: a dep row blocks nothing) and the join's state-owned link
-  // beads, which are the only cross-store blocking edge.
-  final unresolvedSink =
-      onUnresolvedExternalDep ?? (String m) => stdout.writeln(m);
-
   FederatedSnapshotSource
   buildFederatedSourceDefault() => FederatedSnapshotSource(
     {
       for (final e in bundles.entries)
         e.key: _RuntimeSnapshotSource(e.value.runtime),
     },
-    // tg-mspw — the union classifies ownership on BOTH identity axes, the
-    // same {name, prefix} pair `identityOwner` above already refuses
-    // collisions on. The member map is keyed by NAME only; every production
-    // id is PREFIX-shaped (`tg-…`, `pow-…`), so names alone resolved nothing.
+    // An `external:<project>:<capability>` row resolves its project by member
+    // NAME (tg-xh5d); the PREFIX rides the armed-roster line a refusal prints,
+    // so an operator who named the wrong token sees both axes of every store.
     memberPrefixes: {for (final s in substations) s.name: s.prefix},
     onUnresolvedExternalDep: unresolvedSink,
     // Ready-staleness by AGE (tg-zd4v face 2): a small multiple of the floor,
@@ -1994,6 +2018,7 @@ Future<StationWorkRuntime> _acquireStationWork({
         'sync.dirtySignalsClosed',
         {'substation': storeName, 'source': source},
       ),
+      onReadRefusal: (message) => unresolvedSink('[$storeName] $message'),
     ),
     buildWorkWriter: (spec, bundle) => StationBeadWriter(
       bd: BdCliService(
