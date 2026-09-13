@@ -1,3 +1,17 @@
+## 0.4.0-dev.2
+
+- `Workspace` gains an optional `baseSha` (equality and hash include it) and `SourceControl` gains
+  `baseShaFor(beadId)`, so the session scope hands a round the provisioned base commit and the
+  committee can pin its pinned-diff base to it (tg-2xdk, #436). Additive; `baseSha` defaults to null.
+- Publishes the engine changes main has carried unversioned since 0.4.0-dev.1: stranded work in
+  the admission status (#435), the wave-2 cut boundary (#431), open tombstones joined to their work
+  bead (#426), tree context guarded across async gaps (#433), capability host supersession scopes
+  (#425), the slot preserved through rework (#424), work-session liveness coordinated with verdicts
+  (#421) and the lifecycle-driven inputs pattern for allocation (#417).
+- Floors `grid_runtime` at `^0.2.1-dev.1`: the engine uses `ReapWorktree`, `SessionDisciplineStamp`
+  and the session discipline keys that `grid_runtime 0.2.0` does not export (declared-floor scrub,
+  2026-09-13).
+
 ## 0.4.0-dev.1
 
 - Breaking: the `genesis_tree` constraint moves from `^0.3.0` to `^0.4.0`, and the private
