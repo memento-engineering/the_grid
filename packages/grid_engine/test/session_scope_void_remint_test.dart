@@ -256,6 +256,44 @@ void main() {
     _spawnStartBudget = await MoleculeSpawnStartBudget.probe();
   });
 
+  test('START budget timeout is loud and requires what', () async {
+    final owner = TreeOwner();
+    addTearDown(owner.dispose);
+    const budget = MoleculeSpawnStartBudget(
+      probeLatency: Duration(milliseconds: 5),
+      timeout: Duration(milliseconds: 2),
+    );
+
+    await expectLater(
+      _pumpUntil(
+        owner,
+        () => false,
+        startBudget: budget,
+        what: 'process sentinel to start',
+      ),
+      throwsA(
+        isA<TestFailure>().having(
+          (failure) => failure.message,
+          'message',
+          matches(
+            RegExp(
+              r'^Timed out waiting for process sentinel to start after '
+              r'[0-9]+ ms; probe latency=5ms; derived START budget=2ms; '
+              r'minimum=30000ms; multiplier=20x$',
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await expectLater(
+      _pumpUntil(owner, () => false, startBudget: budget),
+      throwsA(
+        isA<ArgumentError>().having((error) => error.name, 'name', 'what'),
+      ),
+    );
+  });
+
   group('tg-4rw / I-10 — a dead session key mints fresh instead of wedging', () {
     test(
       'a lagging state snapshot refuses before the authored cross-link is projected',

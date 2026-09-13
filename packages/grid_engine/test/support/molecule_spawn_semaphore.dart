@@ -1,5 +1,12 @@
 import 'dart:io';
 
+/// Test-only runner seam for the credential-free Dart spawn probe.
+typedef MoleculeSpawnProbeProcessRunner =
+    Future<int> Function(
+      void Function(List<int>) onStdout,
+      void Function(List<int>) onStderr,
+    );
+
 /// A probe-derived wall-clock budget for a molecule process to report START.
 ///
 /// The 30-second floor preserves the historical isolated-suite budget. The
@@ -25,23 +32,25 @@ final class MoleculeSpawnStartBudget {
     );
   }
 
-  static Future<MoleculeSpawnStartBudget> probe() async {
-    final stopwatch = Stopwatch()..start();
-    final process = await Process.start(Platform.resolvedExecutable, const [
-      '--version',
-    ]);
+  static Future<MoleculeSpawnStartBudget> probe({
+    MoleculeSpawnProbeProcessRunner? processRunner,
+    Duration Function()? elapsed,
+  }) async {
+    final stopwatch = Stopwatch();
+    final readElapsed = elapsed ?? () => stopwatch.elapsed;
     Duration? firstOutputLatency;
 
     void observeOutput(List<int> chunk) {
       if (chunk.isNotEmpty && firstOutputLatency == null) {
-        firstOutputLatency = stopwatch.elapsed;
+        firstOutputLatency = readElapsed();
       }
     }
 
-    final stdoutDone = process.stdout.listen(observeOutput).asFuture<void>();
-    final stderrDone = process.stderr.listen(observeOutput).asFuture<void>();
-    final exitCode = await process.exitCode;
-    await Future.wait([stdoutDone, stderrDone]);
+    stopwatch.start();
+    final exitCode = await (processRunner ?? _runDartSpawnProbe)(
+      observeOutput,
+      observeOutput,
+    );
     stopwatch.stop();
 
     if (exitCode != 0) {
@@ -58,6 +67,20 @@ final class MoleculeSpawnStartBudget {
       'probe latency=${probeLatency.inMilliseconds}ms; '
       'derived START budget=${timeout.inMilliseconds}ms; '
       'minimum=${minimum.inMilliseconds}ms; multiplier=${multiplier}x';
+}
+
+Future<int> _runDartSpawnProbe(
+  void Function(List<int>) onStdout,
+  void Function(List<int>) onStderr,
+) async {
+  final process = await Process.start(Platform.resolvedExecutable, const [
+    '--version',
+  ]);
+  final stdoutDone = process.stdout.listen(onStdout).asFuture<void>();
+  final stderrDone = process.stderr.listen(onStderr).asFuture<void>();
+  final exitCode = await process.exitCode;
+  await Future.wait([stdoutDone, stderrDone]);
+  return exitCode;
 }
 
 /// A shared cross-process spawn semaphore for molecule tests.
