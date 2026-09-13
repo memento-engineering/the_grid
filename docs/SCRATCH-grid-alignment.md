@@ -159,7 +159,7 @@ own actor because under D-B1 it IS one — the union of everyone's brokers, not 
   Nothing else touches the engine.
 - **D-B6 — power_station gets its OWN ADR repository (RULED 2026-07-03).** It stops riding
   the_grid's ADR line (it already carries its own ADR-0000). Asset-level federation/bus/zero-conf
-  ADRs land in power_station's `docs/adr/`; the_grid's line stays engine-scoped. This resolves
+  ADRs land in power_station's own ADR directory; the_grid's line stays engine-scoped. This resolves
   OQ-A4's vessel: the engine contracts (D-B5) graduate into **the_grid ADR-0011** once the claim
   flow is proven end-to-end (spike-before-doctrine); the asset opinions graduate into
   power_station's own ADR line.

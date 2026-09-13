@@ -62,7 +62,7 @@ reader needs updating too — and that's a code change gated by the doc step (§
 What each signal means:
 
 - **Codec fixture tests** re-pin the parser to the new fixtures. Red here ⇒ the envelope/JSON shape
-  changed; reconcile the models (via ADR-0000, never a silent Track A edit).
+  changed; reconcile the models (record it in the decision register, never a silent Track A edit).
 - **SQL-vs-CLI equivalence test** (the drift canary, ADR-0001 Decision 7) ⇒ if red, the schema moved
   under the SQL reader or bd's projection moved under the CLI reader. This is the test that catches a
   structural change a version-number bump alone would hide. Do not green it by loosening the assertion —
@@ -70,17 +70,20 @@ What each signal means:
 - **No-SQL-writes / no-`.beads/hooks/`-touch test** (PDR §6.6) must stay green regardless. If a
   re-alignment tempts you to write SQL or touch hooks, stop — that's an invariant, not a tradeoff.
 
-### 5. Record the decision as an ADR-0000 amendment
+### 5. Record the decision in the register
 
-Per `CLAUDE.md` process rules and the ADR-0000 register (`docs/adr/ADR-0000-ai-decision-register.md`):
+Per `CLAUDE.md` process rules and the decision register (`docs/decisions/` — see the `decide`
+skill for the write path; the old ADR-0000 pending-amendment convention is retired, superseded
+by the decisions repository's own specification):
 
-- Add an amendment capturing **what moved** (versions/commits), **what shape changed** (envelope /
+- Author an entry capturing **what moved** (versions/commits), **what shape changed** (envelope /
   migrations / pack), and **what the_grid did** (const bumps, model reconciliation, reader changes).
-- The amendment **stays in ADR-0000** until Nico promotes or rejects it. AI re-alignment calls are
-  proposals, not ratified decisions.
-- **Never** edit a ratified ADR (0001+) to match new upstream behaviour, and **never** silently re-shape
-  a Track A model (`packages/grid_controller/lib/src/models/`) to absorb drift. Track A is LOCKED; a
-  forced change to it is exactly the kind of decision the register exists to surface.
+- Entries are recorded `accepted` on write — an autonomous re-alignment call is still recorded
+  honestly in `decision-makers`, and a call needing Nico's ratification stays open as a question
+  until he rules, rather than being logged as a done deal.
+- **Never** edit a ratified ADR entry to match new upstream behaviour, and **never** silently
+  re-shape a Track A model (`packages/grid_controller/lib/src/models/`) to absorb drift. Track A
+  is LOCKED; a forced change to it is exactly the kind of decision the register exists to surface.
 
 ## Severity ladder
 

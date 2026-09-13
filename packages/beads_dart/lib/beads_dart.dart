@@ -10,7 +10,8 @@
 ///
 /// Layering follows predictable-flutter: Services (stateless I/O) →
 /// Repositories (own one source, emit state) → Interactors/Selectors/
-/// Transformers → consumers. See docs/adr/ADR-0001 and ADR-0002.
+/// Transformers → consumers. See the decision register (docs/decisions/) —
+/// ADR-0001 and ADR-0002.
 ///
 /// Framework-free at the package boundary (D-A7): Futures for acts, Streams
 /// for observations, a synchronous `current` where a seed value is needed. No

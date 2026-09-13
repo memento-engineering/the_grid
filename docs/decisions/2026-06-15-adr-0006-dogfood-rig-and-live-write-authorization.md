@@ -264,7 +264,7 @@ memento-engineering org):
 
 This amendment supersedes only Decision 3's absolute **"never auto-merge"** and **"Nothing auto-merges to lenny main"** clauses. Decision 3's branch-per-bead isolation, push-to-PR flow, lifecycle recording, and fail-closed cleanup remain in force.
 
-Nico's 2026-07-10 directive, reaffirmed 2026-08-21, is **grades-good means merge**. The directive is ratified on arrival and belongs in this numbered ADR, never in `docs/adr/ADR-0000-ai-decision-register.md`, per power_station ADR-0004's Consequences. It is further grounded by power_station ADR-0004 D2 ("A ready P0 or P1 never waits on a human when the station is halted") and ratified by power_station ADR-0005 D1–D3.
+Nico's 2026-07-10 directive, reaffirmed 2026-08-21, is **grades-good means merge**. The directive is ratified on arrival and belongs in this numbered ADR, never in the retired ADR-0000 pending-amendment log, per power_station ADR-0004's Consequences. It is further grounded by power_station ADR-0004 D2 ("A ready P0 or P1 never waits on a human when the station is halted") and ratified by power_station ADR-0005 D1–D3. **[Edited 2026-09-13 — tg-vmtd: citation-form edit only, dropping the retired ADR-0000 file's path now that the ADR directory is gone. No decision text altered.]**
 
 Landing is a per-seat composed `DeliveryMethod` policy with three postures:
 

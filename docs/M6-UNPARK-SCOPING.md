@@ -16,7 +16,7 @@ lease family)**.
 ## Reconciliation assessment — the git merge is CLEAN; the work is SEMANTIC
 
 - **`git merge-tree main m6-federation` reports ZERO conflicts.** The only file both branches touched
-  is `docs/adr/ADR-0008` — and the two forward-pointer stamps (main's Allocation stamp, m6's
+  is the ADR-0008 register entry (`docs/decisions/2026-06-27-adr-0008-authoring-sdk-and-reentrant-engine.md`) — and the two forward-pointer stamps (main's Allocation stamp, m6's
   Asset-umbrella stamp) are independent additions that **auto-merge** (both kept). `grid_federation`
   + `butane_grid_assets` are NEW packages main never touched; m6's `grid_assets` changes are in
   `compute/` while main's are in `code/` — no overlap. **So there is no merge-conflict hell.**

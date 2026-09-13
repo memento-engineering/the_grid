@@ -22,7 +22,7 @@ register:
 
 **Why.** ADR-0001 Decision 7's historical `<version>` slot predates D-BD1. D-BD1, already ratified and stamped into ADR-0002 Decision 1 on 2026-08-08, establishes `main` and release-tag rails, so the directory must identify the selected ref without rewriting the ratified historical decision.
 
-**Not this.** This entry does not alter envelope decoding, the A2 corpus replay harness, compatibility rail CI, or any ratified ADR. In particular, `docs/adr/ADR-0001-technical-foundations.md` remains byte-for-byte untouched.
+**Not this.** This entry does not alter envelope decoding, the A2 corpus replay harness, compatibility rail CI, or any ratified ADR. In particular, `docs/decisions/2026-06-11-adr-0001-technical-foundations.md` remains byte-for-byte untouched. **[Edited 2026-09-13 — tg-vmtd: citation-form edit only, re-pointed from the retired ADR directory's original file to its register-entry twin. No decision text altered.]**
 
 **Affects (if promoted).** The grid-porting fixture naming description and future fixture captures; no in-place edit to ADR-0001.
 

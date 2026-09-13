@@ -357,7 +357,7 @@ done
 
   test('ADR-0002 supersession', () {
     final adr = read(
-      'docs/adr/ADR-0002-package-topology-and-domain-projections.md',
+      'docs/decisions/2026-06-11-adr-0002-package-topology-and-domain-projections.md',
     );
     expect(adr, contains('pinned against bd 1.0.5'));
     expect(adr, contains('Supersession stamp 2026-08-08'));

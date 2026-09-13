@@ -9,8 +9,8 @@
 /// single bd write chokepoint (bd-only, `--actor grid-controller`, never SQL).
 /// A `TmuxProvider` over the standalone `tmux` package is the gc-compatible
 /// alternative. Layering follows predictable-flutter (Services → Repositories
-/// → Interactors → View); see docs/adr/ADR-0002 + ADR-0004 and
-/// docs/M3-BUILD-ORDER.md.
+/// → Interactors → View); see the decision register (docs/decisions/) —
+/// ADR-0002 + ADR-0004 — and docs/M3-BUILD-ORDER.md.
 ///
 /// **Track 2 built.** The `RuntimeProvider` interface + `RuntimeConfig` /
 /// `RuntimeEvent` / `RuntimeCapabilities` value types + the `SubprocessProvider`

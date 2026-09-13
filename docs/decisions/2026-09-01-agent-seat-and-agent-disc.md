@@ -77,7 +77,7 @@ install or provision time by the existing non-destructive overlay materializer
 flavor work (pow-99g and pow-4xm) consumes this definition rather than changing
 it.
 
-This tracked exception extends `docs/adr/ADR-0000-ai-decision-register.md` A49.
+This tracked exception extends `docs/decisions/2026-07-12-a49-no-complete-on-faith-an-inferred-one-shot-exit-is-proven.md` (A49). **[Edited 2026-09-13 — tg-vmtd: citation-form edit only, re-pointed from the retired ADR-0000 log to A49's own register entry. No decision text altered.]**
 A49 says the work signal “EXCLUDES the grid's own runtime dir” and that
 “`GitOps.hasUncommittedWork` takes `excluding`, defaulted to EMPTY ... only the
 fence excludes.” Its premise that the_grid gitignores `.grid` is narrowed only

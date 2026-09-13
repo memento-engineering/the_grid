@@ -1,7 +1,7 @@
 # M6 — Federation + Asset Management (build order)
 
 **Status:** READY TO BUILD (offline) — **ADR-0011 Accepted 2026-06-29.** Source of
-decisions: **`docs/adr/ADR-0011-federation-and-asset-management.md`** + the design
+decisions: **`docs/decisions/2026-06-29-adr-0011-federation-and-asset-management.md`** + the design
 surface `docs/SCRATCH-asset-management.md` (retired to git history — tg-8gv.8).
 **Starting point:** the parked
 point-to-point spike on branch **`m6-federation`** (`grid_federation` pkg + `grid
