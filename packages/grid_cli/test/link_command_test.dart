@@ -1,11 +1,14 @@
+// tg-xh5d (`the_grid#the-grid-is-a-beads-controller`): `link` is SUGAR over
+// `bd dep add <from> external:<project>:<capability>` — it labels the target
+// `export:<target>`, writes the row, and mints NOTHING. `unlink` still retires
+// the authored link beads that exist until the one-pass migration (tg-6t0h).
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/args.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_cli/grid_cli.dart';
-import 'package:grid_engine/grid_engine.dart'
-    show GridIssueTypes, kCrossLinkTargetCloseRule;
+import 'package:grid_engine/grid_engine.dart' show GridIssueTypes;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
 
@@ -31,24 +34,24 @@ void main() {
     Directory('${powRoot.path}/.beads').createSync();
     endpoints = [
       LinkEndpointStore(
+        name: 'the_grid',
         prefix: 'tg',
         store: SubstationWorkStore(root: tgRoot.path),
       ),
       LinkEndpointStore(
+        name: 'power_station',
         prefix: 'pow',
         store: SubstationWorkStore(root: powRoot.path),
       ),
     ];
-    state = _FakeStore(
-      [],
-      customTypes: const ['link'],
-      createdId: 'houston-link2',
+    state = _FakeStore([], customTypes: const ['link']);
+    tg = _FakeStore(
+      [_bead('tg-q9k', status: BeadStatus.open)],
+      customTypes: const [],
+      externalProjects: 'power_station=../power_station',
     );
-    tg = _FakeStore([
-      _bead('tg-q9k', status: BeadStatus.open),
-    ], customTypes: const []);
     pow = _FakeStore([
-      _bead('pow-60g', status: BeadStatus.closed),
+      _bead('pow-60g', status: BeadStatus.open),
     ], customTypes: const []);
     stores = {stateStore.runtimeDir: state, tgRoot.path: tg, powRoot.path: pow};
     factory = (workspace) => BdCliService(stores[workspace.root]!);
@@ -56,526 +59,281 @@ void main() {
 
   tearDown(() => temp.deleteSync(recursive: true));
 
-  test('--reason-file preserves text and collisions precede probing', () async {
-    const fixture =
-        "literal `cmd` and \$(cmd) and \$VAR and 'single'\n  trailing  ";
-    final reasonFile = File('${temp.path}/reason.txt');
-    await reasonFile.writeAsString(fixture, encoding: utf8, flush: true);
+  test('link labels the target and writes ONE external dep row, minting '
+      'nothing anywhere', () async {
+    final written = <String>[];
     expect(
       await runLink(
-        arguments: _linkArgs([
-          'tg-q9k',
-          '--blocked-by',
-          'pow-60g',
-          '--grid-root',
-          temp.path,
-          '--prefix',
-          'tg',
-          '--prefix',
-          'pow',
-          '--actor',
-          'specify',
-          '--reason-file',
-          reasonFile.path,
-        ]),
-        stateStorePrefix: 'houston',
+        arguments: _linkArgs(['tg-q9k', '--blocked-by', 'pow-60g']),
         endpoints: endpoints,
         bdFactory: factory,
+        out: written.add,
       ),
       0,
     );
-    final update = state.calls.where((call) => call.first == 'update').single;
-    expect(update, contains('grid.link.reason=$fixture'));
-
-    final calls = state.calls.length;
     expect(
-      await runLink(
-        arguments: _linkArgs([
-          'tg-q9k',
-          '--blocked-by',
-          'pow-60g',
-          '--grid-root',
-          temp.path,
-          '--prefix',
-          'tg',
-          '--prefix',
-          'pow',
-          '--actor',
-          'specify',
-          '--reason',
-          fixture,
-          '--reason-file',
-          reasonFile.path,
-        ]),
-        stateStorePrefix: 'houston',
-        endpoints: endpoints,
-        bdFactory: factory,
-      ),
-      64,
+      written.single,
+      'tg-q9k --blocked-by external:power_station:pow-60g',
     );
-    expect(state.calls, hasLength(calls));
-  });
-
-  test('mint then list reports metadata and endpoint statuses', () async {
-    final minted = <String>[];
-    final code = await runLink(
-      arguments: _linkArgs([
-        'tg-q9k',
-        '--blocked-by',
-        'pow-60g',
-        '--grid-root',
-        temp.path,
-        '--prefix',
-        'houston',
-        '--prefix',
-        'tg',
-        '--prefix',
-        'pow',
-        '--actor',
-        'specify',
-        '--reason',
-        'waits on power',
-      ]),
-      stateStorePrefix: 'houston',
-      endpoints: endpoints,
-      bdFactory: factory,
-      out: minted.add,
-    );
-    expect(code, 0);
-    expect(minted, ['houston-link2']);
-    expect(
-      state.beads.single.metadata,
-      containsPair('grid.link.from', 'tg-q9k'),
-    );
-    expect(
-      state.beads.single.metadata,
-      containsPair('grid.link.to', 'pow-60g'),
-    );
-    expect(
-      state.calls.where((call) => call.isNotEmpty && call.first == 'update'),
-      everyElement(isNot(contains('--metadata'))),
-    );
-
-    for (final store in [state, tg, pow]) {
-      store.calls.clear();
-    }
-    state.beads.add(_link('houston-link1', 'tg-missing', 'pow-missing'));
-    final lines = <String>[];
-    final listed = await runLink(
-      arguments: _linkArgs(['ls', '--grid-root', temp.path]),
-      stateStorePrefix: 'houston',
-      endpoints: endpoints,
-      bdFactory: factory,
-      out: lines.add,
-    );
-    expect(listed, 0);
-    expect(lines, [
-      'houston-link1 tg-missing [unobserved] --blocked-by '
-          'pow-missing [unobserved] — ACTIVE',
-      'houston-link2 tg-q9k [open] --blocked-by pow-60g [closed] '
-          '— INERT (target closed)',
+    expect(pow.calls.where((call) => call.first == 'label').single, [
+      'label',
+      'add',
+      'pow-60g',
+      'export:pow-60g',
+      '--json',
+      '--actor',
+      'grid-controller',
+    ]);
+    expect(tg.calls.where((call) => call.first == 'dep').single, [
+      'dep',
+      'add',
+      'tg-q9k',
+      'external:power_station:pow-60g',
+      '--type',
+      'blocks',
+      '--json',
+      '--actor',
+      'grid-controller',
     ]);
     for (final store in [state, tg, pow]) {
-      expect(store.calls.where((call) => call.first == 'export'), isEmpty);
       expect(
-        store.calls.where((call) => call.first == 'list'),
-        everyElement(
-          predicate<List<String>>(
-            (call) =>
-                call.length == 8 &&
-                call[1] == '-t' &&
-                call[3] == '--status' &&
-                call[5] == '--json' &&
-                call[6] == '--limit' &&
-                call[7] == '0',
-          ),
-        ),
+        store.calls.where((call) => call.first == 'create'),
+        isEmpty,
+        reason: 'the link verb mints no bead',
       );
     }
+    expect(state.calls, isEmpty, reason: 'the state store is never touched');
   });
 
   test(
-    'link ls marks a closed target INERT in human and JSON output and explains target-close lifecycle in help',
+    'a target that already exports its capability is not re-labelled',
     () async {
-      state.beads.add(_link('houston-link1', 'tg-q9k', 'pow-60g'));
-
-      final human = <String>[];
+      pow.beads[0] = pow.beads[0].copyWith(labels: const ['export:pow-60g']);
       expect(
         await runLink(
-          arguments: _linkArgs(['ls', '--grid-root', temp.path]),
-          stateStorePrefix: 'houston',
+          arguments: _linkArgs(['tg-q9k', '--blocked-by', 'pow-60g']),
           endpoints: endpoints,
           bdFactory: factory,
-          out: human.add,
+          out: (_) {},
         ),
         0,
       );
-      expect(human, [
-        'houston-link1 tg-q9k [open] --blocked-by pow-60g [closed] '
-            '— INERT (target closed)',
-      ]);
-
-      final encoded = <String>[];
-      expect(
-        await runLink(
-          arguments: _linkArgs(['ls', '--grid-root', temp.path, '--json']),
-          stateStorePrefix: 'houston',
-          endpoints: endpoints,
-          bdFactory: factory,
-          out: encoded.add,
-        ),
-        0,
-      );
-      expect(encoded, hasLength(1));
-      expect(jsonDecode(encoded.single), [
-        {
-          'id': 'houston-link1',
-          'from': 'tg-q9k',
-          'fromStatus': 'open',
-          'to': 'pow-60g',
-          'toStatus': 'closed',
-          'edgeState': 'INERT (target closed)',
-        },
-      ]);
-      expect(
-        LinkCommand(
-          stateStorePrefix: 'houston',
-          endpoints: endpoints,
-        ).description,
-        contains(kCrossLinkTargetCloseRule),
-      );
+      expect(pow.calls.where((call) => call.first == 'label'), isEmpty);
+      expect(tg.calls.where((call) => call.first == 'dep'), hasLength(1));
     },
   );
 
-  test('link creation refuses --json before any store operation', () async {
+  test(
+    'a SAME-store blocker is refused — bd dep add already blocks it',
+    () async {
+      tg.beads.add(_bead('tg-other'));
+      final errors = <String>[];
+      expect(
+        await runLink(
+          arguments: _linkArgs(['tg-q9k', '--blocked-by', 'tg-other']),
+          endpoints: endpoints,
+          bdFactory: factory,
+          err: errors.add,
+        ),
+        64,
+      );
+      expect(errors.single, contains('bd dep add tg-q9k tg-other'));
+      expect(tg.calls, isEmpty);
+      expect(pow.calls, isEmpty);
+    },
+  );
+
+  test('a bd store whose external_projects omits the target project is '
+      'reported LOUDLY, and the row is still wired', () async {
+    tg.externalProjects = '';
     final errors = <String>[];
     expect(
       await runLink(
-        arguments: _linkArgs([
-          'tg-q9k',
-          '--blocked-by',
-          'pow-60g',
-          '--grid-root',
-          temp.path,
-          '--prefix',
-          'tg',
-          '--prefix',
-          'pow',
-          '--actor',
-          'specify',
-          '--reason',
-          'waits on power',
-          '--json',
-        ]),
-        stateStorePrefix: 'houston',
+        arguments: _linkArgs(['tg-q9k', '--blocked-by', 'pow-60g']),
+        endpoints: endpoints,
+        bdFactory: factory,
+        out: (_) {},
+        err: errors.add,
+      ),
+      0,
+    );
+    expect(errors.single, contains('external_projects'));
+    expect(errors.single, contains('power_station'));
+    expect(tg.calls.where((call) => call.first == 'dep'), hasLength(1));
+  });
+
+  test('an endpoint outside the configured roster refuses before any store '
+      'call', () async {
+    final errors = <String>[];
+    expect(
+      await runLink(
+        arguments: _linkArgs(['tg-q9k', '--blocked-by', 'other-1']),
         endpoints: endpoints,
         bdFactory: factory,
         err: errors.add,
       ),
       64,
     );
-    expect(errors, ['grid link: --json is accepted only by link ls.']);
-    expect([state, tg, pow].expand((store) => store.calls), isEmpty);
+    expect(errors.single, contains('other-1'));
+    expect(tg.calls, isEmpty);
+    expect(pow.calls, isEmpty);
   });
 
-  test('open exact pair returns the existing id without minting', () async {
-    pow.beads[0] = pow.beads.single.copyWith(status: BeadStatus.open);
-    state.beads.add(_link('houston-link1', 'tg-q9k', 'pow-60g'));
-    final beadCount = state.beads.length;
-    final mutationCount = state.mutationCalls.length;
-    final output = <String>[];
-
+  test('an unobservable target refuses before the dependency row', () async {
+    final errors = <String>[];
     expect(
       await runLink(
-        arguments: _linkArgs([
-          'tg-q9k',
-          '--blocked-by',
-          'pow-60g',
-          '--grid-root',
-          temp.path,
-          '--prefix',
-          'tg',
-          '--prefix',
-          'pow',
-          '--actor',
-          'specify',
-          '--reason',
-          'waits on power',
-        ]),
-        stateStorePrefix: 'houston',
+        arguments: _linkArgs(['tg-q9k', '--blocked-by', 'pow-999']),
         endpoints: endpoints,
         bdFactory: factory,
-        out: output.add,
+        err: errors.add,
+      ),
+      1,
+    );
+    expect(errors.single, contains('pow-999'));
+    expect(pow.calls.where((call) => call.first == 'label'), isEmpty);
+    expect(tg.calls.where((call) => call.first == 'dep'), isEmpty);
+  });
+
+  test(
+    '--blocked-by is required, and --json is accepted only by link ls',
+    () async {
+      final errors = <String>[];
+      expect(
+        await runLink(
+          arguments: _linkArgs(['tg-q9k']),
+          endpoints: endpoints,
+          bdFactory: factory,
+          err: errors.add,
+        ),
+        64,
+      );
+      expect(
+        await runLink(
+          arguments: _linkArgs(['tg-q9k', '--blocked-by', 'pow-60g', '--json']),
+          endpoints: endpoints,
+          bdFactory: factory,
+          err: errors.add,
+        ),
+        64,
+      );
+      expect(errors, hasLength(2));
+      expect(tg.calls, isEmpty);
+    },
+  );
+
+  test('link ls lists the external rows with their edge state, human and '
+      'JSON', () async {
+    tg.dependencies.addAll(const [
+      BeadDependency(
+        issueId: 'tg-q9k',
+        dependsOnId: 'external:power_station:pow-60g',
+      ),
+      BeadDependency(
+        issueId: 'tg-q9k',
+        dependsOnId: 'external:dashboard:dash-1',
+      ),
+      BeadDependency(issueId: 'tg-q9k', dependsOnId: 'tg-local'),
+    ]);
+    final human = <String>[];
+    expect(
+      await runLink(
+        arguments: _linkArgs(['ls']),
+        endpoints: endpoints,
+        bdFactory: factory,
+        out: human.add,
       ),
       0,
     );
+    expect(human, hasLength(2));
+    expect(human.first, contains('external:dashboard:dash-1'));
+    expect(human.first, contains('UNARMED'));
+    expect(human.last, contains('external:power_station:pow-60g'));
+    expect(human.last, contains('PENDING'));
 
-    expect(output, [
-      'houston-link1 (already wired; returned existing link, minted nothing)',
-    ]);
-    expect(state.beads, hasLength(beadCount));
-    expect(state.mutationCalls, hasLength(mutationCount));
-    expect(state.calls.where((call) => call.first == 'list'), [
-      [
-        'list',
-        '-t',
-        'link',
-        '--status',
-        'open',
-        '--metadata-field',
-        'grid.link.from=tg-q9k',
-        '--metadata-field',
-        'grid.link.to=pow-60g',
-        '--json',
-        '--limit',
-        '0',
-      ],
-    ]);
-  });
-
-  test('closed exact pair permits a fresh mint', () async {
-    state.beads.add(
-      _link('houston-link1', 'tg-q9k', 'pow-60g', status: BeadStatus.closed),
+    pow.beads[0] = pow.beads[0].copyWith(
+      status: BeadStatus.closed,
+      labels: const ['export:pow-60g', 'provides:pow-60g'],
     );
-    final beadCount = state.beads.length;
-    final mutationCount = state.mutationCalls.length;
-    final output = <String>[];
-
+    final json = <String>[];
     expect(
       await runLink(
-        arguments: _linkArgs([
-          'tg-q9k',
-          '--blocked-by',
-          'pow-60g',
-          '--grid-root',
-          temp.path,
-          '--prefix',
-          'tg',
-          '--prefix',
-          'pow',
-          '--actor',
-          'specify',
-          '--reason',
-          'rewired after retraction',
-        ]),
-        stateStorePrefix: 'houston',
+        arguments: _linkArgs(['ls', '--json']),
         endpoints: endpoints,
         bdFactory: factory,
-        out: output.add,
+        out: json.add,
       ),
       0,
     );
-
-    expect(output, ['houston-link2']);
-    expect(state.beads, hasLength(beadCount + 1));
-    expect(state.mutationCalls, hasLength(mutationCount + 2));
-    expect(
-      state.beads.where(
-        (bead) =>
-            bead.issueType == GridIssueTypes.link &&
-            bead.status == BeadStatus.open,
-      ),
-      hasLength(1),
+    final rows = (jsonDecode(json.single) as List<dynamic>)
+        .cast<Map<String, dynamic>>();
+    final shipped = rows.singleWhere(
+      (row) => row['to'] == 'external:power_station:pow-60g',
     );
+    expect(shipped['from'], 'tg-q9k');
+    expect(shipped['project'], 'power_station');
+    expect(shipped['edgeState'], contains('SHIPPED'));
   });
 
-  test('either endpoint mismatch mints normally', () async {
-    for (final existing in [
-      _link('houston-link1', 'tg-other', 'pow-60g'),
-      _link('houston-link1', 'tg-q9k', 'pow-other'),
-    ]) {
-      state.beads
-        ..clear()
-        ..add(existing);
-      state.calls.clear();
-      final output = <String>[];
-
-      expect(
-        await runLink(
-          arguments: _linkArgs([
-            'tg-q9k',
-            '--blocked-by',
-            'pow-60g',
-            '--grid-root',
-            temp.path,
-            '--prefix',
-            'tg',
-            '--prefix',
-            'pow',
-            '--actor',
-            'specify',
-            '--reason',
-            'waits on power',
-          ]),
-          stateStorePrefix: 'houston',
-          endpoints: endpoints,
-          bdFactory: factory,
-          out: output.add,
-        ),
-        0,
-      );
-
-      expect(output, ['houston-link2']);
-      expect(state.beads, hasLength(2));
-      expect(state.mutationCalls, hasLength(2));
-    }
-  });
-
-  test(
-    'historical open duplicates return the first id without minting',
-    () async {
-      state.beads.addAll([
-        _link('houston-link9', 'tg-q9k', 'pow-60g'),
-        _link('houston-link1', 'tg-q9k', 'pow-60g'),
-      ]);
-      final output = <String>[];
-
-      expect(
-        await runLink(
-          arguments: _linkArgs([
-            'tg-q9k',
-            '--blocked-by',
-            'pow-60g',
-            '--grid-root',
-            temp.path,
-            '--prefix',
-            'tg',
-            '--prefix',
-            'pow',
-            '--actor',
-            'specify',
-            '--reason',
-            'waits on power',
-          ]),
-          stateStorePrefix: 'houston',
-          endpoints: endpoints,
-          bdFactory: factory,
-          out: output.add,
-        ),
-        0,
-      );
-
-      expect(output, [
-        'houston-link1 (already wired; returned existing link, minted nothing)',
-      ]);
-      expect(state.mutationCalls, isEmpty);
-    },
-  );
-
-  test('repeatable prefix order does not affect an existing match', () async {
-    state.beads.add(_link('houston-link1', 'tg-q9k', 'pow-60g'));
-    final output = <String>[];
-
-    for (final prefixes in [
-      ['tg', 'pow'],
-      ['pow', 'tg'],
-    ]) {
-      expect(
-        await runLink(
-          arguments: _linkArgs([
-            'tg-q9k',
-            '--blocked-by',
-            'pow-60g',
-            '--grid-root',
-            temp.path,
-            for (final prefix in prefixes) ...['--prefix', prefix],
-            '--actor',
-            'specify',
-            '--reason',
-            'waits on power',
-          ]),
-          stateStorePrefix: 'houston',
-          endpoints: endpoints,
-          bdFactory: factory,
-          out: output.add,
-        ),
-        0,
-      );
-    }
-
-    expect(output, [
-      'houston-link1 (already wired; returned existing link, minted nothing)',
-      'houston-link1 (already wired; returned existing link, minted nothing)',
-    ]);
-    expect(state.mutationCalls, isEmpty);
-  });
-
-  test(
-    'open link with a closed target still returns the existing id',
-    () async {
-      expect(pow.beads.single.status, BeadStatus.closed);
-      state.beads.add(_link('houston-link1', 'tg-q9k', 'pow-60g'));
-      final output = <String>[];
-
-      expect(
-        await runLink(
-          arguments: _linkArgs([
-            'tg-q9k',
-            '--blocked-by',
-            'pow-60g',
-            '--grid-root',
-            temp.path,
-            '--prefix',
-            'tg',
-            '--prefix',
-            'pow',
-            '--actor',
-            'specify',
-            '--reason',
-            'waits on power',
-          ]),
-          stateStorePrefix: 'houston',
-          endpoints: endpoints,
-          bdFactory: factory,
-          out: output.add,
-        ),
-        0,
-      );
-
-      expect(output, [
-        'houston-link1 (already wired; returned existing link, minted nothing)',
-      ]);
-      expect(state.mutationCalls, isEmpty);
-      expect(pow.calls, isEmpty);
-    },
-  );
-
-  test(
-    'unlink by pair closes through the writer and removes listing',
-    () async {
-      state.beads.add(_link('houston-link1', 'tg-q9k', 'pow-60g'));
-      final code = await runUnlink(
-        arguments: _unlinkArgs([
-          'tg-q9k',
-          'pow-60g',
-          '--grid-root',
-          temp.path,
-          '--prefix',
-          'houston',
-          '--prefix',
-          'tg',
-          '--prefix',
-          'pow',
-          '--actor',
-          'operator',
-          '--reason',
-          'landed',
-        ]),
-        stateStorePrefix: 'houston',
+  test('link ls accepts nothing but --json', () async {
+    final errors = <String>[];
+    expect(
+      await runLink(
+        arguments: _linkArgs(['ls', '--blocked-by', 'pow-60g']),
         endpoints: endpoints,
         bdFactory: factory,
-      );
-      expect(code, 0);
-      expect(state.beads.single.status, BeadStatus.closed);
-      expect(state.calls.where((call) => call.first == 'list'), hasLength(1));
-      final close = state.calls.where((call) => call.first == 'close').single;
-      expect(close, containsAllInOrder(['--actor', 'grid-controller']));
-      expect(
-        close,
-        containsAllInOrder(['--reason', 'landed (unlink actor: operator)']),
-      );
-    },
-  );
+        err: errors.add,
+      ),
+      64,
+    );
+    expect(errors.single, contains('only --json'));
+  });
+
+  test('hyphenated roster prefixes resolve their own endpoints', () async {
+    final inferRoot = Directory('${temp.path}/swift_infer')
+      ..createSync(recursive: true);
+    final trainRoot = Directory('${temp.path}/swift_train')
+      ..createSync(recursive: true);
+    Directory('${inferRoot.path}/.beads').createSync();
+    Directory('${trainRoot.path}/.beads').createSync();
+    final infer = _FakeStore(
+      [_bead('swift-infer-097')],
+      customTypes: const [],
+      externalProjects: 'swift_train=../swift_train',
+    );
+    final train = _FakeStore([_bead('swift-train-042')], customTypes: const []);
+    stores[inferRoot.path] = infer;
+    stores[trainRoot.path] = train;
+    final written = <String>[];
+    expect(
+      await runLink(
+        arguments: _linkArgs([
+          'swift-infer-097',
+          '--blocked-by',
+          'swift-train-042',
+        ]),
+        endpoints: [
+          LinkEndpointStore(
+            name: 'swift_infer',
+            prefix: 'swift-infer',
+            store: SubstationWorkStore(root: inferRoot.path),
+          ),
+          LinkEndpointStore(
+            name: 'swift_train',
+            prefix: 'swift-train',
+            store: SubstationWorkStore(root: trainRoot.path),
+          ),
+        ],
+        bdFactory: factory,
+        out: written.add,
+      ),
+      0,
+    );
+    expect(
+      written.single,
+      'swift-infer-097 --blocked-by external:swift_train:swift-train-042',
+    );
+  });
 
   test(
     'unlink by id refuses wrong type and closes an owned open link',
@@ -623,284 +381,75 @@ void main() {
         ),
         0,
       );
+      expect(
+        state.beads.firstWhere((bead) => bead.id == 'houston-task1').isClosed,
+        isFalse,
+      );
+      expect(
+        state.beads.firstWhere((bead) => bead.id == 'houston-link1').isClosed,
+        isTrue,
+      );
     },
   );
 
-  test('link and unlink accept configured hyphenated prefixes', () async {
-    final inferRoot = Directory('${temp.path}/swift_infer')
-      ..createSync(recursive: true);
-    final trainRoot = Directory('${temp.path}/swift_train')
-      ..createSync(recursive: true);
-    Directory('${inferRoot.path}/.beads').createSync();
-    Directory('${trainRoot.path}/.beads').createSync();
-    final infer = _FakeStore([_bead('swift-infer-097')], customTypes: const []);
-    final train = _FakeStore([_bead('swift-train-042')], customTypes: const []);
-    final hyphenatedEndpoints = [
-      LinkEndpointStore(
-        prefix: 'swift-infer',
-        store: SubstationWorkStore(root: inferRoot.path),
-      ),
-      LinkEndpointStore(
-        prefix: 'swift-train',
-        store: SubstationWorkStore(root: trainRoot.path),
-      ),
-    ];
-    stores[inferRoot.path] = infer;
-    stores[trainRoot.path] = train;
-    state.createdIdOverride = 'tranquility-state-link1';
-
-    expect(
-      await runLink(
-        arguments: _linkArgs([
-          'swift-infer-097',
-          '--blocked-by',
-          'swift-train-042',
-          '--grid-root',
-          temp.path,
-          '--prefix',
-          'swift-infer',
-          '--prefix',
-          'swift-train',
-          '--actor',
-          'specify',
-          '--reason',
-          'waits',
-        ]),
-        stateStorePrefix: 'tranquility-state',
-        endpoints: hyphenatedEndpoints,
-        bdFactory: factory,
-      ),
-      0,
-    );
+  test('unlink by pair closes the one matching open link', () async {
+    state.beads.add(_link('houston-link1', 'tg-q9k', 'pow-60g'));
     expect(
       await runUnlink(
         arguments: _unlinkArgs([
-          'tranquility-state-link1',
-          '--grid-root',
-          temp.path,
-          '--prefix',
-          'tranquility-state',
-          '--actor',
-          'operator',
-          '--reason',
-          'done',
-        ]),
-        stateStorePrefix: 'tranquility-state',
-        endpoints: hyphenatedEndpoints,
-        bdFactory: factory,
-      ),
-      0,
-    );
-  });
-
-  test(
-    'unrostered and unarmed prefixes refuse before writes or reads',
-    () async {
-      for (final target in ['other-1', 'pow-60g']) {
-        final before = state.calls.length;
-        final armed = target.startsWith('other') ? ['tg', 'other'] : ['tg'];
-        expect(
-          await runLink(
-            arguments: _linkArgs([
-              'tg-q9k',
-              '--blocked-by',
-              target,
-              '--grid-root',
-              temp.path,
-              for (final prefix in armed) ...['--prefix', prefix],
-              '--actor',
-              'specify',
-              '--reason',
-              'waits',
-            ]),
-            stateStorePrefix: 'houston',
-            endpoints: endpoints,
-            bdFactory: factory,
-          ),
-          64,
-        );
-        expect(state.calls, hasLength(before));
-      }
-    },
-  );
-
-  test('missing link custom type refuses before mutations', () async {
-    state.customTypes = const [];
-    final before = state.mutationCalls.length;
-    expect(
-      await runLink(
-        arguments: _linkArgs([
           'tg-q9k',
-          '--blocked-by',
           'pow-60g',
           '--grid-root',
           temp.path,
+          '--prefix',
+          'houston',
           '--prefix',
           'tg',
           '--prefix',
           'pow',
           '--actor',
-          'specify',
+          'operator',
           '--reason',
-          'waits',
+          'superseded by the external row',
         ]),
         stateStorePrefix: 'houston',
         endpoints: endpoints,
         bdFactory: factory,
       ),
-      1,
-    );
-    expect(state.mutationCalls, hasLength(before));
-  });
-
-  test('a store with no custom types lists zero links, not an error', () async {
-    // The 0.5.0-rc.1 regression pair, measured against space_station's state
-    // store on 2026-08-05: (1) `bd types --json` omits an empty group, so a
-    // store with no custom types has NO `custom_types` key and _probeReader
-    // threw BdParseException on it; (2) when discovery did succeed, the
-    // scoped `list -t link` read that replaced the whole-store export is
-    // REFUSED by bd for an unregistered type ("invalid issue type"), where
-    // the export had simply found nothing. No link type ⇒ no link beads ⇒ an
-    // empty listing, exit 0.
-    state.customTypes = const [];
-    final lines = <String>[];
-    final errors = <String>[];
-    expect(
-      await runLink(
-        arguments: _linkArgs(['ls', '--grid-root', temp.path]),
-        stateStorePrefix: 'houston',
-        endpoints: endpoints,
-        bdFactory: factory,
-        out: lines.add,
-        err: errors.add,
-      ),
       0,
     );
-    expect(lines, isEmpty);
-    expect(errors, isEmpty);
-    // The refusable scoped read must never be issued against the store.
-    expect(
-      state.calls.where((call) => call.first == 'list' && call[2] == 'link'),
-      isEmpty,
-    );
+    expect(state.beads.single.isClosed, isTrue);
   });
 
-  test('link discovery accepts string and name-map type entries', () async {
-    state.customTypes = <Object>[
-      'session',
-      {'name': 'link'},
-    ];
-    final lines = <String>[];
-    expect(
-      await runLink(
-        arguments: _linkArgs(['ls', '--grid-root', temp.path]),
-        stateStorePrefix: 'houston',
-        endpoints: endpoints,
-        bdFactory: factory,
-        out: lines.add,
-      ),
-      0,
-    );
-    expect(lines, isEmpty);
-    expect(
-      state.calls.where((call) => call.first == 'list' && call[2] == 'link'),
-      hasLength(1),
-    );
-  });
-
-  test(
-    'unlink by pair on a store without the link type finds nothing',
-    () async {
-      state.customTypes = const [];
-      final errors = <String>[];
-      expect(
-        await runUnlink(
-          arguments: _unlinkArgs([
-            'tg-q9k',
-            'pow-60g',
-            '--grid-root',
-            temp.path,
-            '--prefix',
-            'houston',
-            '--prefix',
-            'tg',
-            '--prefix',
-            'pow',
-            '--actor',
-            'operator',
-            '--reason',
-            'landed',
-          ]),
-          stateStorePrefix: 'houston',
-          endpoints: endpoints,
-          bdFactory: factory,
-          err: errors.add,
-        ),
-        1,
-      );
-      // A clean "found 0" refusal — not a BdParseException, not a bd type
-      // refusal from a scoped read the store cannot answer.
-      expect(errors.single, contains('found 0'));
-      expect(
-        state.calls.where((call) => call.first == 'list' && call[2] == 'link'),
-        isEmpty,
-      );
-      expect(state.mutationCalls, isEmpty);
-    },
-  );
-
-  test('malformed type discovery fails without mutations or export', () async {
-    state.malformedTypes = true;
-    final errors = <String>[];
-    final before = state.mutationCalls.length;
-    expect(
-      await runLink(
-        arguments: _linkArgs(['ls', '--grid-root', temp.path]),
-        stateStorePrefix: 'houston',
-        endpoints: endpoints,
-        bdFactory: factory,
-        err: errors.add,
-      ),
-      1,
-    );
-    expect(errors.single, contains('type discovery'));
-    expect(state.mutationCalls, hasLength(before));
-    expect(state.calls.where((call) => call.first == 'export'), isEmpty);
-  });
-
-  test('command source centralizes link reads and mutations', () {
+  test('the link verb centralizes its bd surface — no bead writes at all', () {
     final source = File('lib/src/link_command.dart').readAsStringSync();
-    expect(source, isNot(contains('.create(')));
-    expect(source, isNot(contains('.update(')));
-    expect(
-      RegExp(r'\.close\(').allMatches(source).length,
-      RegExp(r'writer\.close\(').allMatches(source).length,
+    final link = source.substring(
+      source.indexOf('Future<int> runLink('),
+      source.indexOf('Future<int> runUnlink('),
     );
-    expect(source, contains('writer.createLink('));
-    expect(RegExp(r'\.reader\.openBeads\(').allMatches(source), hasLength(1));
-    expect(source, isNot(contains('GraphSnapshot')));
-    expect(source, isNot(contains('projectCrossLinks')));
+    expect(link, isNot(contains('.create(')));
+    expect(link, isNot(contains('createLink(')));
+    expect(link, isNot(contains('StationBeadWriter')));
+    expect(link, isNot(contains('GridIssueTypes.link')));
+    expect(link, contains('.depAdd('));
+    expect(link, contains('.addLabels('));
   });
 }
 
-ArgResults _linkArgs(List<String> args) => _parser(blockedBy: true).parse(args);
+ArgResults _linkArgs(List<String> args) =>
+    (ArgParser()
+          ..addOption('blocked-by')
+          ..addFlag('json', negatable: false))
+        .parse(args);
 
-ArgResults _unlinkArgs(List<String> args) => _parser().parse(args);
-
-ArgParser _parser({bool blockedBy = false}) {
-  final parser = ArgParser()
-    ..addOption('grid-root')
-    ..addMultiOption('prefix')
-    ..addOption('reason')
-    ..addOption('reason-file')
-    ..addOption('actor');
-  if (blockedBy) {
-    parser
-      ..addOption('blocked-by')
-      ..addFlag('json', negatable: false);
-  }
-  return parser;
-}
+ArgResults _unlinkArgs(List<String> args) =>
+    (ArgParser()
+          ..addOption('grid-root')
+          ..addMultiOption('prefix')
+          ..addOption('reason')
+          ..addOption('reason-file')
+          ..addOption('actor'))
+        .parse(args);
 
 Bead _bead(
   String id, {
@@ -936,18 +485,26 @@ class _FakeStore implements BdRunner {
   _FakeStore(
     this.beads, {
     required this.customTypes,
-    this.createdId = 'unused',
+    this.externalProjects = '',
   });
 
   final List<Bead> beads;
+  final List<BeadDependency> dependencies = [];
   List<Object> customTypes;
-  final String createdId;
-  String? createdIdOverride;
+  String externalProjects;
   final List<List<String>> calls = [];
-  bool malformedTypes = false;
 
   List<List<String>> get mutationCalls => calls
-      .where((call) => const {'create', 'update', 'close'}.contains(call.first))
+      .where(
+        (call) => const {
+          'create',
+          'update',
+          'close',
+          'label',
+          'dep',
+          'ship',
+        }.contains(call.first),
+      )
       .toList();
 
   @override
@@ -959,22 +516,15 @@ class _FakeStore implements BdRunner {
     calls.add(List<String>.unmodifiable(args));
     switch (args.first) {
       case 'types':
-        if (malformedTypes) {
-          return _envelope({'core_types': 'task', 'custom_types': customTypes});
-        }
-        // Real `bd types --json` OMITS an empty group — a store with no
-        // custom types carries no `custom_types` key at all. The fake mirrors
-        // that shape so every test runs against what bd actually emits.
         return _envelope({
           'core_types': const ['task'],
           if (customTypes.isNotEmpty) 'custom_types': customTypes,
         });
-      case 'export':
-        return BdResult(
-          exitCode: 1,
-          stdout: '',
-          stderr: 'Error: export is not supported in proxied-server mode',
-        );
+      case 'config':
+        return _envelope({
+          'key': 'external_projects',
+          'value': externalProjects,
+        });
       case 'list':
         final type = args[2];
         final status = args[4];
@@ -999,16 +549,27 @@ class _FakeStore implements BdRunner {
               .map((bead) => bead.toJson())
               .toList(),
         );
-      case 'create':
-        final effectiveCreatedId = createdIdOverride ?? createdId;
-        beads.add(
-          _bead(
-            effectiveCreatedId,
-            type: GridIssueTypes.link,
-            metadata: const {'rig': 'houston'},
-          ),
+      case 'dep':
+        if (args[1] == 'list') {
+          final ids = args.sublist(2, args.indexOf('--json')).toSet();
+          return _listEnvelope([
+            for (final dep in dependencies)
+              if (ids.contains(dep.issueId)) dep.toJson(),
+          ]);
+        }
+        dependencies.add(
+          BeadDependency(issueId: args[2], dependsOnId: args[3]),
         );
-        return _envelope({'id': effectiveCreatedId});
+        return _envelope({'id': args[2]});
+      case 'label':
+        final index = beads.indexWhere((bead) => bead.id == args[2]);
+        beads[index] = beads[index].copyWith(
+          labels: [
+            ...beads[index].labels,
+            ...args.sublist(3, args.indexOf('--json')),
+          ],
+        );
+        return _envelope({'id': args[2]});
       case 'update':
         final index = beads.indexWhere((bead) => bead.id == args[1]);
         final metadata = <String, dynamic>{};

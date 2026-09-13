@@ -1,8 +1,8 @@
 import 'dart:async';
 
 import 'package:beads_dart/beads_dart.dart';
-import 'package:grid_runtime/grid_runtime.dart';
 
+import '../domain/external_dep.dart';
 import 'snapshot_source.dart';
 
 /// One federation member's freshness (tg-nsj, `docs/SCRATCH-multi-root-federation.md`
@@ -50,10 +50,10 @@ class FederatedSnapshotSource implements SnapshotSource {
   ///
   /// [memberPrefixes] gives each member's bead-id PREFIX by name
   /// (`the_grid` → `tg`); a member absent from the map keeps its name as its
-  /// prefix (the `tg` precedent, mirroring `SubstationWorkSpec.prefix`).
-  /// BOTH axes are load-bearing (tg-mspw): ADR-0006 Decision 1 makes the
-  /// issue-id PREFIX ownership's primary axis, and classifying with names
-  /// alone resolved every production id to nothing.
+  /// prefix (the `tg` precedent, mirroring `SubstationWorkSpec.prefix`). An
+  /// `external:` row resolves its project by member NAME (tg-xh5d); the prefix
+  /// rides the armed-roster line so a refusal tells an operator which token
+  /// each store answers to.
   ///
   /// [scheduleTimer] is the injectable one-shot deadline seam for age-based
   /// ready staleness. It defaults to [Timer.new].
@@ -77,6 +77,9 @@ class FederatedSnapshotSource implements SnapshotSource {
     _scheduleStalenessDeadline();
   }
 
+  /// The LOUD sink for an `external:` row naming a project this station does
+  /// not arm — the Q4 HARD refusal. Every OTHER external row is an ordinary
+  /// blocker and says nothing.
   final void Function(String message)? _onUnresolvedExternalDep;
 
   /// The age past which a member's snapshot stops minting NEW ready ids
@@ -106,18 +109,9 @@ class FederatedSnapshotSource implements SnapshotSource {
   /// Each member's bead-id PREFIX by member name, defaulting to the name.
   final Map<String, String> _prefixOf = {};
 
-  /// Identity token → the member that owns it. A substation has TWO identity
-  /// axes — its NAME (`the_grid`) and its bead-id PREFIX (`tg`) — the pair
-  /// `assembleStationWork` already indexes in its own boot-time
-  /// `identityOwner` map (`work_assembly.dart:387`), whose LOUD refusal
-  /// guarantees the tokens are disjoint across members before any of them
-  /// reaches this map. This is that same index, rebuilt HERE because
-  /// membership is mutable (D-Z1/D-Z2: [addMember] attaches after boot).
-  final Map<String, String> _identityOwner = {};
-
-  /// Foreign dependency rows already refused, keyed by
-  /// [BeadDependency.edgeKey] — the rising-edge dedupe that keeps one
-  /// authored row to ONE log line however often the union recomputes.
+  /// External rows already refused, keyed by [ExternalDepRefusal.edgeKey] —
+  /// the rising-edge dedupe that keeps one authored row to ONE log line
+  /// however often the union recomputes.
   final Set<String> _refusedDepRows = {};
 
   final Map<String, StreamSubscription<GraphSnapshot>> _subs = {};
@@ -261,15 +255,12 @@ class FederatedSnapshotSource implements SnapshotSource {
     _latestByMember.remove(substation);
     _staleByMember.remove(substation);
     _prefixOf.remove(substation);
-    _identityOwner.removeWhere((_, owner) => owner == substation);
     _recompute();
   }
 
   void _attach(String substation, SnapshotSource source, String prefix) {
     _sources[substation] = source;
     _prefixOf[substation] = prefix;
-    _identityOwner[substation] = substation;
-    _identityOwner[prefix] = substation;
     _latestByMember[substation] = source.current;
     _staleByMember[substation] = false;
     _subs[substation] = source.snapshots.listen(
@@ -301,9 +292,10 @@ class FederatedSnapshotSource implements SnapshotSource {
   /// Merges every member's latest known snapshot into one [GraphSnapshot]:
   /// beads/dependencies union directly (ids are prefix-disjoint); readyIds is
   /// the union of FRESH members' ready ids (D-Z4 — a stale member mints no
-  /// NEW ready ids, though its already-known beads stay visible above), with
-  /// no dependency-row block at all (tg-mspw). Returns `null` while no member
-  /// has ever published (no baseline anywhere yet).
+  /// NEW ready ids, though its already-known beads stay visible above),
+  /// narrowed by every unsatisfied `external:` dependency row (tg-xh5d).
+  /// Returns `null` while no member has ever published (no baseline anywhere
+  /// yet).
   GraphSnapshot? _combine() {
     if (_latestByMember.values.every((s) => s == null)) return null;
 
@@ -325,67 +317,62 @@ class FederatedSnapshotSource implements SnapshotSource {
       }
     }
 
-    _refuseForeignDepRows(dependencies);
-
     return GraphSnapshot(
       beadsById: beadsById,
       dependencies: dependencies,
-      readyIds: readyCandidates,
+      readyIds: _admitExternalDeps(dependencies, readyCandidates),
       capturedAt: capturedAt!,
     );
   }
 
-  /// tg-mspw — the cross-store DEPENDENCY-ROW path is BLOCKED OFF, not
-  /// repaired. A blocking `bd dep` row whose two endpoints do not resolve to
-  /// the SAME armed member is REFUSED here: reported LOUDLY through the
-  /// unresolved sink, and authoring no blocking edge whatsoever. A `type=link`
-  /// bead in the station's own state store stays the ONE cross-store blocking
-  /// edge (tg-hof7 Q1, enforced at `StationJoinBridge._applyCrossLinks`);
-  /// honouring dep rows directly is the deliberate follow-up, tg-xh5d.
+  /// Honours bd's NATIVE cross-project dependency rows (tg-xh5d,
+  /// `the_grid#the-grid-is-a-beads-controller`): a row on
+  /// `external:<project>:<capability>` holds its consumer out of ready until
+  /// the named member's store holds a CLOSED bead labelled
+  /// `provides:<capability>` — the fact `bd ship` writes.
   ///
-  /// Why refuse rather than block: A44's raw-foreign-id wiring convention was
-  /// REJECTED (`bd doctor --fix` severs such rows as orphaned dependencies),
-  /// so blocking on one would resurrect a rejected mechanism as a second edge
-  /// source. Silence was the actual defect (tg-y4fd calls this guard "inert");
-  /// loudness is the fix.
+  /// `<project>` resolves by ROSTER NAME (bd resolves the same token through
+  /// its own `external_projects` config; the two maps are the same roster).
+  /// A project this station does not arm is the LOUD Q4 hard-refusal: the
+  /// consumer is held out fail-closed AND reported, because an edge naming a
+  /// store the station is not arming must never pass as satisfied.
   ///
-  /// A SAME-store row is left untouched — the origin store's own `bd ready`
-  /// already governs it (A44), and re-judging it here would double-count bd's
-  /// native semantics.
+  /// An ordinary same-store row is left untouched — the origin store's own
+  /// `bd ready` already governs it — and an ARMED-but-unshipped capability
+  /// blocks silently, exactly as an open local blocker does.
   ///
-  /// Rising-edge: one line per row (by [BeadDependency.edgeKey]) for as long
-  /// as the row is observed; a row that disappears and returns is reported
-  /// again.
-  void _refuseForeignDepRows(List<BeadDependency> dependencies) {
+  /// Rising-edge: one line per refused row (by [ExternalDepRefusal.edgeKey])
+  /// for as long as the row is observed; a row that disappears and returns is
+  /// reported again.
+  Set<String> _admitExternalDeps(
+    List<BeadDependency> dependencies,
+    Set<String> candidates,
+  ) {
+    final verdict = applyExternalDeps(
+      candidates: candidates,
+      dependencies: dependencies,
+      isArmed: _sources.containsKey,
+      isShipped: _capabilityShipped,
+    );
     final observed = <String>{};
-    for (final dep in dependencies) {
-      if (!dep.type.affectsBlocking) continue;
-      final blocked = _memberOwning(dep.issueId);
-      final blocker = _memberOwning(dep.dependsOnId);
-      if (blocked != null && blocked == blocker) continue;
-      if (!observed.add(dep.edgeKey)) continue;
-      if (!_refusedDepRows.add(dep.edgeKey)) continue;
-      _onUnresolvedExternalDep?.call(
-        'grid: REFUSED a cross-store dependency row — "${dep.issueId}" '
-        'depends on "${dep.dependsOnId}", which does not resolve to the same '
-        'armed substation (armed: $_armedRoster). A bd dependency row is NOT '
-        'a cross-store blocking edge, so this row blocks NOTHING. Author the '
-        'edge with the link verb — `grid link ${dep.issueId} --blocked-by '
-        '${dep.dependsOnId} --reason <why> --actor <you>` — or arm the '
-        'missing substation. Honouring cross-store dep rows directly is '
-        'tg-xh5d.',
-      );
+    for (final refusal in verdict.refusals) {
+      observed.add(refusal.edgeKey);
+      if (!_refusedDepRows.add(refusal.edgeKey)) continue;
+      _onUnresolvedExternalDep?.call(refusal.message(_armedRoster));
     }
     _refusedDepRows.retainAll(observed);
+    return verdict.admitted;
   }
 
-  /// The member owning [id] across BOTH identity axes (name and bead-id
-  /// prefix), or `null` when no armed member does. Reuses
-  /// [BeadOwnershipPredicate.ownedPrefixOf] (ADR-0006 Decision 1 / A32) —
-  /// complete-boundary, longest-match — rather than adding a second matcher.
-  String? _memberOwning(String id) {
-    final token = BeadOwnershipPredicate.ownedPrefixOf(id, _identityOwner.keys);
-    return token == null ? null : _identityOwner[token];
+  /// Whether [project]'s OWN member snapshot proves [capability] shipped.
+  ///
+  /// Scoped to the named member rather than the union: a capability is shipped
+  /// BY a project, so a same-named label in some other store must never
+  /// satisfy it.
+  bool _capabilityShipped(String project, String capability) {
+    final snapshot = _latestByMember[project];
+    if (snapshot == null) return false;
+    return capabilityShipped(capability, snapshot.beadsById.values);
   }
 
   /// The armed roster as `name(prefix)` pairs — the operator-facing answer to

@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by capability-edges-are-bd-native-and-link-is-sugar
 date: 2026-09-02
 decision-makers: ["nico", "agent"]
 consulted: []
@@ -15,7 +15,7 @@ register:
   updates:
     - "a44-federated-work-sources-staleness-scope-member-removal-vs"
     - "a55-where-the-state-store-s-link-set-enters-the-pipeline-and"
-  obsoleted-by: null
+  obsoleted-by: capability-edges-are-bd-native-and-link-is-sugar
   updated-by: []
   bead: tg-mspw
   legacy-id: null

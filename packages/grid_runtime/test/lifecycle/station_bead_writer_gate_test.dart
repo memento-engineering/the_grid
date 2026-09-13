@@ -806,9 +806,14 @@ final class _SequencedGateReader implements BeadProbeReader {
   final List<Bead> _firstOpenBeads;
   var _openBeadsCalls = 0;
 
+  /// Hands out [beadReads] in order, then `null`.
+  ///
+  /// The staged sequence covers the reads a test is ASSERTING on; a read past
+  /// the end (the writer's own `export:` probe after a close — tg-xh5d) is an
+  /// absent bead, which ships nothing.
   @override
   Future<Bead?> beadById(String id, {required Set<IssueType> types}) async =>
-      _beadReads.removeAt(0);
+      _beadReads.isEmpty ? null : _beadReads.removeAt(0);
 
   @override
   Future<List<Bead>> openBeads({

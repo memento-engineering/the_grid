@@ -34,91 +34,42 @@ void main() {
     });
   });
 
-  test(
-    'link and unlink prefix help states the complete repeatable contract',
-    () {
-      final endpoints = _endpointRoster();
-      final link = LinkCommand(stateStorePrefix: 'state', endpoints: endpoints);
-      final unlink = UnlinkCommand(
+  test('the link verb registers only the flags it still honours', () {
+    // tg-xh5d: `link` is sugar over `bd dep add`, so the link-bead flags
+    // (--prefix, --grid-root, --reason, --actor) are GONE — the roster
+    // resolves prefixes, bd owns the audit trail, and nothing is minted.
+    final link = LinkCommand(endpoints: _endpointRoster());
+    expect(link.argParser.options.keys.toSet()..remove('help'), {
+      'blocked-by',
+      'json',
+    });
+    expect(link.description, contains('bd dep add'));
+    expect(
+      UnlinkCommand(
         stateStorePrefix: 'state',
-        endpoints: endpoints,
-      );
+        endpoints: _endpointRoster(),
+      ).argParser.options['prefix']!.help,
+      'Repeatable; must include the state prefix and, for <from> <to>, '
+      'every endpoint prefix.',
+    );
+  });
 
-      expect(
-        link.argParser.options['prefix']!.help,
-        'Repeatable; must include every endpoint prefix named by <from-bead> '
-        'and --blocked-by.',
-      );
-      expect(
-        unlink.argParser.options['prefix']!.help,
-        'Repeatable; must include the state prefix and, for <from> <to>, '
-        'every endpoint prefix.',
-      );
+  test(
+    'an endpoint outside the roster refuses before any store access',
+    () async {
+      final refusal = await _runLinkRefusal(from: 'unknown-1', to: 'pow-60g');
+
+      expect(refusal.code, 64);
+      expect(refusal.storeAccesses, 0);
+      expect(refusal.errors.single, contains('unknown-1'));
+      expect(refusal.errors.single, contains('tg, pow'));
     },
   );
 
-  test('missing configured endpoint prefix names the --prefix remedy before '
-      'store access', () async {
-    final refusal = await _runLinkRefusal(
-      from: 'tg-q9k',
-      to: 'pow-60g',
-      prefixes: const ['tg'],
-    );
+  test('the refusal names the endpoint, never an arming flag', () async {
+    final refusal = await _runLinkRefusal(from: 'tg-q9k', to: 'other-1');
 
-    expect(refusal.code, 64);
-    expect(refusal.storeAccesses, 0);
-    expect(refusal.errors, [
-      'grid link: endpoint "pow-60g" uses configured prefix "pow"; '
-          'pass another --prefix pow.',
-    ]);
-  });
-
-  test('endpoint prefix refusals distinguish all three causes', () async {
-    final noPrefix = await _runLinkRefusal(
-      from: 'unknown-1',
-      to: 'pow-60g',
-      prefixes: const ['tg'],
-    );
-    final unrostered = await _runLinkRefusal(
-      from: 'other-1',
-      to: 'pow-60g',
-      prefixes: const ['other'],
-    );
-    final omitted = await _runLinkRefusal(
-      from: 'tg-q9k',
-      to: 'pow-60g',
-      prefixes: const ['tg'],
-    );
-
-    expect(noPrefix.errors, [
-      'grid link: endpoint "unknown-1" has no prefix matching the configured '
-          'endpoint roster or any supplied --prefix.',
-    ]);
-    expect(unrostered.errors, [
-      'grid link: endpoint "other-1" uses supplied --prefix "other", but '
-          '"other" is not in the configured endpoint roster.',
-    ]);
-    expect(omitted.errors, [
-      'grid link: endpoint "pow-60g" uses configured prefix "pow"; '
-          'pass another --prefix pow.',
-    ]);
-    expect(
-      [noPrefix, unrostered, omitted].map((refusal) => refusal.code),
-      everyElement(64),
-    );
-    expect(
-      [noPrefix, unrostered, omitted].map((refusal) => refusal.storeAccesses),
-      everyElement(0),
-    );
-  });
-
-  test('missing --prefix refusal never says unarmed', () async {
-    final refusal = await _runLinkRefusal(
-      from: 'tg-q9k',
-      to: 'pow-60g',
-      prefixes: const ['tg'],
-    );
-
+    expect(refusal.errors.single, isNot(contains('--prefix')));
     expect(refusal.errors.single, isNot(contains('unarmed')));
   });
 }
@@ -145,10 +96,12 @@ String _normalizedShellExample(String section) {
 
 List<LinkEndpointStore> _endpointRoster() => [
   LinkEndpointStore(
+    name: 'the_grid',
     prefix: 'tg',
     store: SubstationWorkStore(root: '/work/the_grid'),
   ),
   LinkEndpointStore(
+    name: 'power_station',
     prefix: 'pow',
     store: SubstationWorkStore(root: '/work/power_station'),
   ),
@@ -157,35 +110,19 @@ List<LinkEndpointStore> _endpointRoster() => [
 Future<({int code, List<String> errors, int storeAccesses})> _runLinkRefusal({
   required String from,
   required String to,
-  required List<String> prefixes,
 }) async {
   final errors = <String>[];
   var storeAccesses = 0;
-  final command = LinkCommand(
-    stateStorePrefix: 'state',
-    endpoints: _endpointRoster(),
-  );
-  final arguments = command.argParser.parse([
-    from,
-    '--blocked-by',
-    to,
-    '--grid-root',
-    '/grid-home',
-    for (final prefix in prefixes) ...['--prefix', prefix],
-    '--reason',
-    'dependency',
-    '--actor',
-    'operator',
-  ]);
+  final command = LinkCommand(endpoints: _endpointRoster());
+  final arguments = command.argParser.parse([from, '--blocked-by', to]);
   final code = await runLink(
     arguments: arguments,
-    stateStorePrefix: 'state',
     endpoints: command.endpoints,
     out: (_) {},
     err: errors.add,
     bdFactory: (_) {
       storeAccesses++;
-      throw StateError('endpoint refusal opened the state store');
+      throw StateError('an endpoint refusal opened a store');
     },
   );
   return (code: code, errors: errors, storeAccesses: storeAccesses);

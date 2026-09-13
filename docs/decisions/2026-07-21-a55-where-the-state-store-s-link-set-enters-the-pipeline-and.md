@@ -12,7 +12,10 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - capability-edges-are-bd-native-and-link-is-sugar
+    - cross-store-dep-rows-are-refused-not-honoured
+    - target-close-makes-open-cross-link-inert
   bead: null
   legacy-id: "A55"
 ---

@@ -602,6 +602,51 @@ class BdCliService {
     await _runEnvelope(depAddArgs(issueId, dependsOnId, type));
   }
 
+  /// `bd label add <id> <label> … --json` — adds every label in [labels] to
+  /// [id], leaving the ones already present untouched (bd's add is a set
+  /// union, so the call is idempotent). An empty [labels] is a no-op.
+  Future<void> addLabels(String id, Iterable<String> labels) async {
+    final wanted = labels.toList(growable: false);
+    if (wanted.isEmpty) return;
+    await _runEnvelope(addLabelsArgs(id, wanted));
+  }
+
+  /// `bd ship <capability> --json` — bd's capability publication: it finds the
+  /// issue carrying `export:<capability>`, validates that it is CLOSED, and
+  /// adds `provides:<capability>`, which is the fact every external consumer's
+  /// dependency row resolves against.
+  ///
+  /// Idempotent by construction: re-shipping an already-shipped capability
+  /// re-adds a label the issue already carries.
+  Future<void> ship(String capability) async {
+    await _runEnvelope(shipArgs(capability));
+  }
+
+  /// `bd config get external_projects --json` — the project→store map bd
+  /// resolves an `external:<project>:<capability>` row through.
+  ///
+  /// Returns the configured project names. bd stores the value as a
+  /// comma-separated `name=path` list and reports an UNSET key as an empty
+  /// string, which decodes to the empty set (never an error): a store that has
+  /// never been configured is a diagnosable state, not a read failure.
+  Future<Set<String>> externalProjects() async {
+    final env = await _runEnvelope(externalProjectsArgs());
+    final raw = env.dataMap['value'];
+    if (raw is! String || raw.trim().isEmpty) return const <String>{};
+    return {
+      for (final entry in raw.split(','))
+        if (_externalProjectName(entry) case final String name) name,
+    };
+  }
+
+  static String? _externalProjectName(String entry) {
+    final trimmed = entry.trim();
+    if (trimmed.isEmpty) return null;
+    final separator = trimmed.indexOf('=');
+    final name = separator < 0 ? trimmed : trimmed.substring(0, separator);
+    return name.isEmpty ? null : name;
+  }
+
   /// `bd batch` — runs a line-oriented mutation [script] as one dolt
   /// transaction / one `DOLT_COMMIT` (ADR-0001 D4: grouped mutations go through
   /// batch, never per-issue loops).
@@ -875,6 +920,33 @@ class BdCliService {
     type.wire,
     '--json',
     ..._actorArgs,
+  ];
+
+  List<String> addLabelsArgs(String id, List<String> labels) => [
+    'label',
+    'add',
+    id,
+    ...labels,
+    '--json',
+    ..._actorArgs,
+  ];
+
+  /// `bd ship <capability> --json`. No `--force`: the grid ships a capability
+  /// only when its exporting bead is genuinely closed, and lets bd refuse
+  /// otherwise.
+  List<String> shipArgs(String capability) => [
+    'ship',
+    capability,
+    '--json',
+    ..._actorArgs,
+  ];
+
+  /// `bd config get external_projects --json` — a READ, so no `--actor`.
+  List<String> externalProjectsArgs() => const [
+    'config',
+    'get',
+    'external_projects',
+    '--json',
   ];
 
   List<String> batchArgs() => ['batch', '--json', ..._actorArgs];

@@ -16,7 +16,8 @@ register:
   updates:
     - "target-close-makes-open-cross-link-inert"
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - capability-edges-are-bd-native-and-link-is-sugar
   bead: tg-6vfb
   legacy-id: null
 ---

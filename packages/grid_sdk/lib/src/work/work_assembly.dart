@@ -1335,9 +1335,10 @@ Future<StationWorkRuntime> _acquireStationWork({
     'state=${stateBundle.readPath.name}',
   ].join(', ');
 
-  // ONE sink for BOTH cross-store reports — the union's REFUSED dependency
-  // rows (tg-mspw: a dep row blocks nothing) and the join's state-owned link
-  // beads, which are the only cross-store blocking edge.
+  // ONE sink for BOTH cross-store reports — the union's UNARMED-project
+  // refusals (tg-xh5d: an `external:` row naming a substation this station
+  // does not arm blocks fail-closed and says so) and the join's state-owned
+  // link beads, authoritative until the migration retires them.
   final unresolvedSink =
       onUnresolvedExternalDep ?? (String m) => stdout.writeln(m);
 
@@ -1347,10 +1348,9 @@ Future<StationWorkRuntime> _acquireStationWork({
       for (final e in bundles.entries)
         e.key: _RuntimeSnapshotSource(e.value.runtime),
     },
-    // tg-mspw — the union classifies ownership on BOTH identity axes, the
-    // same {name, prefix} pair `identityOwner` above already refuses
-    // collisions on. The member map is keyed by NAME only; every production
-    // id is PREFIX-shaped (`tg-…`, `pow-…`), so names alone resolved nothing.
+    // An `external:<project>:<capability>` row resolves its project by member
+    // NAME (tg-xh5d); the PREFIX rides the armed-roster line a refusal prints,
+    // so an operator who named the wrong token sees both axes of every store.
     memberPrefixes: {for (final s in substations) s.name: s.prefix},
     onUnresolvedExternalDep: unresolvedSink,
     // Ready-staleness by AGE (tg-zd4v face 2): a small multiple of the floor,
