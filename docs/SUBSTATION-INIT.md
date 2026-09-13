@@ -114,15 +114,18 @@ at the write and the feature is silently absent:
 | `session` | `SessionScope` (adopt-or-mint) | no work is ever driven |
 | `molecule` / `step` | the circuit's molecule pour | no per-node cursor |
 | `gate` | the human-gate arm | no re-arm signal |
-| `link` | the link-authoring verb | **every cross-repo block is silently absent** |
 
-`link` is the state store's own CROSS-REPO blocking edge (`grid.link.from` /
-`grid.link.to` / `grid.link.type` in the bead's own metadata — never a
-dependency row, so no store holds a dangling reference for `bd doctor --fix` to
-classify orphaned and sever, and no work store is written to). The engine
-refuses to assume the store is capable: `crossLinkTypeRefusal`
-(`grid_engine`'s `domain/cross_link.dart`) turns an unseeded store into a LOUD
-refusal naming the remedy, and the authoring verb calls it before it writes.
+**`link` is RETIRED (tg-6t0h).** A fresh store never seeds it. A cross-repo
+blocker is a bd `external:<project>:<capability>` dependency row on the
+CONSUMER's own work bead: the target carries `export:<capability>`, `bd ship`
+publishes `provides:<capability>` when it closes, and the frontier resolves
+`<project>` by roster name
+(`the_grid#capability-edges-are-bd-native-and-link-is-sugar`). `grid link` is
+sugar over `bd dep add` and mints nothing. A store that still holds the old
+receipts is converted once, with the station DOWN, by
+`grid link migrate --grid-root <home>` (`--dry-run` prints the plan); after
+that pass the `link` type may be dropped from `types.custom` and any receipt
+left behind is inert data.
 
 ### The guards (LOUD, never silent)
 

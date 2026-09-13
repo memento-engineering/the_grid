@@ -134,7 +134,7 @@ Every read the station serves today off session/step/molecule/gate state. Propos
 | 15 | ready frontier + terminal decision: invalidation closure, derived escalation, first broken node, completeness | `session_scope.dart` build via `molecule_codec.dart:72-213`, `live_frontier.dart:204-388`, `frontier.dart:164-234` | step states/paths/restartCount/cooldown, grades, delivery, supersedes + validates edges | P2 + P5 |
 | 16 | mint dedup: already-poured / open successor exists | `station_bead_writer.dart:1382-1388` | open molecule/step by session, openSuperseding | transition-service fold (P2) |
 | 17 | fresh-snapshot mint barrier | `session_scope.dart:504-520`; readers of graph.capturedAt | readyIds, capturedAt, isTerminal | P3 + bd snapshot version |
-| 18 | cross-store link guard on the ready frontier | `station_join_bridge.dart:271-285` (`projectCrossLinks`) | open type=link, grid.link.from/type | bd read (links stay L), consumed by P3 |
+| 18 | cross-store blocker on the ready frontier | `federated_snapshot_source.dart` (`applyExternalDeps`, tg-xh5d) | bd `external:<project>:<capability>` dependency row on the consumer's own bead | bd read (rows stay L), consumed by P3 |
 | 19 | committee route join: sibling grades for the matrix | `committee.dart:1289-1375` via SiblingView | grid.result.<lane>.grade/rationale, critics/gating params | P5 |
 | 20 | spec-committee freshness join: current-round on-disk verdict per lane | `respec.dart:487-560` | verdict JSON stamps, sibling round stamps, grid.round | P5 + verification records (replacing round-fence file reads) |
 | 21 | critic completion-fence probe + result read | `committee.dart:881-940, 1067-1145` | rc, verdict stamps, pinned.diff, usage json | P5 |
@@ -192,7 +192,7 @@ Every bd write that STOPS under the split (for tg-zfek). Each item = the write c
 18. `grid.landing_ready` — `ci_feedback_projection.dart:145-157` (zero readers; retire or re-home explicitly).
 19. The implicit per-write bd events rows and one-dolt-commit-per-field-mutation churn for all machine-tempo types (532,913 'bd: update' commits, 97.8% of history) — retires with the writes above.
 
-**Stays in bd** (for contrast, so tg-zfek doesn't over-reap): work beads and their notes/spec fields, gate beads (create/close as human-facing items), link beads, intake chore beads, CI cap-gate beads, human approval facts (grid.approved/validation_plan/type), and the slimmed session head summary.
+**Stays in bd** (for contrast, so tg-zfek doesn't over-reap): work beads and their notes/spec fields, gate beads (create/close as human-facing items), intake chore beads, CI cap-gate beads, human approval facts (grid.approved/validation_plan/type), and the slimmed session head summary.
 
 ---
 

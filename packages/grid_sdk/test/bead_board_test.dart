@@ -83,27 +83,34 @@ void main() {
     );
   });
 
-  test('active link targets join BLOCKED-BY and the blocked filter', () {
+  test('a cross-store external: row joins BLOCKED-BY and the blocked filter '
+      '— it rides the consumer own snapshot (tg-6t0h)', () {
+    final crossStore = GraphSnapshot.fromParts(
+      beads: snapshot.beads,
+      dependencies: [
+        ...snapshot.dependencies,
+        const BeadDependency(
+          issueId: 'tg-c',
+          dependsOnId: 'external:power_station:pow-18',
+        ),
+      ],
+      readyIds: const ['tg-c'],
+      capturedAt: DateTime(2026, 9, 3),
+    );
     final rows = projectBoard(
       store: 'the_grid',
       root: '/grid',
-      snapshot: snapshot,
-      linkBlockersByBeadId: const {
-        'tg-c': ['genesis-7ob'],
-      },
+      snapshot: crossStore,
     ).whereType<BoardBeadRow>().toList();
     expect(rows.singleWhere((row) => row.id == 'tg-c').blockedBy, [
-      'genesis-7ob',
+      'external:power_station:pow-18',
     ]);
 
     final blocked = projectBoard(
       store: 'the_grid',
       root: '/grid',
-      snapshot: snapshot,
+      snapshot: crossStore,
       filter: const BoardFilter(blockedOnly: true),
-      linkBlockersByBeadId: const {
-        'tg-c': ['genesis-7ob'],
-      },
     ).whereType<BoardBeadRow>().toList();
     expect(blocked.map((row) => row.id), ['tg-a', 'tg-c']);
   });

@@ -93,7 +93,6 @@ JoinedSnapshot _joined({
   List<BeadDependency> dependencies = const [],
   Map<String, SessionProjection> sessions = const {},
   Map<String, MountAttemptRecord> mountAttempts = const {},
-  Map<String, String> frontierExclusionsByBeadId = const {},
   DateTime? stateCapturedAt,
 }) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
@@ -105,7 +104,6 @@ JoinedSnapshot _joined({
   stateCapturedAt: stateCapturedAt,
   sessionsByWorkBead: sessions,
   mountAttemptsByWorkBead: mountAttempts,
-  frontierExclusionsByBeadId: frontierExclusionsByBeadId,
 );
 
 Seed _root({
@@ -1233,11 +1231,8 @@ void main() {
       expect(terminalSkip.data['disposition'], 'done');
     });
 
-    test('frontier exclusion preserves priority-then-id order of the admitted '
-        'set', () async {
-      const clause =
-          'frontier cross-link: link bead tranquility-z blocks tg-z '
-          'on open target "genesis-7ob"';
+    test('a per-candidate refusal preserves priority-then-id order of the '
+        'admitted set', () async {
       final recorder = _Recorder();
       final transport = _RecordingTransport();
       final joined = JoinedSnapshotNotifier(
@@ -1248,8 +1243,14 @@ void main() {
             _bead('tg-a', priority: 1),
             _bead('tg-c', priority: 1),
           ],
-          ready: {'tg-b', 'tg-a', 'tg-c'},
-          frontierExclusionsByBeadId: const {'tg-z': clause},
+          ready: {'tg-z', 'tg-b', 'tg-a', 'tg-c'},
+          mountAttempts: const {
+            'tg-z': MountAttemptRecord(
+              recordId: 'tgdog-att-z',
+              workBeadId: 'tg-z',
+              count: kMaxMountAttempts,
+            ),
+          },
         ),
       );
       final owner = TreeOwner();

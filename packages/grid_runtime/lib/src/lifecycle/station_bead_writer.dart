@@ -542,42 +542,6 @@ class StationBeadWriter {
     );
   }
 
-  /// Mints an owned state-store cross-repository blocking-link receipt.
-  ///
-  /// Wire-key strings live here deliberately: `grid_runtime` must not depend
-  /// on `grid_engine` merely to stamp its cross-link schema.
-  Future<String> createLink({
-    required String substation,
-    required String from,
-    required String to,
-    required String reason,
-    required String actor,
-  }) async {
-    if (!_ownership.ownsTarget(
-      id: '$substation-pending',
-      metadata: {rigKey: substation},
-    )) {
-      _refuse('create', substation, substation);
-    }
-    final id = await _bd.create(
-      title: 'grid link $from blocked by $to',
-      type: GridIssueTypes.link,
-    );
-    await _updateBead(
-      'createLink',
-      id,
-      mergeMetadata: {
-        rigKey: substation,
-        'grid.link.from': from,
-        'grid.link.to': to,
-        'grid.link.type': 'blocks',
-        'grid.link.reason': reason,
-        'grid.link.actor': actor,
-      },
-    );
-    return id;
-  }
-
   /// Records that the station is about to make mount attempt [attempt] on work
   /// bead [workBeadId] — the DURABLE half of the remount budget (tg-zlfu).
   ///

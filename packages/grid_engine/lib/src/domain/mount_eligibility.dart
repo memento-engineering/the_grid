@@ -9,8 +9,6 @@ import 'session_projection.dart';
 
 part 'mount_eligibility.freezed.dart';
 
-const _approvalCapturedAtKey = 'grid.approved_at';
-
 /// Decides whether [bead] is fit to mount at this reconciliation.
 ///
 /// [IssueTypeDriveability] asks whether this KIND of bead may ever mount;
@@ -58,56 +56,6 @@ MountEligibilityPredicate driveListClause(Set<String> driveList) => (bead) {
   return const MountEligibilityDecision.refused(
     clause: 'bead is not selected by the substation drive list',
   );
-};
-
-/// Refuses a valid approval until the joined STATE read is at least as fresh.
-///
-/// Cross-store links live on the STATE axis while approval lives on the WORK
-/// bead. A first eligible WORK pass can therefore observe the approval before
-/// it observes a link authored immediately beforehand. [stateCapturedAt] is
-/// the capture instant of the exact STATE snapshot used by the join; `null`
-/// fails closed for a valid approval because no link-set read has been
-/// observed. Absent, blank, non-string, and unparseable approval values remain
-/// the vended approval policy's responsibility.
-MountEligibilityPredicate freshCrossLinkReadClause(DateTime? stateCapturedAt) =>
-    (bead) {
-      final wireApproval = bead.metadata[_approvalCapturedAtKey];
-      if (wireApproval is! String) {
-        return const MountEligibilityDecision.eligible();
-      }
-      final approvalText = wireApproval.trim();
-      if (approvalText.isEmpty) {
-        return const MountEligibilityDecision.eligible();
-      }
-      final approval = DateTime.tryParse(approvalText);
-      if (approval == null) {
-        return const MountEligibilityDecision.eligible();
-      }
-      final stateCapture = stateCapturedAt?.toUtc();
-      if (stateCapture == null || stateCapture.isBefore(approval.toUtc())) {
-        return MountEligibilityDecision.refused(
-          clause: 'fresh cross-link read pending: ${bead.id}',
-        );
-      }
-      return const MountEligibilityDecision.eligible();
-    };
-
-/// Refuses a fresh bead held out by the join's active cross-link projection.
-///
-/// Both inputs are immutable snapshot projections. A bead carrying a live
-/// session remains eligible so authoring a link never evicts work in flight.
-MountEligibilityPredicate crossLinkExclusionClause(
-  Map<String, String> frontierExclusionsByBeadId,
-  Map<String, SessionProjection> sessionsByWorkBead,
-) => (bead) {
-  final clause = frontierExclusionsByBeadId[bead.id];
-  if (clause == null) {
-    return const MountEligibilityDecision.eligible();
-  }
-  if (_hasLivePublishedSession(bead.id, sessionsByWorkBead)) {
-    return const MountEligibilityDecision.eligible();
-  }
-  return MountEligibilityDecision.refused(clause: clause);
 };
 
 /// Refuses a fresh bead blocked by an open dependency in its owning store.

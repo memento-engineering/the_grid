@@ -9,7 +9,6 @@ register:
   slug: cross-store-dep-rows-are-refused-not-honoured
   surfaces:
     - "packages/grid_engine/lib/src/bridge/federated_snapshot_source.dart"
-    - "packages/grid_engine/lib/src/bridge/block_guard.dart"
     - "packages/grid_sdk/lib/src/work/work_assembly.dart"
   obsoletes: []
   updates:

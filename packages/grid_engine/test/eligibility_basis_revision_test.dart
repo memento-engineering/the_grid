@@ -76,28 +76,17 @@ void main() {
       );
       expect(unready, isNot(base));
 
-      final excluded = revisions.revise(
-        'tg-1',
-        EligibilityBasis.of(
-          bead: bead,
-          ready: false,
-          frontierExclusion: 'blocked by tg-9',
-        ),
-      );
-      expect(excluded, isNot(unready));
-
       final sessioned = revisions.revise(
         'tg-1',
         EligibilityBasis.of(
           bead: bead,
           ready: false,
-          frontierExclusion: 'blocked by tg-9',
           linkedSessions: const [
             SessionProjection(workBeadId: 'tg-1', sessionId: 's1'),
           ],
         ),
       );
-      expect(sessioned, isNot(excluded));
+      expect(sessioned, isNot(unready));
 
       final approved = revisions.revise(
         'tg-1',
@@ -107,7 +96,6 @@ void main() {
             metadata: const {kEligibilityApprovalKey: '2026-09-12T00:00:00Z'},
           ),
           ready: false,
-          frontierExclusion: 'blocked by tg-9',
           linkedSessions: const [
             SessionProjection(workBeadId: 'tg-1', sessionId: 's1'),
           ],

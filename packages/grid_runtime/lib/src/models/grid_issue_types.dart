@@ -8,7 +8,12 @@ abstract final class GridIssueTypes {
   static const event = IssueType('event');
   static const gate = IssueType('gate');
 
-  /// A grid state store's metadata-carried cross-repository blocking edge.
+  /// The RETIRED state-store link bead (tg-6t0h). Nothing authors or enforces
+  /// one any more — a cross-store blocker is a bd
+  /// `external:<project>:<capability>` dependency row on the consumer's own
+  /// work bead. The type survives only so a store still holding the inert
+  /// receipts can be READ (the one-pass `grid link migrate`), and it is absent
+  /// from [customTypes] so no fresh store seeds it.
   static const link = IssueType('link');
   static const mergeRequest = IssueType('merge-request');
   static const message = IssueType('message');
@@ -17,10 +22,9 @@ abstract final class GridIssueTypes {
   /// A station's DURABLE remount-attempt budget for ONE work bead (tg-zlfu) —
   /// state that PREVENTS a mount, never a mechanism that starts one.
   ///
-  /// Sibling in kind to [link]: a bead that IS a record rather than work. One
-  /// record per work bead, its count merged in place; never one bead per
-  /// attempt, which would make the bound into the storage amplifier it exists
-  /// to stop.
+  /// A bead that IS a record rather than work. One record per work bead, its
+  /// count merged in place; never one bead per attempt, which would make the
+  /// bound into the storage amplifier it exists to stop.
   static const mountAttempt = IssueType('mount-attempt');
   static const rig = IssueType('rig');
   static const role = IssueType('role');

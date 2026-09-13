@@ -8,7 +8,7 @@
 ///
 /// It is deliberately NOT part of `_join`'s value: the join stays a pure
 /// function of (work, state, snapshot), and this observer is the third input's
-/// BOOKKEEPER, handed in like `onUnresolvedCrossLink`. A null observer is the
+/// BOOKKEEPER, handed in like `onUnresolvedExternalDep`. A null observer is the
 /// offline default and changes nothing.
 ///
 /// **C3 — what changed.** The pass now RESOLVES the overlay for every

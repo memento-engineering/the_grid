@@ -23,7 +23,6 @@ class JoinedSnapshot {
     this.sessionsByWorkBead = const {},
     this.surplusSessionsByWorkBead = const {},
     this.mountAttemptsByWorkBead = const {},
-    this.frontierExclusionsByBeadId = const {},
     this.worktreeOutstanding = const WorktreeOutstandingRead.disarmed(),
     this.eligibilityBasisRevisionsByBeadId = const {},
   });
@@ -42,7 +41,6 @@ class JoinedSnapshot {
       sessionsByWorkBead = const {},
       surplusSessionsByWorkBead = const {},
       mountAttemptsByWorkBead = const {},
-      frontierExclusionsByBeadId = const {},
       worktreeOutstanding = const WorktreeOutstandingRead.disarmed(),
       eligibilityBasisRevisionsByBeadId = const {};
 
@@ -105,13 +103,6 @@ class JoinedSnapshot {
   /// Empty for a bead the station has never attempted; absence means zero, so
   /// no record is written until the first mount.
   final Map<String, MountAttemptRecord> mountAttemptsByWorkBead;
-
-  /// Exact join-time exclusion clause per authoritative-ready work bead
-  /// removed by an active state-store cross-link.
-  ///
-  /// Empty means no cross-link exclusion. The join computes this once so the
-  /// synchronous mount-eligibility predicate performs no store read.
-  final Map<String, String> frontierExclusionsByBeadId;
 
   /// THE BARRIER'S READ (cut-wiring §W2.4 W2-B): the ambient P6 and P1 mirrors
   /// as the worktree-outstanding clause joins them.
