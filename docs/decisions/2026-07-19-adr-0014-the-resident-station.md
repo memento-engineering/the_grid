@@ -12,7 +12,10 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - station-control-is-the-operator-and-ui-wire
+    - station-lock-holds-never-steals-an-unreadable-record
+    - station-lock-record-carries-an-optional-lifecycle-phase
   bead: null
   legacy-id: "ADR-0014"
 ---

@@ -12,7 +12,8 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - bd-fork-walks-each-dep-table-with-own-indexed-join
   bead: null
   legacy-id: "A60"
 ---

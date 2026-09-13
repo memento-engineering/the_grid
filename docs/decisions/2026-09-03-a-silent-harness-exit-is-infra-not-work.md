@@ -19,7 +19,9 @@ register:
   updates:
     - adr-0008-authoring-sdk-and-reentrant-engine
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - capability-failures-carry-a-kind-and-a-per-kind-policy
+    - declared-process-session-non-results-are-infra
   bead: tg-ilm9
   legacy-id: null
 ---

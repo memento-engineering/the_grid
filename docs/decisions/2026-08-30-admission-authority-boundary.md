@@ -14,7 +14,8 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - pause-is-a-non-terminal-blocking-disposition
   bead: tg-y4fd
   legacy-id: null
 ---

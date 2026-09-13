@@ -18,7 +18,8 @@ register:
   updates:
     - a45-grid-sdk-track-c-the-rungrid-griddelegate-rail-shape-the
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - advisory-pre-boot-maintenance-exception
   bead: tg-y2c2
   legacy-id: null
 ---

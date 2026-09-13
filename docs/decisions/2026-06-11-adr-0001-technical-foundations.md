@@ -12,7 +12,10 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - bd-silent-success-guardrails
+    - light-dag-deferred-bodies-and-two-tier-change-signals
+    - the-pour-gets-its-own-bd-deadline
   bead: null
   legacy-id: "ADR-0001"
 ---

@@ -16,7 +16,8 @@ register:
   updates:
     - "committee-report-reads-step-transition"
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - bd-silent-success-guardrails
   bead: tg-64bn
   legacy-id: null
 ---

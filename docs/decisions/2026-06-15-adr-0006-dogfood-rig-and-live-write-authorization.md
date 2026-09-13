@@ -12,7 +12,10 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - bd-silent-success-guardrails
+    - git-ops-runs-only-at-a-work-tree-root
+    - held-session-collection-override-is-human-only
   bead: null
   legacy-id: "ADR-0006"
 ---

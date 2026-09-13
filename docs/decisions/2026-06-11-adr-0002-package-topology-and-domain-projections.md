@@ -12,7 +12,8 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - beads-dart-generated-json-and-published-names-stay-stable
   bead: null
   legacy-id: "ADR-0002"
 ---

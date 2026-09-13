@@ -13,7 +13,10 @@ register:
   obsoletes: []
   updates: [trajectory-ledger-split]
   obsoleted-by: null
-  updated-by: [wave-2-entry-criteria-rulings]
+  updated-by:
+    - terminal-provenance-word-is-reconstructed
+    - wave-2-entry-criteria-rulings
+    - wave-2-kept-set-includes-gated-and-ready
   bead: tg-whf6
   legacy-id: null
 ---

@@ -15,7 +15,8 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - bead-read-verbs-ride-the-resident-door
   bead: tg-0ol2
   legacy-id: null
 ---

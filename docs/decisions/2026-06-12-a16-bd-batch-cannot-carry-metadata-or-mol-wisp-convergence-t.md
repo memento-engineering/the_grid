@@ -12,7 +12,8 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - bd-create-metadata-rides-a-follow-up-update
   bead: null
   legacy-id: "A16"
 ---
