@@ -14,8 +14,10 @@ const Map<String, String> seatSubstations = {
   'butane': 'butane_flutter',
 };
 
-/// A CLEAN §W2.5 body: mode primary, overlay engaged, health live, every
-/// gating counter zero. [overrides] dirties exactly one thing at a time.
+/// A CLEAN §W2.5 body: mode primary, overlay engaged, health live with no
+/// transition, the epoch anchor set, and every gating counter zero —
+/// deliberately the WHOLE table, so a row this verb stops gating shows up as a
+/// test that no longer fails. [overrides] dirties exactly one thing at a time.
 Map<String, Object?> summaryBody({
   int passes = 12,
   String scope = 'session-terminal',
@@ -26,6 +28,10 @@ Map<String, Object?> summaryBody({
   'scope': scope,
   'mode': 'primary',
   'health': 'live',
+  // The producer's HEALTHY shape, not an empty list: `_noteHealth` records
+  // the first health it observes as a bare state name, so every real boot
+  // carries exactly this (`dual_read_pass.dart`).
+  'health_transitions': <String>['live'],
   'overlay_engaged': true,
   'overlay_disengaged_for_boot': false,
   'step_axis_engaged': true,
@@ -72,6 +78,38 @@ List<TrajectoryEnvelope> seededRound({
       workBeadId: '$seat-1',
       substation: seatSubstations[seat] ?? seat,
       attemptId: 'attempt-$epoch-$seat',
+    ),
+    summaryNote(
+      seq: seq + 1,
+      epoch: epoch,
+      sessionId: sessionId,
+      body: body ?? summaryBody(),
+    ),
+  ];
+}
+
+/// A round whose session was MOUNTED in [startedEpoch] and whose summary note
+/// landed in [epoch] — the bounce-mid-round shape. The window over [epoch]
+/// holds the note and nothing that names the seat, so only a read of the
+/// session's own history can attribute it.
+List<TrajectoryEnvelope> seededCarriedRound({
+  required int startedEpoch,
+  required int epoch,
+  required int seq,
+  required String seat,
+  Map<String, Object?>? body,
+}) {
+  final sessionId = 'tranquility-$startedEpoch-$seat-carried';
+  return [
+    envelope(
+      recordType: 'attempt.session.started',
+      family: TrajectoryFamily.attempt,
+      seq: seq,
+      bootEpoch: startedEpoch,
+      sessionId: sessionId,
+      workBeadId: '$seat-carried',
+      substation: seatSubstations[seat] ?? seat,
+      attemptId: 'attempt-$startedEpoch-$seat-carried',
     ),
     summaryNote(
       seq: seq + 1,

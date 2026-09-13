@@ -7,7 +7,7 @@
 /// turned into PASS/FAIL rows; `traj certify` only reads the log and prints
 /// what this file decides.
 ///
-/// Three rules carry the honesty of the result, each one a shape §W2.5 warns
+/// Four rules carry the honesty of the result, each one a shape §W2.5 warns
 /// about by name:
 ///
 ///   * **THE GOVERNING NOTE IS THE LAST `passes > 1` NOTE** — a `passes: 1`
@@ -22,6 +22,21 @@
 ///     and `p2_miss` are per-pass gauges zeroed on every join emission, so a
 ///     boot in which fifty post-epoch sessions fell back certifies clean if the
 ///     last pass happens to be quiet. Only the deduped cumulative twins gate.
+///   * **EVERY TABLE ROW WITH A GATE VALUE GATES** — the two STRUCTURAL ZEROS
+///     (`null_started_at = 0` and a non-null `first_epoch_claimed_at`) are not
+///     reportable beside the gate: `classifyDualReadMiss` returns `legacyEra`
+///     for EVERY miss when the epoch anchor is null, so a boot without it
+///     prints `miss_post_epoch_total 0` that it never earned. The scoped lag
+///     and cardinality twins, the three append-loss counters ("a lossy boot
+///     certifies nothing") and an empty `health_transitions` gate for the same
+///     reason: a row demoted to REPORTED is a row that cannot fail, and a
+///     certificate whose signal cannot fail is a runbook with extra steps.
+///
+/// One row does NOT track the doc: `shape-coverage` here is tg-2gt1's
+/// redefinition — one round with `passes > 1` per ruling seat — and §W2.5's
+/// own EVENT checklist (a rework, a void, an escalation or decline, a
+/// gate-park + re-arm, a deliberate bounce) rides [kCertificateHumanItems]
+/// unclaimed, because nothing in the trajectory log decides "deliberate".
 ///
 /// Leaf discipline (decision `the_grid#grid-trajectory-leaf-package`): the note
 /// channel and the counter keys are RE-EXPRESSED here, never imported from
@@ -49,27 +64,31 @@ const Set<String> kSoakTargetSeats = {'lenny', 'butane'};
 
 /// The counters the `clean` row GATES, in print order.
 ///
-/// The two miss twins are §W2.5's cut signal ("replaces `fallbacks = 0`"); the
-/// two unexplained twins are the in-window divergence rows of the same table.
-/// Every one of them is `cumulative` in the round summary's own
-/// `counter_semantics` map.
+/// Every §W2.5 table row that carries a GATE VALUE and is a scalar in the
+/// round summary is here:
+///
+///   * the two cut-signal twins (`miss_post_epoch_total`, `p2_miss_total`) —
+///     "replaces `fallbacks = 0`";
+///   * `null_started_at` — a STRUCTURAL ZERO: a null `startedAt` classifies a
+///     post-epoch miss as legacy-era, so one of these makes the cut signal
+///     above smaller than the boot earned;
+///   * the two in-window unexplained-divergence twins, one per axis;
+///   * the scoped cardinality and lag rows — in-window on purpose (epoch 50
+///     measured `retirement_lag_open 63` on legacy shapes that will never
+///     heal, so the UNSCOPED rows are unreachable and would make the
+///     certificate unissuable);
+///   * the three append-loss counters — §W2.5's "a lossy boot certifies
+///     nothing".
+///
+/// The two NON-scalar gate values gate too, in the rows that own them:
+/// `first_epoch_claimed_at` (must not be null) below in `clean`, and
+/// `health_transitions` (must be empty) in `posture`, beside `health: live`.
 const List<String> kCertificateGatingCounters = [
   'miss_post_epoch_total',
   'p2_miss_total',
+  'null_started_at',
   'unexplained_divergences_in_window',
   'step_unexplained_divergences_in_window',
-];
-
-/// The counters printed BESIDE the gate — §W2.5's "reported, never gating"
-/// list plus the table rows this verb does not gate on.
-const List<String> kCertificateReportedCounters = [
-  'soak_window_epoch',
-  'miss_post_epoch',
-  'p2_miss',
-  'miss_legacy_era',
-  'null_started_at',
-  'fallbacks',
-  'p1_orphan',
   'cardinality_breaches_in_window',
   'terminal_lag_open_in_window',
   'retirement_lag_open_in_window',
@@ -77,8 +96,54 @@ const List<String> kCertificateReportedCounters = [
   'append_drops',
   'append_suppressed',
   'append_refused_testimony',
+];
+
+/// The counters printed BESIDE the gate — §W2.5's "reported, never gating"
+/// list, plus the `historical` residue the doc reports next to each scoped
+/// twin so an operator can see what the window excluded.
+const List<String> kCertificateReportedCounters = [
+  'soak_window_epoch',
+  'miss_post_epoch',
+  'p2_miss',
+  'miss_legacy_era',
+  'fallbacks',
+  'p1_orphan',
+  'unexplained_divergences_historical',
+  'step_unexplained_divergences_historical',
+  'cardinality_breaches_historical',
+  'terminal_lag_open_historical',
+  'retirement_lag_open_historical',
   'append_ack_p99_ms',
 ];
+
+/// §W2.5's EPOCH ANCHOR (`clean`, structural): an unseeded snapshot classifies
+/// EVERY miss legacy-era, so a boot without this timestamp prints a
+/// `miss_post_epoch_total` of 0 that is zero BY CONSTRUCTION. The doc refuses
+/// certification outright on it rather than reporting it beside the gate.
+const String kEpochAnchorKey = 'first_epoch_claimed_at';
+
+/// §W2.5's health row (`posture`): `live` at boot-final AND no latch during
+/// the boot. A boot that degraded and recovered reads `live` at the end and
+/// served something other than the fold in the middle, so the final reading
+/// alone cannot carry the row.
+///
+/// The doc states the gate as "`health_transitions` empty"; the PRODUCER makes
+/// that unreachable and the gate is stated against what it actually emits.
+/// `_noteHealth` (`dual_read_pass.dart`) records the FIRST health it observes
+/// as a bare state name and every later change as `<from>-><to>`, so a
+/// perfectly healthy boot carries `['live']`, never `[]`. Gating on empty
+/// would fail every boot forever — the "soak is always a blocker" shape this
+/// verb exists to kill — so the gate is: every state NAMED anywhere in the
+/// list is [kLiveHealth]. No edge, no non-live state, and a bare `live` is
+/// the ordinary healthy reading rather than a transition.
+const String kHealthTransitionsKey = 'health_transitions';
+
+/// The one snapshot health a certified boot may ever have witnessed.
+const String kLiveHealth = 'live';
+
+/// The state names [kHealthTransitionsKey] entry [entry] mentions —
+/// `live` for a bare first observation, both sides for a `<from>-><to>` edge.
+List<String> healthStatesIn(String entry) => entry.split('->');
 
 /// W2-B's observe-form counter (§W2.5's last table row). Absent from every
 /// summary until W2-B lands, which is why its row is informational until it
@@ -90,7 +155,10 @@ const String kWouldRefuseCounter = 'barrier_would_refuse';
 ///
 /// The first four are the human half of `lunar_station-bzt`'s evidence pack;
 /// the fifth is machine-checkable but not from the trajectory database alone —
-/// `traj shadow-diff` needs the legacy ledger beside it.
+/// `traj shadow-diff` needs the legacy ledger beside it. The last two are
+/// §W2.5 table rows this verb deliberately does not claim: the doc's EVENT
+/// shape checklist (the `shape-coverage` ROW measures tg-2gt1's seat
+/// redefinition instead) and the per-field in-window divergence row.
 const List<String> kCertificateHumanItems = [
   'break-glass drill on a scratch grid home (boot cut with a cut-era session '
       'open, break-glass in, verify the void and every stamp)',
@@ -102,6 +170,16 @@ const List<String> kCertificateHumanItems = [
   '`traj shadow-diff` per counted boot — `lost_append` and in-window '
       '`unexplained` both 0 (offline: needs the legacy ledger, so this verb '
       'never runs it)',
+  'the §W2.5 EVENT shape checklist across the counted boots — at least one '
+      'rework, one void, one escalation or decline, one gate-park + re-arm '
+      'cycle, and one deliberate bounce (NOT the `shape-coverage` row above, '
+      'which is tg-2gt1\'s seat redefinition: one round with passes > 1 per '
+      'ruling seat; nothing in the log decides "deliberate")',
+  'the §W2.5 per-field in-window divergence row (`isTerminal`, `completed`, '
+      '`humanHeld`, `closedAt`, `disposition`, `fences`) — the gate above '
+      'reads the `unexplained` twin, which carves out the adjudicated classes '
+      'the table\'s own incumbent rule excepts, so the raw per-field map is '
+      'neither gated nor read here',
 ];
 
 /// PASS, FAIL, or — for the items the verb refuses to claim — UNKNOWN.
@@ -174,6 +252,14 @@ class RoundSummaryNote {
     final String value => value,
     _ => null,
   };
+
+  /// A list-valued row (`health_transitions`), or null when the summary does
+  /// not carry the key — absence is not an empty list, for the same reason an
+  /// absent counter is not a zero.
+  List<Object?>? listOf(String key) => switch (body[key]) {
+    final List<Object?> value => value,
+    _ => null,
+  };
 }
 
 /// One counted boot's window, as the verb read it.
@@ -184,6 +270,7 @@ class BootWindow {
     required this.epoch,
     required this.station,
     required this.records,
+    this.substationOf = const <String, String>{},
     this.truncated = false,
   });
 
@@ -193,9 +280,29 @@ class BootWindow {
   /// Every row the reader returned for this `boot_epoch`, `seq`-ordered.
   final List<TrajectoryEnvelope> records;
 
+  /// Session → substation the CALLER resolved outside this window, with a
+  /// second bounded read per session ([sessionsNeedingWiderRead]).
+  ///
+  /// It is not an optimisation. Round-summary notes carry no substation of
+  /// their own (`ck_substation` demands one only when `work_bead_id` is set),
+  /// so a session whose `attempt.session.started` landed in an EARLIER epoch
+  /// is unattributable from this window alone — and a bounce mid-round is
+  /// routine, so scoring seat coverage off the window would score it off a
+  /// join artifact.
+  final Map<String, String> substationOf;
+
   /// The read was CUT SHORT — the governing note may simply not be in hand,
   /// so nothing this window says can certify a boot.
   final bool truncated;
+
+  /// The same window with [resolved] folded into [substationOf].
+  BootWindow withSubstations(Map<String, String> resolved) => BootWindow(
+    epoch: epoch,
+    station: station,
+    records: records,
+    substationOf: <String, String>{...substationOf, ...resolved},
+    truncated: truncated,
+  );
 }
 
 /// What one counted boot proved.
@@ -209,7 +316,8 @@ class BootEvidence {
     required this.truncated,
     required this.summaries,
     required this.seatRounds,
-    required this.unattributedRounds,
+    required this.offSeatRounds,
+    required this.unjoinedRounds,
     this.governing,
   });
 
@@ -228,9 +336,14 @@ class BootEvidence {
   /// Rounds with `passes > 1` per target seat, keyed by the RULING's name.
   final Map<String, int> seatRounds;
 
-  /// Rounds with `passes > 1` whose session no record attributed to a
-  /// substation — counted, never silently dropped.
-  final int unattributedRounds;
+  /// Rounds with `passes > 1` that WERE attributed to a substation — one the
+  /// ruling did not scope the soak to. An ordinary fact about a busy station,
+  /// never a join failure, and counted apart from one for exactly that reason.
+  final int offSeatRounds;
+
+  /// Rounds with `passes > 1` whose session NO record in the log attributed
+  /// to a substation, in this window or outside it — the real join failure.
+  final int unjoinedRounds;
 
   /// The measured numbers, gating first, absent keys carried as null so a
   /// reader can tell "zero" from "never emitted".
@@ -253,15 +366,17 @@ class BootEvidence {
     'mode': governing?.stringOf('mode'),
     'discipline': governing?.stringOf('discipline'),
     'health': governing?.stringOf('health'),
+    kHealthTransitionsKey: governing?.listOf(kHealthTransitionsKey),
     'overlay_engaged': governing?.boolOf('overlay_engaged'),
     'overlay_disengaged_for_boot': governing?.boolOf(
       'overlay_disengaged_for_boot',
     ),
     'step_axis_engaged': governing?.boolOf('step_axis_engaged'),
-    'first_epoch_claimed_at': governing?.stringOf('first_epoch_claimed_at'),
+    kEpochAnchorKey: governing?.stringOf(kEpochAnchorKey),
     'counters': counters,
     'seat_rounds': Map<String, int>.from(seatRounds),
-    'unattributed_rounds': unattributedRounds,
+    'off_seat_rounds': offSeatRounds,
+    'unjoined_rounds': unjoinedRounds,
   };
 }
 
@@ -365,18 +480,47 @@ List<int> countedEpochs(List<int> claimed, int count) {
   return ordered.sublist(ordered.length - count);
 }
 
+/// Session → substation as this window can see it: every attribution the
+/// window's own records carry, then the ones the caller resolved outside it.
+///
+/// In-window first: a session's own epoch is the closest evidence, and the
+/// wider read exists only to cover what the window cannot reach.
+Map<String, String> substationsIn(BootWindow window) {
+  final resolved = <String, String>{};
+  for (final envelope in window.records) {
+    final session = envelope.sessionId;
+    final substation = envelope.substation;
+    if (session == null || substation == null) continue;
+    resolved.putIfAbsent(session, () => substation);
+  }
+  for (final entry in window.substationOf.entries) {
+    resolved.putIfAbsent(entry.key, () => entry.value);
+  }
+  return resolved;
+}
+
+/// The sessions whose `passes > 1` round summaries this window cannot
+/// attribute on its own — what the caller hands to a second bounded read
+/// before folding, so a session mounted in an earlier epoch is scored on the
+/// seat it actually ran on rather than as a join failure.
+Set<String> sessionsNeedingWiderRead(BootWindow window) {
+  final known = substationsIn(window);
+  final pending = <String>{};
+  for (final envelope in window.records) {
+    final note = roundSummaryOf(envelope);
+    if (note == null || note.passes <= 1) continue;
+    if (known.containsKey(note.sessionId)) continue;
+    pending.add(note.sessionId);
+  }
+  return pending;
+}
+
 /// Folds one boot's window into its evidence.
 BootEvidence foldBootEvidence(
   BootWindow window, {
   Set<String> seats = kSoakTargetSeats,
 }) {
-  final substationOf = <String, String>{};
-  for (final envelope in window.records) {
-    final session = envelope.sessionId;
-    final substation = envelope.substation;
-    if (session == null || substation == null) continue;
-    substationOf.putIfAbsent(session, () => substation);
-  }
+  final substationOf = substationsIn(window);
 
   final notes = <RoundSummaryNote>[];
   for (final envelope in window.records) {
@@ -387,13 +531,19 @@ BootEvidence foldBootEvidence(
 
   RoundSummaryNote? governing;
   final seatRounds = <String, int>{for (final seat in seats) seat: 0};
-  var unattributed = 0;
+  var offSeat = 0;
+  var unjoined = 0;
   for (final note in notes) {
     if (note.passes <= 1) continue;
     governing = note;
-    final seat = seatFor(substationOf[note.sessionId], seats);
+    final substation = substationOf[note.sessionId];
+    if (substation == null) {
+      unjoined++;
+      continue;
+    }
+    final seat = seatFor(substation, seats);
     if (seat == null) {
-      unattributed++;
+      offSeat++;
     } else {
       seatRounds[seat] = (seatRounds[seat] ?? 0) + 1;
     }
@@ -407,7 +557,8 @@ BootEvidence foldBootEvidence(
     summaries: notes.length,
     governing: governing,
     seatRounds: seatRounds,
-    unattributedRounds: unattributed,
+    offSeatRounds: offSeat,
+    unjoinedRounds: unjoined,
   );
 }
 
@@ -529,13 +680,38 @@ CertificateItem _posture(List<BootEvidence> boots) {
         'epoch ${boot.epoch}: health ${health ?? 'absent'}, not live',
       );
     }
+    // The SECOND half of §W2.5's health row: "`live` at boot-final;
+    // `health_transitions` empty". A boot that latched degraded and recovered
+    // reads `live` at the end and served something other than the fold in the
+    // middle, so the final reading alone cannot carry the row.
+    final transitions = governing.listOf(kHealthTransitionsKey);
+    if (transitions == null) {
+      failures.add(
+        'epoch ${boot.epoch}: $kHealthTransitionsKey absent from the round '
+        'summary — an absent row is not an unlatched one',
+      );
+    } else {
+      final latched = <String>{};
+      for (final entry in transitions) {
+        final text = entry is String ? entry : '$entry';
+        if (healthStatesIn(text).any((state) => state != kLiveHealth)) {
+          latched.add(text);
+        }
+      }
+      if (latched.isNotEmpty) {
+        failures.add(
+          'epoch ${boot.epoch}: $kHealthTransitionsKey ${latched.join(', ')} '
+          '— the snapshot was not $kLiveHealth throughout the boot',
+        );
+      }
+    }
   }
   return CertificateItem(
     row: CertificateRow.posture,
     status: failures.isEmpty ? CertificateStatus.pass : CertificateStatus.fail,
     detail: failures.isEmpty
         ? '${boots.length}/${boots.length} boots served mode=primary with the '
-              'overlay engaged and health live'
+              'overlay engaged and health live throughout'
         : '${failures.length} posture failure'
               '${failures.length == 1 ? '' : 's'}',
     failures: failures,
@@ -556,6 +732,19 @@ CertificateItem _clean(List<BootEvidence> boots) {
       failures.add(_noGoverningNote(boot));
       continue;
     }
+    // THE EPOCH ANCHOR FIRST — every counter below is unreadable without it.
+    // `classifyDualReadMiss` returns `legacyEra` for EVERY miss when
+    // `firstEpochClaimedAt` is null, so `miss_post_epoch_total` stays 0 for
+    // the whole boot no matter what fell back. §W2.5 refuses certification
+    // outright on this one; it is not a class to report beside the gate.
+    final anchor = governing.stringOf(kEpochAnchorKey);
+    if (anchor == null || anchor.isEmpty) {
+      failures.add(
+        'epoch ${boot.epoch}: $kEpochAnchorKey is null — an unseeded snapshot '
+        'classifies every miss legacy-era, so the cut signal is 0 by '
+        'construction and this boot certifies nothing',
+      );
+    }
     for (final key in kCertificateGatingCounters) {
       final value = governing.intOf(key);
       if (value == null) {
@@ -572,7 +761,9 @@ CertificateItem _clean(List<BootEvidence> boots) {
     row: CertificateRow.clean,
     status: failures.isEmpty ? CertificateStatus.pass : CertificateStatus.fail,
     detail: failures.isEmpty
-        ? kCertificateGatingCounters.map((key) => '$key 0').join(', ')
+        ? '${kCertificateGatingCounters.length} gating counters 0 on every '
+              'counted boot (${kCertificateGatingCounters.join(', ')}), '
+              '$kEpochAnchorKey set'
         : '${failures.length} clean failure'
               '${failures.length == 1 ? '' : 's'}',
     failures: failures,
@@ -581,12 +772,14 @@ CertificateItem _clean(List<BootEvidence> boots) {
 
 CertificateItem _shapeCoverage(List<BootEvidence> boots, List<String> seats) {
   final totals = <String, int>{for (final seat in seats) seat: 0};
-  var unattributed = 0;
+  var offSeat = 0;
+  var unjoined = 0;
   for (final boot in boots) {
     for (final entry in boot.seatRounds.entries) {
       totals[entry.key] = (totals[entry.key] ?? 0) + entry.value;
     }
-    unattributed += boot.unattributedRounds;
+    offSeat += boot.offSeatRounds;
+    unjoined += boot.unjoinedRounds;
   }
   final failures = <String>[
     for (final seat in seats)
@@ -601,7 +794,9 @@ CertificateItem _shapeCoverage(List<BootEvidence> boots, List<String> seats) {
     status: failures.isEmpty ? CertificateStatus.pass : CertificateStatus.fail,
     detail:
         'rounds with passes > 1: $measured'
-        '${unattributed == 0 ? '' : ' ($unattributed unattributed)'}',
+        '${offSeat == 0 ? '' : ', $offSeat on other substations'}'
+        '${unjoined == 0 ? '' : ', $unjoined unjoined (no record in the log '
+            'names the session\'s substation)'}',
     failures: failures,
   );
 }

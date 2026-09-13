@@ -103,7 +103,9 @@ void main() {
         out: lines.add,
       );
       expect(code, 3);
-      expect(lines.single, contains('no boot has been counted'));
+      expect(lines.first, contains('no boot has been counted'));
+      // …and the UNKNOWN checklist under it (AC-5): see the sibling test.
+      expect(lines.join('\n'), contains('human-only certificate items'));
     });
 
     test('an unreachable server is a refusal — exit 1', () async {
@@ -153,6 +155,213 @@ void main() {
         expect(lines.join('\n'), contains('passes 12'));
       },
     );
+  });
+
+  group('AC-1 — every §W2.5 row with a gate value GATES', () {
+    // The false-green shape this group exists to kill: a table row that is
+    // only REPORTED cannot fail, so a boot dirty in exactly that row still
+    // exits 0. One case per gating counter, driven off the list itself, so a
+    // counter demoted back to reported shows up here as a test that stops
+    // failing rather than as a silent certificate.
+    for (final counter in kCertificateGatingCounters) {
+      test('$counter = 1 on one boot exits 2 and names it', () async {
+        final (code, lines) = await _certify(
+          dirty: {
+            51: {counter: 1},
+          },
+        );
+        expect(code, 2);
+        expect(_statusOf(lines, 'clean'), 'FAIL');
+        expect(lines.join('\n'), contains('epoch 51: $counter = 1'));
+      });
+
+      test('$counter absent from the summary is not a zero', () async {
+        final body = summaryBody()..remove(counter);
+        final rows = seededBoots(epochs: const [50, 51])
+          ..addAll(seededRound(epoch: 52, seq: 40, seat: 'lenny'))
+          ..addAll(seededRound(epoch: 52, seq: 42, seat: 'butane', body: body));
+        final (code, lines) = await _certify(rows: rows);
+        expect(code, 2);
+        expect(lines.join('\n'), contains('epoch 52: $counter absent'));
+      });
+    }
+
+    test('a null epoch anchor refuses certification outright', () async {
+      // `classifyDualReadMiss` returns `legacyEra` for EVERY miss when the
+      // anchor is null, so `miss_post_epoch_total 0` beside it is zero BY
+      // CONSTRUCTION — the exact unearned green the row exists to refuse.
+      final (code, lines) = await _certify(
+        dirty: const {
+          50: {'first_epoch_claimed_at': null},
+        },
+      );
+      expect(code, 2);
+      expect(_statusOf(lines, 'clean'), 'FAIL');
+      expect(
+        lines.join('\n'),
+        contains('epoch 50: first_epoch_claimed_at is null'),
+      );
+      expect(lines.join('\n'), contains('0 by construction'));
+    });
+
+    test('an absent epoch anchor fails the same way', () async {
+      final body = summaryBody()..remove('first_epoch_claimed_at');
+      final rows = seededBoots(epochs: const [50, 51])
+        ..addAll(seededRound(epoch: 52, seq: 40, seat: 'lenny'))
+        ..addAll(seededRound(epoch: 52, seq: 42, seat: 'butane', body: body));
+      final (code, lines) = await _certify(rows: rows);
+      expect(code, 2);
+      expect(
+        lines.join('\n'),
+        contains('epoch 52: first_epoch_claimed_at is null'),
+      );
+    });
+
+    test('a health latch during the boot fails the posture row', () async {
+      // `health: live` at boot-final is the LAST reading; a boot that latched
+      // degraded and recovered served something else in the middle.
+      final (code, lines) = await _certify(
+        dirty: const {
+          52: {
+            'health_transitions': ['live->degraded', 'degraded->live'],
+          },
+        },
+      );
+      expect(code, 2);
+      expect(_statusOf(lines, 'posture'), 'FAIL');
+      expect(
+        lines.join('\n'),
+        contains('was not live throughout the boot'),
+      );
+    });
+
+    test('a bare live first observation is NOT a latch', () async {
+      // `_noteHealth` writes the first health it sees as a bare state name, so
+      // `['live']` is what a perfectly healthy boot carries. Gating on an
+      // EMPTY list would fail every boot forever — the blocker shape this verb
+      // exists to kill — so the gate is "no state but live, ever".
+      final (code, lines) = await _certify(
+        dirty: const {
+          50: {
+            'health_transitions': ['live'],
+          },
+        },
+      );
+      expect(code, 0, reason: lines.join('\n'));
+      expect(_statusOf(lines, 'posture'), 'PASS');
+    });
+
+    test('a boot that never started live fails the posture row', () async {
+      final (code, lines) = await _certify(
+        dirty: const {
+          51: {
+            'health_transitions': ['compromised'],
+          },
+        },
+      );
+      expect(code, 2);
+      expect(_statusOf(lines, 'posture'), 'FAIL');
+      expect(lines.join('\n'), contains('was not live throughout the boot'));
+    });
+
+    test('an absent health_transitions row is not an unlatched one', () async {
+      final body = summaryBody()..remove('health_transitions');
+      final rows = seededBoots(epochs: const [50, 51])
+        ..addAll(seededRound(epoch: 52, seq: 40, seat: 'lenny'))
+        ..addAll(seededRound(epoch: 52, seq: 42, seat: 'butane', body: body));
+      final (code, lines) = await _certify(rows: rows);
+      expect(code, 2);
+      expect(_statusOf(lines, 'posture'), 'FAIL');
+      expect(lines.join('\n'), contains('health_transitions absent'));
+    });
+  });
+
+  group('AC-1 — shape coverage joins across the boot window', () {
+    /// Three boots of lenny rounds plus ONE butane round whose session was
+    /// mounted in the previous epoch — the bounce-mid-round shape.
+    List<TrajectoryEnvelope> carried() {
+      final rows = <TrajectoryEnvelope>[];
+      var seq = 1;
+      for (final epoch in const [50, 51, 52]) {
+        rows.addAll(seededRound(epoch: epoch, seq: seq, seat: 'lenny'));
+        seq += 2;
+      }
+      rows.addAll(
+        seededCarriedRound(
+          startedEpoch: 51,
+          epoch: 52,
+          seq: seq,
+          seat: 'butane',
+        ),
+      );
+      return rows;
+    }
+
+    test('a session mounted in an earlier epoch still names its seat', () async {
+      final reader = ScriptedReader(
+        carried(),
+        epochs: seededClaims(const [50, 51, 52]),
+      );
+      final lines = <String>[];
+      final code = await runTrajCertify(
+        gridHome: '/tmp/grid',
+        open: openerFor(TrajectoryOpened(reader)),
+        out: lines.add,
+        err: lines.add,
+      );
+      expect(code, 0, reason: lines.join('\n'));
+      expect(_statusOf(lines, 'shape-coverage'), 'PASS');
+      expect(lines.join('\n'), contains('butane 1, lenny 3'));
+      expect(lines.join('\n'), isNot(contains('unjoined')));
+      // The second, bounded read the join needs — and only for the session the
+      // window could not attribute.
+      expect(reader.subjectsRead, contains('tranquility-51-butane-carried'));
+    });
+
+    test('a fully attributed window reads no session at all', () async {
+      final reader = ScriptedReader(
+        seededBoots(),
+        epochs: seededClaims(const [50, 51, 52]),
+      );
+      final lines = <String>[];
+      final code = await runTrajCertify(
+        gridHome: '/tmp/grid',
+        open: openerFor(TrajectoryOpened(reader)),
+        out: lines.add,
+      );
+      expect(code, 0);
+      expect(reader.subjectsRead, ['traj_epoch']);
+    });
+
+    test('a session no record anywhere names is UNJOINED, not off-seat', () async {
+      final rows = <TrajectoryEnvelope>[];
+      var seq = 1;
+      for (final epoch in const [50, 51, 52]) {
+        rows.addAll(seededRound(epoch: epoch, seq: seq, seat: 'lenny'));
+        seq += 2;
+      }
+      rows.add(
+        summaryNote(
+          seq: seq,
+          epoch: 52,
+          sessionId: 'tranquility-orphan',
+          body: summaryBody(),
+        ),
+      );
+      final (code, lines) = await _certify(rows: rows);
+      expect(code, 2);
+      expect(_statusOf(lines, 'shape-coverage'), 'FAIL');
+      expect(lines.join('\n'), contains('1 unjoined'));
+    });
+
+    test('a round on a non-target substation reads as off-seat', () async {
+      final rows = seededBoots()
+        ..addAll(seededRound(epoch: 52, seq: 40, seat: 'the_grid'));
+      final (code, lines) = await _certify(rows: rows);
+      expect(code, 0, reason: lines.join('\n'));
+      expect(lines.join('\n'), contains('1 on other substations'));
+      expect(lines.join('\n'), isNot(contains('unjoined')));
+    });
   });
 
   group('AC-2 — a dirty counter fails the clean row', () {
@@ -331,6 +540,12 @@ void main() {
         expect(counters.containsKey('barrier_would_refuse'), isTrue);
         expect(counters['barrier_would_refuse'], isNull);
         expect(boot['seat_rounds'], {'butane': 1, 'lenny': 1});
+        expect(boot['off_seat_rounds'], 0);
+        expect(boot['unjoined_rounds'], 0);
+        // The two structural gate values ride the JSON as themselves, never
+        // as a counter that happens to read 0.
+        expect(boot['health_transitions'], ['live']);
+        expect(boot['first_epoch_claimed_at'], '2026-09-06T00:00:00.000Z');
       }
     });
 
@@ -384,6 +599,32 @@ void main() {
       final (code, lines) = await _certify(epochs: const [50]);
       expect(code, 3);
       expect(lines.join('\n'), contains('human-only certificate items'));
+    });
+
+    test('the checklist prints on an unbootstrapped grid home too', () async {
+      // The other exit-3: a line on its own reads as "the verb found nothing
+      // wrong", which is the opposite of what it measured.
+      final lines = <String>[];
+      final code = await runTrajCertify(
+        gridHome: '/tmp',
+        open: openerFor(const TrajectoryNotBootstrapped('not bootstrapped')),
+        out: lines.add,
+      );
+      expect(code, 3);
+      expect(lines.join('\n'), contains('no boot has been counted'));
+      expect(lines.join('\n'), contains('human-only certificate items'));
+      expect(lines.join('\n'), isNot(contains('PASS')));
+    });
+
+    test('the doc\'s EVENT shape checklist is one of them', () async {
+      // The `shape-coverage` ROW is tg-2gt1's seat redefinition; §W2.5's own
+      // checklist (a rework, a void, an escalation, a gate-park, a bounce) is
+      // not measured anywhere and must never read as covered by it.
+      final (_, lines) = await _certify();
+      final text = lines.join('\n');
+      expect(text, contains('EVENT shape checklist'));
+      expect(text, contains('one deliberate bounce'));
+      expect(text, contains('per-field in-window divergence row'));
     });
   });
 

@@ -10,7 +10,16 @@
 /// fewer than N boots exist. An unbootstrapped grid home is `3` rather than
 /// `traj show`'s `0`: the trajectory database's absence is still an ordinary
 /// state of the world, but a station with no boots has not failed the
-/// certificate, it simply has nothing to certify yet.
+/// certificate, it simply has nothing to certify yet. Every disposition prints
+/// the UNKNOWN checklist, including the two that measure nothing — the reader
+/// who gets no rows is the one most likely to assume the verb covered the
+/// whole table.
+///
+/// TWO reads per boot, not one. The window read is the evidence; a SECOND,
+/// bounded per-session read attributes the round summaries the window cannot,
+/// because a note carries no substation of its own and its session may have
+/// been mounted in an earlier epoch (a bounce mid-round is routine). Without
+/// it the shape-coverage row scores a real soak off a join artifact.
 library;
 
 import 'dart:io';
@@ -25,6 +34,17 @@ import 'trajectory_reader.dart';
 /// The soak's own count (`wave-2-flip-scope-soak-and-kill-date`, Q1): three
 /// consecutive clean boots.
 const int kDefaultCertifyBoots = 3;
+
+/// How far into a session's own history the substation lookup reads.
+///
+/// A bounded WINDOW on purpose ([TrajectoryLogReader.rowsForSubject], `seq`
+/// ascending): the attribution rides the session's earliest records — the ones
+/// carrying a `work_bead_id`, which is the only column `ck_substation` makes
+/// the substation mandatory beside — so the answer is at the head of the
+/// stream or it is not in the log at all. A session whose first
+/// [kSubstationLookupRows] rows name no substation stays UNJOINED and is
+/// counted as such rather than guessed at.
+const int kSubstationLookupRows = defaultReadLimit;
 
 /// The verb.
 class TrajCertifyCommand extends Command<int> {
@@ -127,6 +147,11 @@ Future<int> runTrajCertify({
   switch (opened) {
     case TrajectoryNotBootstrapped(:final message):
       write('traj certify: $message — no boot has been counted.');
+      // Nothing was measured, so the checklist matters MORE, not less: an
+      // exit-3 line on its own reads as "the verb found nothing wrong".
+      for (final line in renderCertificateChecklist()) {
+        write(line);
+      }
       return 3;
     case TrajectoryUnavailable(:final message):
       writeErr('traj certify: $message');
@@ -154,11 +179,14 @@ Future<int> runTrajCertify({
               ceiling: limit,
             );
             windows.add(
-              BootWindow(
-                epoch: epoch,
-                station: stationOf[epoch] ?? '',
-                records: window.records,
-                truncated: !window.isComplete,
+              await _attributed(
+                reader,
+                BootWindow(
+                  epoch: epoch,
+                  station: stationOf[epoch] ?? '',
+                  records: window.records,
+                  truncated: !window.isComplete,
+                ),
               ),
             );
           }
@@ -181,4 +209,32 @@ Future<int> runTrajCertify({
         await reader.close();
       }
   }
+}
+
+/// [window] with every round summary it could not attribute resolved against
+/// the session's OWN records elsewhere in the log.
+///
+/// One bounded read per unattributed session and no read at all when the
+/// window attributed everything, which is the common case on a scoped soak
+/// boot.
+Future<BootWindow> _attributed(
+  TrajectoryLogReader reader,
+  BootWindow window,
+) async {
+  final pending = sessionsNeedingWiderRead(window);
+  if (pending.isEmpty) return window;
+  final resolved = <String, String>{};
+  for (final session in pending) {
+    final rows = await reader.rowsForSubject(
+      session,
+      limit: kSubstationLookupRows,
+    );
+    for (final row in rows) {
+      if (row.substation case final String substation) {
+        resolved[session] = substation;
+        break;
+      }
+    }
+  }
+  return window.withSubstations(resolved);
 }

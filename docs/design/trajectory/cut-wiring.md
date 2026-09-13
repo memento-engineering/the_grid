@@ -1877,6 +1877,33 @@ butane only (Q1), each boot with at least one session terminal, preceded by at l
 `step_fold_absent`, `incumbent_adjudications`, the `historical` divergence residue, and
 the compare-only columns (pgid/pid presence, `workTerminalReason`).
 
+**THE ORACLE (tg-2gt1) — this table is no longer read by hand.**
+`grid traj certify [--boots N] [--json]` (`grid_trajectory`,
+`lib/src/cli/soak_certificate.dart` + `lib/src/cli/traj_certify_command.dart`) reads the last
+N claimed boot epochs off this grid home's trajectory database, applies the read rule above
+per boot — the LAST note with `passes > 1`, never a sum — and prints one PASS/FAIL row per
+machine-checkable item: `posture`, `clean`, `shape-coverage`, `would-refuse`, `consecutive`.
+It exits `0` certified, `2` a row failed (naming the epoch and the row), `3` fewer than N
+boots claimed. **The soak is therefore: three back-to-back scoped boots,
+`traj certify --boots 3`, exit 0** — that command's output IS the certificate, and
+`lunar_station-uu8`'s hand-read runbook is replaced by it.
+
+What gates where: `posture` takes `mode`, `overlay_engaged`,
+`overlay_disengaged_for_boot` and the whole health row (`live` at boot-final AND
+`health_transitions` empty); `clean` takes every scalar row above that carries a gate value —
+the two miss twins, `null_started_at`, the two in-window unexplained-divergence twins, the
+scoped `cardinality_breaches`/`terminal_lag_open`/`retirement_lag_open` rows, `step_lag_open`
+and the three append-loss counters — plus the structural refusal on a null
+`first_epoch_claimed_at`. An ABSENT counter fails the row it gates; it is never read as a
+zero. What the verb refuses to claim prints beneath the rows as an UNKNOWN checklist and
+stays a human read: the two drills, the `traj show` sample, the Q5/Q10 and Q6 amendments,
+`traj shadow-diff` per boot (it needs the legacy ledger beside the database, which the verb
+does not open), the per-field in-window divergence row (the gate reads the `unexplained`
+twin, which carves out the adjudicated classes the incumbent rule excepts), and the EVENT
+checklist immediately below — the verb's `shape-coverage` ROW is tg-2gt1's narrower
+redefinition, at least one round with `passes > 1` on each ruling seat, not these five
+events.
+
 **Shape coverage (Q1: a checklist, driven deliberately, not a wait):** across the three
 boots — at least one rework, one void, one escalation or decline, one gate-park + re-arm
 cycle, and one deliberate bounce (the bounce is what proves the seed/reseed path; a boot

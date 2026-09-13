@@ -13,9 +13,11 @@ import 'soak_certificate.dart';
 /// and the checklist the verb never claims.
 List<String> renderSoakCertificate(SoakCertificate certificate) {
   final lines = <String>[
-    'traj certify — the §W2.5 soak certificate over the last '
-        '${certificate.requestedBoots} boot'
-        '${certificate.requestedBoots == 1 ? '' : 's'}',
+    'traj certify — the machine-checkable §W2.5 certificate rows over the '
+        'last ${certificate.requestedBoots} boot'
+        '${certificate.requestedBoots == 1 ? '' : 's'} '
+        '(the table\'s human and event rows are the checklist below, never '
+        'claimed here)',
   ];
   if (certificate.insufficient) {
     lines.add(
@@ -24,7 +26,7 @@ List<String> renderSoakCertificate(SoakCertificate certificate) {
       'this grid home; ${certificate.requestedBoots} are required — nothing '
       'was measured.',
     );
-    _renderChecklist(lines);
+    lines.addAll(renderCertificateChecklist());
     return lines;
   }
   final stations = {for (final boot in certificate.boots) boot.station};
@@ -61,6 +63,7 @@ List<String> renderSoakCertificate(SoakCertificate certificate) {
       lines.add('      no governing note (none with passes > 1)');
       continue;
     }
+    final transitions = governing.listOf(kHealthTransitionsKey);
     lines
       ..add(
         '      governing seq ${governing.seq} '
@@ -70,15 +73,26 @@ List<String> renderSoakCertificate(SoakCertificate certificate) {
         '${governing.boolOf('overlay_engaged') ?? 'absent'} · health '
         '${governing.stringOf('health') ?? 'absent'}',
       )
+      ..add(
+        '      anchor   $kEpochAnchorKey '
+        '${governing.stringOf(kEpochAnchorKey) ?? 'NULL'} · '
+        '$kHealthTransitionsKey '
+        '${transitions == null
+            ? 'absent'
+            : transitions.isEmpty
+            ? 'none'
+            : transitions.join(' → ')}',
+      )
       ..add('      gating   ${_counters(boot, kCertificateGatingCounters)}')
       ..add('      reported ${_counters(boot, kCertificateReportedCounters)}')
       ..add(
         '      seats    '
         '${[for (final entry in boot.seatRounds.entries) '${entry.key} ${entry.value}'].join(' · ')}'
-        '${boot.unattributedRounds == 0 ? '' : ' · unattributed ${boot.unattributedRounds}'}',
+        '${boot.offSeatRounds == 0 ? '' : ' · other substations ${boot.offSeatRounds}'}'
+        '${boot.unjoinedRounds == 0 ? '' : ' · unjoined ${boot.unjoinedRounds}'}',
       );
   }
-  _renderChecklist(lines);
+  lines.addAll(renderCertificateChecklist());
   return lines;
 }
 
@@ -86,17 +100,15 @@ List<String> renderSoakCertificate(SoakCertificate certificate) {
 String renderSoakCertificateJson(SoakCertificate certificate) =>
     const JsonEncoder.withIndent('  ').convert(certificate.toJson());
 
-void _renderChecklist(List<String> lines) {
-  lines
-    ..add('')
-    ..add(
-      '  human-only certificate items — state ${CertificateStatus.unknown.wire}, '
+/// The UNKNOWN checklist, on its own — printed under EVERY disposition the
+/// verb has, measured or not. A run that could measure nothing is exactly the
+/// run whose reader most needs telling which items no verb will ever claim.
+List<String> renderCertificateChecklist() => <String>[
+  '',
+  '  human-only certificate items — state ${CertificateStatus.unknown.wire}, '
       'never claimed by this verb:',
-    );
-  for (final item in kCertificateHumanItems) {
-    lines.add('    [?] $item');
-  }
-}
+  for (final item in kCertificateHumanItems) '    [?] $item',
+];
 
 String _counters(BootEvidence boot, List<String> keys) {
   final counters = boot.counters;

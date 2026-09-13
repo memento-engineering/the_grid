@@ -119,7 +119,8 @@ void main() {
       final rows = seededBoots(epochs: const [50]);
       final evidence = foldBootEvidence(_window(50, rows));
       expect(evidence.seatRounds, {'lenny': 1, 'butane': 1});
-      expect(evidence.unattributedRounds, 0);
+      expect(evidence.offSeatRounds, 0);
+      expect(evidence.unjoinedRounds, 0);
       expect(evidence.summaries, 2);
       expect(evidence.governing?.sessionId, 'tranquility-50-butane');
     });
@@ -134,8 +135,62 @@ void main() {
         ),
       ];
       final evidence = foldBootEvidence(_window(50, rows));
-      expect(evidence.unattributedRounds, 1);
+      expect(evidence.unjoinedRounds, 1);
+      expect(evidence.offSeatRounds, 0);
       expect(evidence.seatRounds, {'lenny': 0, 'butane': 0});
+    });
+
+    test('a round on a NON-target substation is off-seat, not unjoined', () {
+      // The two facts the operator line used to merge: this round was joined
+      // perfectly well, it simply ran on a seat the ruling did not scope.
+      final rows = seededRound(epoch: 50, seq: 1, seat: 'the_grid');
+      final evidence = foldBootEvidence(_window(50, rows));
+      expect(evidence.offSeatRounds, 1);
+      expect(evidence.unjoinedRounds, 0);
+      expect(evidence.seatRounds, {'lenny': 0, 'butane': 0});
+    });
+
+    test('the caller\'s wider attribution names the seat', () {
+      // The bounce-mid-round shape: the session started in epoch 49, so the
+      // epoch-50 window holds the note and nothing that names the seat.
+      final rows = seededCarriedRound(
+        startedEpoch: 49,
+        epoch: 50,
+        seq: 1,
+        seat: 'lenny',
+      );
+      final window = _window(50, rows);
+      expect(sessionsNeedingWiderRead(window), {'tranquility-49-lenny-carried'});
+      expect(foldBootEvidence(window).unjoinedRounds, 1);
+
+      final widened = window.withSubstations(const {
+        'tranquility-49-lenny-carried': 'lenny',
+      });
+      expect(sessionsNeedingWiderRead(widened), isEmpty);
+      final evidence = foldBootEvidence(widened);
+      expect(evidence.seatRounds, {'lenny': 1, 'butane': 0});
+      expect(evidence.unjoinedRounds, 0);
+    });
+
+    test('an in-window attribution wins over the caller\'s', () {
+      final rows = seededBoots(epochs: const [50]);
+      final widened = _window(
+        50,
+        rows,
+      ).withSubstations(const {'tranquility-50-lenny': 'the_grid'});
+      expect(foldBootEvidence(widened).seatRounds, {'lenny': 1, 'butane': 1});
+    });
+
+    test('a passes:1 walk never asks for a wider read', () {
+      final rows = [
+        summaryNote(
+          seq: 1,
+          epoch: 50,
+          sessionId: 'tranquility-orphan',
+          body: summaryBody(passes: 1),
+        ),
+      ];
+      expect(sessionsNeedingWiderRead(_window(50, rows)), isEmpty);
     });
   });
 
