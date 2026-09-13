@@ -156,6 +156,64 @@ GraphSnapshot _stateSnapshotOf(List<Bead> beads) => GraphSnapshot.fromParts(
   capturedAt: DateTime(2026, 7, 19),
 );
 
+final class _FoldStepRow implements StepCursorView {
+  const _FoldStepRow({
+    required this.sessionId,
+    required this.stepPath,
+    required this.stepState,
+  });
+
+  @override
+  final String sessionId;
+  @override
+  final String stepPath;
+  @override
+  final String stepState;
+  @override
+  int get round => 0;
+  @override
+  int get stepRound => 0;
+  @override
+  int get incarnation => 0;
+  @override
+  String? get attemptId => null;
+  @override
+  int? get supersededByStepRound => null;
+  @override
+  DateTime? get cooldownUntil => null;
+  @override
+  int? get restartBudget => null;
+  @override
+  DateTime? get startedAt => null;
+  @override
+  DateTime? get readyAt => null;
+  @override
+  DateTime? get completedAt => null;
+  @override
+  String? get failureClass => null;
+  @override
+  int get lastSeq => 1;
+}
+
+final class _FoldStepSnapshot implements TrajectoryStepSnapshot {
+  const _FoldStepSnapshot(this._rows, {required this.health});
+
+  final List<StepCursorView> _rows;
+
+  @override
+  final TrajectorySnapshotHealth health;
+  @override
+  int get version => 1;
+  @override
+  DateTime? get seededAt => DateTime(2026, 9, 12);
+  @override
+  DateTime? get firstEpochClaimedAt => DateTime(2026, 9, 12);
+
+  @override
+  Iterable<StepCursorView> byP2SessionId(String sessionId) =>
+      _rows.where((row) => row.sessionId == sessionId);
+}
+
 BeadWorktree _wt(String beadId) => BeadWorktree(
   beadId: beadId,
   path: '/workspace/example-substation/.grid/worktrees/tgdog/$beadId',
@@ -231,6 +289,9 @@ _harness({
   List<BeadWorktree>? worktrees,
   ProcessLeaseVendor? vendorOverride,
   bool wireVendor = true,
+  TrajectoryStepSnapshot? stepSnapshot,
+  DualReadAccounting? dualReadAccounting,
+  DualReadMode dualReadMode = DualReadMode.off,
 }) {
   final git = _FakeGit(worktrees: worktrees ?? [_wt('tg-w1')]);
   final groups = _FakeProcessGroupController(alivePids: alivePids);
@@ -267,6 +328,9 @@ _harness({
     freshnessBarrier: () async {},
     stateSnapshot: () => state,
     leaseVendor: wireVendor ? (vendorOverride ?? vendor) : null,
+    stepSnapshot: stepSnapshot == null ? null : () => stepSnapshot,
+    dualReadAccounting: dualReadAccounting,
+    dualReadMode: dualReadMode,
     onOrphan: loud.add,
   );
   return (
@@ -483,6 +547,107 @@ void main() {
   });
 
   group('molecule sweep — scope and arming', () {
+    test(
+      'a serviceable primary P2 running state replaces raw pending before '
+      'the lease vendor, preserving the loud missing-breadcrumb report',
+      () async {
+        final accounting = DualReadAccounting();
+        final h = _harness(
+          stateBeads: [
+            _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1'),
+            _stepBead(
+              id: 'tgdog-step-1',
+              sessionId: 'tgdog-m1',
+              state: StepState.pending,
+            ),
+          ],
+          alivePids: const {},
+          alivePgids: const {},
+          stepSnapshot: const _FoldStepSnapshot([
+            _FoldStepRow(
+              sessionId: 'tgdog-m1',
+              stepPath: 'tg-w1/job',
+              stepState: 'running',
+            ),
+          ], health: TrajectorySnapshotHealth.live),
+          dualReadAccounting: accounting,
+          dualReadMode: DualReadMode.primary,
+        );
+
+        await h.reconciler.reconcile();
+
+        expect(h.loud, hasLength(1));
+        expect(h.loud.single, contains('cannot find or kill it'));
+        expect(h.loud.single, contains('is running'));
+      },
+    );
+
+    test('off, observe, refused, compromised, and disengaged P2 postures keep '
+        'the raw pending state', () async {
+      final cases =
+          <
+            ({
+              DualReadMode mode,
+              TrajectorySnapshotHealth health,
+              bool disengaged,
+            })
+          >[
+            (
+              mode: DualReadMode.off,
+              health: TrajectorySnapshotHealth.live,
+              disengaged: false,
+            ),
+            (
+              mode: DualReadMode.observe,
+              health: TrajectorySnapshotHealth.live,
+              disengaged: false,
+            ),
+            (
+              mode: DualReadMode.primary,
+              health: TrajectorySnapshotHealth.refused,
+              disengaged: false,
+            ),
+            (
+              mode: DualReadMode.primary,
+              health: TrajectorySnapshotHealth.compromised,
+              disengaged: false,
+            ),
+            (
+              mode: DualReadMode.primary,
+              health: TrajectorySnapshotHealth.live,
+              disengaged: true,
+            ),
+          ];
+      for (final entry in cases) {
+        final accounting = DualReadAccounting()
+          ..overlayDisengaged = entry.disengaged;
+        final h = _harness(
+          stateBeads: [
+            _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1'),
+            _stepBead(
+              id: 'tgdog-step-1',
+              sessionId: 'tgdog-m1',
+              state: StepState.pending,
+            ),
+          ],
+          alivePids: const {},
+          alivePgids: const {},
+          stepSnapshot: _FoldStepSnapshot(const [
+            _FoldStepRow(
+              sessionId: 'tgdog-m1',
+              stepPath: 'tg-w1/job',
+              stepState: 'running',
+            ),
+          ], health: entry.health),
+          dualReadAccounting: accounting,
+          dualReadMode: entry.mode,
+        );
+
+        await h.reconciler.reconcile();
+        expect(h.loud, isEmpty, reason: '$entry');
+      }
+    });
+
     test(
       'no vendor wired ⇒ no sweep (the cross-repo ctor default keeps '
       'compiling and the flat pass is unchanged); hasLeaseSweep says so',

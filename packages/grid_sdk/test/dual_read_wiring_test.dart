@@ -144,25 +144,21 @@ void main() {
       discipline: TrajectoryDiscipline.cut,
       mode: TrajectoryConfigMode.disabled,
     );
-    for (final config in [modeConfig, modeConfig.asDisabled]) {
-      final refusal = config.cutPostureRefusal!;
-      expect(refusal.requestedMode, TrajectoryConfigMode.disabled);
-      expect(refusal.resolvedMode, TrajectoryConfigMode.required);
-      expect(refusal.requestedDualRead, isNull);
-      expect(refusal.resolvedDualRead, DualReadMode.primary);
-    }
+    final modeRefusal = modeConfig.cutPostureRefusal!;
+    expect(modeRefusal.requestedMode, TrajectoryConfigMode.disabled);
+    expect(modeRefusal.resolvedMode, TrajectoryConfigMode.required);
+    expect(modeRefusal.requestedDualRead, isNull);
+    expect(modeRefusal.resolvedDualRead, DualReadMode.primary);
 
     const dualReadConfig = TrajectoryConfig(
       discipline: TrajectoryDiscipline.cut,
       dualRead: DualReadMode.off,
     );
-    for (final config in [dualReadConfig, dualReadConfig.asDisabled]) {
-      final refusal = config.cutPostureRefusal!;
-      expect(refusal.requestedMode, isNull);
-      expect(refusal.resolvedMode, TrajectoryConfigMode.required);
-      expect(refusal.requestedDualRead, DualReadMode.off);
-      expect(refusal.resolvedDualRead, DualReadMode.primary);
-    }
+    final dualReadRefusal = dualReadConfig.cutPostureRefusal!;
+    expect(dualReadRefusal.requestedMode, isNull);
+    expect(dualReadRefusal.resolvedMode, TrajectoryConfigMode.required);
+    expect(dualReadRefusal.requestedDualRead, DualReadMode.off);
+    expect(dualReadRefusal.resolvedDualRead, DualReadMode.primary);
 
     final refusal = dualReadConfig.cutPostureRefusal!;
     expect(
@@ -171,29 +167,45 @@ void main() {
     );
   });
 
-  test(
-    'asDisabled forces no-write mode without rewriting cut caller requests',
-    () {
-      const shadow = TrajectoryConfig(dualRead: DualReadMode.observe);
-      final disabledShadow = shadow.asDisabled;
-      expect(disabledShadow.discipline, TrajectoryDiscipline.shadow);
-      expect(disabledShadow.mode, TrajectoryConfigMode.disabled);
-      expect(disabledShadow.dualRead, DualReadMode.observe);
+  test('asDisabled always resolves to the inert shadow posture', () {
+    const shadow = TrajectoryConfig(dualRead: DualReadMode.observe);
+    final disabledShadow = shadow.asDisabled;
+    expect(disabledShadow.discipline, TrajectoryDiscipline.shadow);
+    expect(disabledShadow.mode, TrajectoryConfigMode.disabled);
+    expect(disabledShadow.dualRead, DualReadMode.observe);
 
-      const omittedCut = TrajectoryConfig(discipline: TrajectoryDiscipline.cut);
-      const matchingCut = TrajectoryConfig(
-        discipline: TrajectoryDiscipline.cut,
-        mode: TrajectoryConfigMode.required,
-        dualRead: DualReadMode.primary,
-      );
-      for (final config in [omittedCut.asDisabled, matchingCut.asDisabled]) {
-        expect(config.discipline, TrajectoryDiscipline.cut);
-        expect(config.mode, TrajectoryConfigMode.disabled);
-        expect(config.dualRead, DualReadMode.primary);
-        expect(config.cutPostureRefusal, isNull);
-      }
-    },
-  );
+    const omittedCut = TrajectoryConfig(discipline: TrajectoryDiscipline.cut);
+    const matchingCut = TrajectoryConfig(
+      discipline: TrajectoryDiscipline.cut,
+      mode: TrajectoryConfigMode.required,
+      dualRead: DualReadMode.primary,
+    );
+    for (final config in [omittedCut.asDisabled, matchingCut.asDisabled]) {
+      expect(config.discipline, TrajectoryDiscipline.shadow);
+      expect(config.mode, TrajectoryConfigMode.disabled);
+      expect(config.dualRead, DualReadMode.primary);
+      expect(config.cutPostureRefusal, isNull);
+    }
+  });
+
+  test('assembly resolution trims break-glass and dry-run suppresses it', () {
+    const cut = TrajectoryConfig(discipline: TrajectoryDiscipline.cut);
+    final resolved = cut.resolveForAssembly(
+      dryRun: false,
+      breakGlassReason: '  operator rollback  ',
+    );
+    expect(resolved.discipline, TrajectoryDiscipline.shadow);
+    expect(resolved.dualRead, DualReadMode.primary);
+    expect(resolved.breakGlassReason, 'operator rollback');
+
+    final dry = cut.resolveForAssembly(
+      dryRun: true,
+      breakGlassReason: 'must not act',
+    );
+    expect(dry.mode, TrajectoryConfigMode.disabled);
+    expect(dry.discipline, TrajectoryDiscipline.shadow);
+    expect(dry.breakGlassReason, isNull);
+  });
 
   group('the composition seams (textual — these construction sites are only '
       'reachable from the live assembly)', () {

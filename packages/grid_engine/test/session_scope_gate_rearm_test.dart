@@ -741,9 +741,9 @@ void main() {
         isNot(contains('gate.rearmFailed')),
       );
       expect(runner.callsFor('create'), hasLength(1));
-      expect(runner.callsFor('update'), hasLength(2));
-      expect(runner.metadataOfUpdate(1), containsPair('blocks', 'tgdog-s'));
-      expect(runner.metadataOfUpdate(1), containsPair('node', 'tg-1/route'));
+      expect(runner.callsFor('update'), hasLength(1));
+      expect(runner.metadataOfUpdate(0), containsPair('blocks', 'tgdog-s'));
+      expect(runner.metadataOfUpdate(0), containsPair('node', 'tg-1/route'));
 
       state.push(
         _state([
@@ -761,7 +761,7 @@ void main() {
       await _pump();
       expect(
         runner.callsFor('update'),
-        hasLength(2),
+        hasLength(1),
         reason: 'cut keeps the guard latched and schedules no retry',
       );
     });
@@ -839,7 +839,7 @@ void main() {
         expect(sink.acknowledged, 1);
         expect(halt.halted, isTrue);
         expect(runner.callsFor('create'), hasLength(1));
-        expect(runner.callsFor('update'), hasLength(2));
+        expect(runner.callsFor('update'), hasLength(1));
 
         publish(2);
         await _pump();
@@ -848,7 +848,7 @@ void main() {
         expect(sink.acknowledged, 1);
         expect(
           runner.callsFor('update'),
-          hasLength(2),
+          hasLength(1),
           reason: 'the dropped decision append schedules no second re-arm',
         );
       },

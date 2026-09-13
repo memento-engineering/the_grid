@@ -739,15 +739,20 @@ class CapabilityHostState extends State<CapabilityHost>
     // this assertion re-checks presence on the persist path so a report
     // arriving through any OTHER composition still refuses loud.
     requireProcessLeaseVendor(context);
-    await _ctx!.writer.update(
-      _stepBeadId,
-      // pgid/pid/token are DELIBERATELY absent here (R3): the vendor owns
-      // `grid.lease.*`, never the step bead's cursor keys.
-      metadata: _moleculeMetadata(StepState.running, terminal: false),
-    );
+    // The station-scoped halt is the cut-wiring seam. Under shadow it is
+    // absent and this write remains byte-identical; under cut P2 is the
+    // running carrier and the legacy bead write retires.
+    if (_ctx!.trajectoryAdmissionHalt == null) {
+      await _ctx!.writer.update(
+        _stepBeadId,
+        // pgid/pid/token are DELIBERATELY absent here (R3): the vendor owns
+        // `grid.lease.*`, never the step bead's cursor keys.
+        metadata: _moleculeMetadata(StepState.running, terminal: false),
+      );
+    }
     // §2.3's decision-bearing `step.transition (running)` row — after the
-    // step-bead mutation returned. Under the cut its acknowledgement is the
-    // second carrier's admission-breaker input.
+    // legacy step-bead mutation when that carrier is present. Under the cut
+    // its acknowledgement is the admission-breaker input.
     final result = await _recorder.stepRunning(
       sessionId: _sessionId,
       stepPath: _nodePath,

@@ -1048,9 +1048,9 @@ the resolving pre-read that converts it is posture-gated; bounce back through on
 | Q1 | Soak on lenny + butane only, observe then primary, after tg-ilug; signal = fallbacks 0 + unexplained 0 across three clean boots covering the named shapes (`wave-2-flip-scope-soak-and-kill-date`, "Q1 — the soak re-arms on target seats after the comparator fix") | §W2.5 — the SCOPED signal (r6 design, not ruled: the receipt proves the unscoped wording unreachable) |
 | Q2 | One lever: `TrajectoryConfig` discipline `{shadow, cut}`; `cut` implies `dualRead: primary` on both axes + `mode: required`; disagreement refuses by name; C3/C4 rollback is pre-cut only (`wave-2-entry-criteria-rulings`, "Q2 — one cut lever (E1)") | tg-rcm3 |
 | Q3 | Accounting split; only decision-bearing drops feed health; under cut `compromised` = breaker (halt admission, drain, gate, `trajectory.halted`), never a demotion; `appendAcked` sealed `{Acked, Dropped, Suppressed}` always completes; `_rearm`'s failure = gate (same entry, "Q3 — `compromised` under cut halts admission (E2, E5)") | tg-ppo5 |
-| Q4 | Restore under cut is a quiesced void-and-redrive; no head-stamp detector; M6c stays at Stage 4 (same entry, "Q4 — restore under cut is a quiesced void-and-redrive (E3, shape b)") | W2-A runbook (§W2.4) — unfiled |
-| Q5 | Narrow: retire only `running`, `pending`, `gated` step writes; `complete`/`failed` KEPT until Stage 2/4 (`wave-2-flip-scope-soak-and-kill-date`, "Q5 — wave 2 is narrow") | §W2.2 KEPT table; W2-A |
-| Q6 | bd remains an input to terminal truth; the terminal append becomes acked; a tick obligation reconciles ledger-closed/P1-open (same entry, "Q6 — bd remains an input to terminal truth under cut") | tg-ffl6 (#341, LANDED); the acked half rides W2-A |
+| Q4 | Restore under cut is a quiesced void-and-redrive; no head-stamp detector; M6c stays at Stage 4 (same entry, "Q4 — restore under cut is a quiesced void-and-redrive (E3, shape b)") | W2-A runbook (`restore-under-cut.md`) |
+| Q5 | Narrow: retire `running` and `pending`; keep `complete`, `failed`, `gated`, and `ready` (`the_grid#wave-2-kept-set-includes-gated-and-ready`) | §W2.2 KEPT table; W2-A |
+| Q6 | bd remains an input to terminal truth; the terminal append becomes acked; a tick obligation reconciles ledger-closed/P1-open with `reconstructed` provenance (`the_grid#terminal-provenance-word-is-reconstructed`) | tg-ffl6 (#341, LANDED); the acked half rides W2-A |
 | Q7 | The ratified `refused:<bead>:<clause>:<snapshotRev>` key is NOT amended; W2-B uses it (`wave-2-entry-criteria-rulings`, "Q7 — the `admission.refused` idempotency key is not amended (E7)") | W2-B |
 | Q8 | Fold-backed `sessionDispositionOf`/`staleFences` ride C3 now (same entry, "Q8 — fold-backed disposition rides C3 now (E8)") | tg-6zan |
 | Q9 | The open-retired P1 shape is accepted; accretion fixed at the missing terminals; P6 eviction bounded on `last_seq` age (same entry, "Q9 — the open-retired P1 shape is accepted (E9)") | tg-ffl6 (the source fix); W2-A (the eviction bound) |
@@ -1159,7 +1159,7 @@ decide is marked **r6 design, not ruled**.
   reusing it would either freeze the appender the drain still needs or overload a name whose
   established meaning is "the log is presumed damaged", leaving a genuine second halt
   flareless. Two states, two causes, two recoveries, two names.
-  **The gate seam is not one seam (r6 design, not ruled).** `createGate`
+  **The gate seam has two placements.** `createGate`
   (`grid_runtime/lib/src/lifecycle/station_bead_writer.dart:630-646`) takes
   `{substation, sessionId, nodePath, reason}`, dedupes on (session, node), and calls
   `_assertGateSessionOpen` (`:646`; the refusal at `:1393-1400`). A STEP-class loss
@@ -1168,13 +1168,11 @@ decide is marked **r6 design, not ruled**.
   (`grid_engine/lib/src/circuit/capability_host.dart:145`). A TERMINAL-class loss lands
   AFTER the KEPT bd close, so the session bead is closed and `createGate` throws
   `SessionClosedRefused`; and the station-wide halt itself has no node at all. r6 verified
-  there is NO station-scoped gate seam in the tree. W2-A therefore needs one — a
-  station-scoped gate on `StationBeadWriter` keyed on the boot epoch, not on (session,
-  node). **Carrier: UNFILED; file it before the breaker's gate half is built.** Until it
-  exists the halt's durable artifacts are the flare plus the latched admission clause, and
-  attaching the halt to an arbitrary open session is FORBIDDEN: that gate closes when its
-  session drains, silently retiring the halt's only durable artifact while admission stays
-  latched. Running sessions
+  was no station-scoped gate seam in the r6 tree. tg-v2rm has since landed
+  `StationBeadWriter.createStationGate`, keyed on boot epoch rather than (session, node),
+  and `TrajectoryAdmissionHalt.haltStation` is its sole caller. Attaching a halt to an
+  arbitrary open session remains forbidden: that gate closes when its session drains,
+  silently retiring the durable artifact while admission stays latched. Running sessions
   reach their own terminal (the terminal is acked; if THAT ack is also lost, the bd close
   is KEPT and tg-ffl6's obligation infers the terminal on the next healthy boot — Q6's
   belt). The latch is per boot, like `compromised`: the operator clears it by bouncing
@@ -1194,41 +1192,13 @@ decide is marked **r6 design, not ruled**.
 - **Ruled.** Q4 (`wave-2-entry-criteria-rulings`): shape (b) — restore is a quiesced event
   that voids every session open at the snapshot and re-drives them from bd; no detector;
   M6c stays at Stage 4.
-- **Design (r6) — the RESTORE RUNBOOK, quiesce-only.** (1) Station DOWN, proved by the
-  same two witnesses `traj replay` already demands — the RS-2 lock read by path and the
-  `traj_epoch` fence (`grid_trajectory/lib/src/cli/traj_quiesce.dart:1-30`). (2) Restore
-  the trajectory database. (3) `traj replay` (C0, quiesce-only) so the fold equals the
-  restored log. (4) VOID EVERY OPEN SESSION in the ledger — not only the ones P1 shows
-  open: a session minted after the snapshot has no P1 row at all and would otherwise boot
-  as a post-epoch miss on a live session, exactly the class the cut cannot serve. The void
-  is the KEPT `#void-` re-key through bd (R3 — a bd CLI write, allowed in wave 2),
-  performed BY HAND: the station is down, so no engine machinery runs at this step.
-  **Correction (verify-1).** The first draft named a deadness proof `_refuseVoidMint`; NO
-  such symbol exists anywhere in `packages/*/lib` (grep empty — the name survives only in
-  this document's frozen wave-1 lines and the old transition inventory). The fence check is
-  STATION-SIDE and runs at the NEXT BOOT, not at step 4: `staleFences(...).where(_liveness)`
-  gating the remint fork
-  (`grid_engine/lib/src/kernel/station_admission_authority.dart:555-557`, `:809-817`), with
-  the `session.voidRefused` flare (`:1363-1371`). At step 4 deadness is true BY
-  CONSTRUCTION — the station is down, so every process group it owned is dead — and the
-  identity triple stays legible on the KEPT carrier for that next boot to read
-  (`startedIdentityMetadata`, `grid_engine/lib/src/domain/session_bead.dart:518-526`; the
-  triple's fence half is re-stated on `attempt_id` when W2-E retires the token). **The tool
-  gap is real and named:** an unbounded set of hand `#void-` re-keys through bd, at the
-  cut's worst failure mode, with no verb and no chokepoint — while wave-1 constraint 3 wants
-  bd-side repairs to ride `StationBeadWriter`. A void-every-open-session verb is WANTED and
-  **UNFILED**; file it with W2-A, because the runbook is not operable at scale without it.
-  (5) Boot. tg-ffl6's obligation
-  (`grid_runtime/lib/src/trajectory/stage1_obligations.dart:320`) appends each voided
-  session's terminal (`lost` for a void key, per its notes), and the work beads re-mint
-  through the existing remint-on-void fork. Under narrow (Q5) the `complete`/`failed`
-  facts on the beads survive the boundary, so a re-driven bead resumes with its result
-  keys and breaker count intact. **r6 design, not ruled:** step (4)'s "every open session,
-  not only P1-open"; and an OPTIONAL belt that is NOT a head stamp — the cut-posture check
-  may refuse a boot whose `proj_meta.rebuilt_at` is newer than the previous epoch's
-  clean-down while any ledger session is open (the operator skipped step 4). Not in the
-  buildable set; recorded so the re-judge can weigh it.
-- **Carrier.** W2-A (runbook text rides its PR); no bead filed.
+- **Landed runbook.** [Restore under cut](restore-under-cut.md) is the operator procedure:
+  halt admission through filed verb `tg-9ud2`; take the station down; restore the paired
+  state/trajectory snapshot; enumerate and void every session open at that snapshot through
+  filed verb `tg-od2e`; prove the station-wide open set empty; boot cut; resume admission;
+  let bd readiness redrive. It neither re-files those verbs nor adds a `rebuilt_at` or other
+  head-stamp detector.
+- **Carrier.** W2-A operator text plus the existing `tg-od2e` and `tg-9ud2` verbs.
 
 ### E4 — `[fold-fidelity B2]` + `[completeness B1]` the KEPT-writes set retires and keeps the same write
 
@@ -1248,30 +1218,22 @@ decide is marked **r6 design, not ruled**.
   `persistRaisedEscalation` (`:105`, update at `:135`, `stepGated` at `:136`, gate bead at
   `:145`); a third `gated` site re-projects the whole node
   (`grid_engine/lib/src/circuit/session_scope.dart:1291`).
-- **Ruled.** Q5 (`wave-2-flip-scope-soak-and-kill-date`): NARROW — retire only `running`,
-  `pending`, `gated`; `complete`/`failed` stay KEPT until Stage 2/4. Q10
-  (`wave-2-entry-criteria-rulings`): the coexistence is a named §9 exception, exactly that
-  set.
-- **Design (r6).** The KEPT table is §W2.2. Two findings the rulings did not see, both
-  **r6 design, not ruled — a one-line Q5 amendment is requested:** (a) `gated` at the two
+- **Ruled.** Q5/Q10 are amended by
+  `the_grid#wave-2-kept-set-includes-gated-and-ready`: retire `running` and `pending`; keep
+  `complete`, `failed`, `gated`, and `ready`. The coexistence remains the named §9
+  exception.
+- **Design (r6, now ratified).** The KEPT table is §W2.2. (a) `gated` at the two
   `capability_host.dart` park sites has the SAME one-call-one-map shape as
   `complete`/`failed` — the exhaustion park is the SOLE carrier of the exhausted
   `restartCount` (the park RETURNS at `capability_host.dart:857-865`, before the `failed`
   write at `:869-877`), and the route park is the sole carrier of the route verdict; r6
-  therefore carries `gated` as **KEPT-PENDING-RULING** at all three sites (uniform rule; the churn cost is 288 of 18,796
+  therefore keeps `gated` at all three sites (uniform rule; the churn cost is 288 of 18,796
   step writes, 1.5%) and the retirement that is buildable regardless is `running` +
   `pending` (8,868 of 18,796, 47%). (b) `ready` (a positive terminal with a rendezvous
-  payload, `capability_host.dart:703-709`) is unnamed by Q5; r6 carries it KEPT with `complete` — same shape.
+  payload) is KEPT with `complete` — same shape.
   The B-M2 durability requirement is met trivially under narrow: the tg-0zq8 breaker's
   count never leaves the bead.
-  **THE AMENDMENT GATES THE BUILD (verify-1).** "KEPT-PENDING-RULING" is not a disposition
-  the build may proceed under: Q5 and Q10 name a retiring set that includes `gated`, so
-  until the one-line amendment is ruled, §W2.2 and W2-A disagree with a ratified entry and
-  the retiring set is UNDETERMINED. So: (i) "the Q5/Q10 amendment on `gated` and `ready` is
-  ruled" is an explicit item of W2-A's gate and of W2-C's pre-flip evidence pack; (ii) both
-  branches are written out in §W2.2, because if the operator DECLINES the amendment, `gated`
-  retires and the exhausted `restartCount` and the route verdict each need a second carrier
-  BEFORE that branch is built.
+  The formerly open fork is closed; no second carrier is required for this wave.
 - **Carrier.** §W2.2 + W2-A (the branch sites).
 
 ### E5 — `[fold-fidelity B3]` a suppressed append hangs an awaited ack; `_rearm` has no breaker
@@ -1280,11 +1242,10 @@ decide is marked **r6 design, not ruled**.
   `halted`) that never completes; `_persistFailure` is private while R10's site is
   `SessionScope._rearm`, whose only failure path is a retryable flare.
 - **Tree.** Confirmed: `enqueue` is `void` (`trajectory_harness.dart:1178`); the suppress
-  arms are `:1183-1191` (mode) and `:1194-1196` (shutdown). `_rearm` is
-  `session_scope.dart:1525`; its bead write is state-only
-  (`{MoleculeStepKeys.state: pending}`, `:1566-1569`) followed by `stepRearmed`
-  (`:1574`); every failure path is `_flareRearmFailed` (`:1538`, `:1545`, `:1587`; defined
-  `:1598`). No `appendAcked` exists.
+  arms are in `packages/grid_sdk/lib/src/trajectory/trajectory_harness.dart`.
+  `_rearm` is at `packages/grid_engine/lib/src/circuit/session_scope.dart:1795`; its
+  shadow bead write is state-only and is followed by `stepRearmed`. The shipped
+  `TrajectoryHarness._appendDecisionBearing` is the one discipline-scoped await policy.
 - **Ruled.** Q3 covers it (same entry): sealed `{Acked, Dropped, Suppressed}` that always
   completes; decision-bearing sites treat `Dropped`/`Suppressed` as the breaker, never a
   retry; `_rearm`'s failure path becomes a gate.
@@ -1322,10 +1283,11 @@ decide is marked **r6 design, not ruled**.
 
 - **Was.** The tick reap and the barrier key on a P1-terminal session; a dropped terminal
   strands the worktree and disarms the barrier meant to catch it.
-- **Tree.** The terminal sites moved: `sessionVoided` at `session_scope.dart:724`, `:854`,
-  `:971`; `sessionCompleted` at `:1216`; `sessionEscalated` at `:1684` — all after the bd
-  close, fire-and-forget. **LANDED (tg-ffl6, #341):** `ExternalCloseTerminalObligation`
-  (`stage1_obligations.dart:320`; dartdoc `:286-306`) is a posture-independent tick query
+- **Tree.** The terminal sites are package-qualified and current:
+  `sessionVoided` at `packages/grid_engine/lib/src/circuit/session_scope.dart:795`, `:934`,
+  `:1203`; `sessionCompleted` at `:1488`; `sessionEscalated` at `:2000` — all after the bd
+  close. **LANDED (tg-ffl6, #341):** `ExternalCloseTerminalObligation`
+  (`packages/grid_runtime/lib/src/trajectory/stage1_obligations.dart:336`) is a posture-independent tick query
   fed by `SessionClosureProbe` (`:84`) over the state snapshot, with the rollback switch
   `TrajectoryConfig.reconcileLedgerCloses` (`trajectory_config.dart:64`, `:168`, default
   ON at every posture) and the idem key `terminal-reconcile:<attemptId>` (`stage1_obligations.dart:306`).
@@ -1333,15 +1295,13 @@ decide is marked **r6 design, not ruled**.
   truth; the terminal append becomes acked; a tick obligation reconciles ledger-closed/
   P1-open into an `attempt.terminal`; the reap and barrier read P1 only once that input is
   complete.
-- **Design (r6).** Two halves. (1) DELIVERED: the obligation. One vocabulary correction
-  the re-judge must see: the ruling says `provenance=inferred`; the shipped obligation
+- **Design (r6).** Two halves. (1) DELIVERED: the obligation. The ruling is amended by
+  `the_grid#terminal-provenance-word-is-reconstructed`: the shipped obligation
   writes `provenance='reconstructed'` (`stage1_obligations.dart:442-443`), deliberately — it shares the C2 heal's
   idem grammar and the `reconstructedTerminal` adjudication class, and the settlement
   exclusion (`t.provenance != 'reconstructed'`, `:231`) then keeps a healed terminal from
   ever being settled over. `inferred` is the tick's vocabulary for SETTLEMENTS (`:273`).
-  r6 records the shipped word; a one-word amendment to the entry is requested, and it rides
-  W2-A's doc list as a **BLOCKING** item (verify-1) — until it lands, this design states a
-  word a ratified entry contradicts, and no reader should have to reconcile the two. Census
+  The amendment ratifies that shipped word. Census
   correction from #341's review: 161 of the 267 orphans are retired `#rN` rounds the fold
   keeps OPEN by design (E9); 36 heads heal; 70 attempt-less heads stay open by rule (Q-A,
   open). (2) W2-A: under cut the three terminal appends become `appendAcked` (E5 class,
@@ -1502,18 +1462,18 @@ gated}` (`grid_engine/lib/src/sdk/circuit.dart:46-68`); the recorder's step reco
 
 | Step write | Site(s) | Facts the ONE map carries beyond `state` | Census share | r6 disposition |
 |---|---|---|---|---|
-| `running` | `capability_host.dart:684-688` (`_persistStarted`, `:673`) | `startedAt`; `restartCount` as a COPY of the node's value (`_moleculeMetadata`, `:651-671`); AND the `spawned` input the lease sweep reads RAW (`process_lease_vendor.dart:746-748` — E8) | 8,764 / 18,796 (47%) of RECORDS (below that in bd writes — see the note under this table) | **RETIRES under cut (Q5), behind the lease sweep's adoption (E8).** The acked `stepRunning` (`:693`) is the transition; P2 carries `started_at`. |
-| `pending` | `session_scope.dart:1566-1569` (`_rearm`) | none — state only | 104 (0.6%) | **RETIRES under cut (Q5).** The acked `stepRearmed` (`:1574`) is the transition (the I-14 kill). |
-| `gated` | `capability_host.dart:940-945` (exhaustion park: `restartCount: attempts`, `failureReason`); `:1057-1062` (route-escalate park: `ResultKeys.routeVerdict`); `session_scope.dart:1291` (whole-node re-projection); all through `persistRaisedEscalation` `:105`/`:135` | the EXHAUSTED breaker count (sole carrier — the park RETURNS at `:857-865`, before the `failed` write at `:869-877`); the route verdict result key | 288 (1.5%) | **UNDETERMINED UNTIL THE Q5/Q10 AMENDMENT IS RULED — and the amendment GATES W2-A and W2-C** (verify-1). *If amended:* KEPT with `complete`/`failed`, uniform rule, 1.5% of churn forgone. *If declined:* `gated` retires as Q5 says, and the exhausted `restartCount` and the route verdict each need a SECOND CARRIER designed and built before that branch is written. The gate BEAD (`createGate`, `:145`) is a separate bd write and KEPT either way. |
-| `ready` | `capability_host.dart:710-719` (`_persistReady`; rendezvous payload merged via `nodeResultMetadata`) | `grid.result.*` (the daemon's published endpoint, read pull-free by dependents — D-5) | 0 in the measured window — daemon steps only. It IS a `step.transition` state (`stepReady`, `station_trajectory_recorder.dart:1183-1201`; the P2 enum lists it, `trajectory_schema.dart:174`); the census simply had no row for it (verify-1 wording fix) | **KEPT, pending the same Q5/Q10 amendment** (r6 design, not ruled — unnamed by Q5; same one-call-one-map shape as `complete`). |
-| `complete` | `capability_host.dart:738-745` (`_persistComplete`) | `grid.result.*` (grade, pr_url — the rework cap's evidence and the route step's input) | 9,062 (48%) | **KEPT until Stage 2/4 (Q5).** |
-| `failed` | `capability_host.dart:869-877` (`_persistFailureClassed`, `:839`) | `restartCount: next`, `cooldownUntil`, `failureReason` — the tg-0zq8 breaker (R11) | 578 (3%) | **KEPT until Stage 2/4 (Q5).** R8 and R11 are the same write; "R11 KEPT" is now consistent because R8 does not retire this site. |
+| `running` | `packages/grid_engine/lib/src/circuit/capability_host.dart:731` (`_persistStarted`) | `startedAt`; `restartCount` as a COPY of the node's value; AND the `spawned` input the lease sweep formerly read RAW | 8,764 / 18,796 (47%) of RECORDS (below that in bd writes — see the note under this table) | **RETIRES under cut**, behind the lease sweep's P2 adoption (E8). The acked `stepRunning` is the transition; P2 carries `started_at`. |
+| `pending` | `packages/grid_engine/lib/src/circuit/session_scope.dart:1795` (`_rearm`) | none — state only | 104 (0.6%) | **RETIRES under cut.** The acked `stepRearmed` is the transition (the I-14 kill). |
+| `gated` | `packages/grid_engine/lib/src/circuit/capability_host.dart` exhaustion and route-escalate parks; `session_scope.dart` whole-node re-projection; all through `persistRaisedEscalation` | the EXHAUSTED breaker count (sole carrier); the route verdict result key | 288 (1.5%) | **KEPT** with `complete`/`failed`, per `the_grid#wave-2-kept-set-includes-gated-and-ready`. The gate BEAD is separately KEPT. |
+| `ready` | `packages/grid_engine/lib/src/circuit/capability_host.dart:779` (`_persistReady`; rendezvous payload merged via `nodeResultMetadata`) | `grid.result.*` (the daemon's published endpoint, read pull-free by dependents — D-5) | 0 in the measured window — daemon steps only. It IS a `step.transition` state; the census simply had no row for it | **KEPT**, per `the_grid#wave-2-kept-set-includes-gated-and-ready`. |
+| `complete` | `packages/grid_engine/lib/src/circuit/capability_host.dart:810` (`_persistComplete`) | `grid.result.*` (grade, pr_url — the rework cap's evidence and the route step's input) | 9,062 (48%) | **KEPT until Stage 2/4.** |
+| `failed` | `packages/grid_engine/lib/src/circuit/capability_host.dart:919` (`_persistFailureClassed`) | `restartCount: next`, `cooldownUntil`, `failureReason` — the tg-0zq8 breaker (R11) | 578 (3%) | **KEPT until Stage 2/4.** R8 and R11 are the same write; "R11 KEPT" is now consistent because R8 does not retire this site. |
 
 Session-family writes (R1–R7, the re-keys, the gate sweep inputs) stay KEPT exactly as the
 MOVED-OUT table below states; wave 2 adds ONE session-bead key at mint —
 `grid.session.discipline` — beside the existing `SessionBeadKeys` vocabulary
 (`session_bead.dart:40-50`), written by `createSession`
-(`grid_runtime/lib/src/lifecycle/station_bead_writer.dart:301`), because the quiesce rule
+(`grid_runtime/lib/src/lifecycle/station_bead_writer.dart:338`), because the quiesce rule
 (W2-A) needs to know a session's write era from the ledger alone.
 
 **What this buys and what it does not.** The retiring set is 47–49% of `step.transition`
@@ -1533,8 +1493,8 @@ until Stage 2/4; the audit's "half the win" is the honest description.
 | Finding | r6 disposition (verified) | Ruling / bead |
 |---|---|---|
 | O-M1 / F-B3 | `_persistFailure` stays private and is never the ack-failure route. Under narrow the ONLY decision-bearing step appends are `stepRunning` and `stepRearmed`; their `Dropped`/`Suppressed` halt (E2), so no site needs a path into the breaker. `_rearm` gets its own gate under cut. | Q3; tg-ppo5 |
-| O-M2 | Storm budget = the halt: no new mounts until the operator clears it; one gate, ONE flare — its OWN, `trajectory.admissionHalted`, never the harness's `trajectory.halted` (verify-1: that one fires under `_latchHalted`'s `_latched` guard and suppresses every subsequent append, `trajectory_harness.dart:1655-1664`) — and running sessions drain. The gate SEAM is not `createGate` for the terminal class or for a station-wide halt (E2); a station-scoped gate on `StationBeadWriter` is WANTED and UNFILED. A blip under cut is one bounce, never a demotion storm. | Q3; tg-ppo5 |
-| O-M3 | Abort/flip-back = the same halt, operator-invoked: freeze admission → drain to zero open cut-era sessions → `down` → boot `shadow`; the quiesce check refuses a shadow boot while any `grid.session.discipline=cut` session is open. One rule, both directions (W2-C). A StationControl verb to invoke the halt is wanted and UNFILED. | Q2 (rollback pre-cut only); W2-C |
+| O-M2 | Storm budget = the halt: no new mounts until the operator clears it; one gate, ONE flare — its OWN, `trajectory.admissionHalted`, never the harness's `trajectory.halted` — and running sessions drain. tg-v2rm supplies the station-scoped `StationBeadWriter.createStationGate` seam for terminal and station-wide loss. A blip under cut is one bounce, never a demotion storm. | Q3; tg-ppo5; tg-v2rm |
+| O-M3 | Abort/flip-back = the same halt, operator-invoked through filed verb `tg-9ud2`: freeze admission → drain to zero open cut-era sessions → `down` → boot `shadow`; the quiesce check refuses a shadow boot while any `grid.session.discipline=cut` session is open. One rule, both directions (W2-C). | Q2 (rollback pre-cut only); W2-C; tg-9ud2 |
 | O-M4 | W2-D gets its own gate: three clean boots UNDER CUT on the §W2.5 table plus a stranded-worktree count of zero from the reap obligation, plus operator ratification of the deletion set. | W2-D |
 | O-M6 / C-M5 | `mountAttemptId` is NOT nullable — required by the record (`admission_records.dart:218-225`) and the envelope (`:233-238`, "minted per admission evaluation — grant OR refusal"); the barrier mints one per evaluation through the authority's existing minter without writing a reservation (reservations are grant-side, `station_admission_authority.dart:623-642`). `substation` is SERVICE-DERIVED from the store prefix — the envelope's own words at `grid_trajectory/lib/src/codec/envelope.dart:107-110` ("service-derived from the store prefix — §2.6 rule 7"), which is the same value the seat config carries as `substationConfig.substationId` (`grid_engine/lib/src/domain/substation_config.dart:17`, referenced at `work_list.dart:48`); the first draft cited `work_list.dart:304`, which is the RESIDENT clause and names no substation (verify-1). **`snapshotRev` is UNRESOLVED and the first draft's substitution is withdrawn (verify-1).** Q7 says "`snapshotRev` from the joined snapshot the authority evaluated"; `JoinedSnapshot` carries no revision (`grid_engine/lib/src/domain/joined_snapshot.dart` — no `version`/`rev` field) and the bridge mints none. `snapshot_version` is NOT that value: it is `TrajectoryHeadSnapshot.version`, whose own dartdoc reads "Bumped on every published change" (`grid_engine/lib/src/domain/trajectory_views.dart:174-176`) — the P1 MIRROR's publish counter, which churns on every fold apply and would re-key `refused:<bead>:<clause>:<snapshotRev>` on an unchanged basis while missing a changed bd basis whose mirror did not move. That destroys the level shape the ratified key exists for. The design is therefore: source `snapshotRev` from a BEAD-SCOPED ELIGIBILITY BASIS REVISION — a bridge-side value that changes only when the joined snapshot's content for THAT candidate changes — which does not exist and must be added. **Carrier: UNFILED; file it with the comparator bead, ahead of W2-B.** Until it exists, W2-B keeps the 30 s per-bead dedupe (below) and `admission.refused` is not decision-bearing (M-6/E2). If no such revision can be built before the flip, Q7 re-opens rather than being satisfied with a fold-side counter. | Q7; W2-B |
 | O-M7 | ONE site: `GRID_G1_BREAK_GLASS` is resolved into the config at assembly, in the same resolution step as E1's implication, BEFORE any posture read; the two bypass targets — the `CutPostureRefused` check and the quiesce check in `StationWorkRuntime.start()` — read the RESOLVED discipline only. | Q11; W2-A |
@@ -1552,27 +1512,26 @@ until Stage 2/4; the audit's "half the win" is the honest description.
 
 ### W2-A (old C5) — Cut posture + quiesce + break-glass + acked appends + the P6 mirror/tick reap
 
-**Buildable now:** the lever (tg-rcm3) and the breaker (tg-ppo5). **Gated on the §W2.5
-certificate:** everything that branches a write. **Also gated, on a RULING rather than the
-soak (verify-1):** the write-branch half waits on the Q5/Q10 amendment that disposes `gated`
-and `ready` (E4), because until it is ruled the retiring set is undetermined. **Also gated
-on two UNFILED carriers named in this round:** the station-scoped gate seam the breaker's
-gate half needs (E2) and the bead-scoped eligibility basis revision W2-B's refusal key needs
-(§W2.3 O-M6/C-M5).
+**Buildable prerequisites landed:** the lever (tg-rcm3), breaker (tg-ppo5), station-scoped
+gate seam (tg-v2rm), and discipline-scoped decision awaits (tg-f0fn). The §W2.5 certificate
+gates everything that branches a write. The Q5/Q10 and Q6 forks are now closed by
+`the_grid#wave-2-kept-set-includes-gated-and-ready` and
+`the_grid#terminal-provenance-word-is-reconstructed`.
 
 1. **The lever (E1/Q2).** `TrajectoryConfig.discipline {shadow, cut}` as E1 states it;
    `cut` ⇒ `dualRead: primary` + `mode: required`, resolved once, and `asDisabled` forces
    `discipline: shadow` so a dry arm is never cut (E1's dry-arm rule). TWO refusals, two
    sites (E1/C-M2): the requested-posture disagreement is validated at ASSEMBLY before any
    mutation; the harness-not-`live`-under-cut refusal sits after `trajectory.start()`
-   (`work_assembly.dart:273`), latches so a retry re-refuses, unwinds by shutting the
+   (`grid_sdk/lib/src/work/work_assembly.dart`), latches so a retry re-refuses, unwinds by shutting the
    trajectory down and releasing the epoch, and rethrows. Both MUST propagate out of
    `start()` and abort the boot.
-2. **The session stamp.** `createSession` (`station_bead_writer.dart:301`) writes
+2. **The session stamp.** `createSession`
+   (`grid_runtime/lib/src/lifecycle/station_bead_writer.dart`) writes
    `grid.session.discipline` = the resolved discipline. A session with no stamp is
    shadow-era.
 3. **The quiesce rule, both directions, placed (C-m4).** After `replayTeardownTail`
-   (`work_assembly.dart:300`), before `_driver.start()` (`:304`): a `cut` boot refuses
+   (`grid_sdk/lib/src/work/work_assembly.dart`), before `_driver.start()` in that file: a `cut` boot refuses
    while any OPEN session bead lacks `discipline=cut` (its step facts live on a carrier
    the cut no longer writes — the operator drains under shadow first); a `shadow` boot
    refuses while any OPEN session bead carries `discipline=cut` (its `running`/`pending`
@@ -1582,14 +1541,19 @@ gate half needs (E2) and the bead-scoped eligibility basis revision W2-B's refus
    `SessionProjection` has no metadata map (`grid_engine/lib/src/domain/session_projection.dart`
    is a freezed value with named fields only) — so the check reads the SESSION BEADS off the
    reconciler's fresh STATE snapshot, exactly the way the lease sweep builds its candidates
-   (`restart_reconciler.dart:1055-1063`), not off a projection. It is a read, never a write,
+   (`grid_engine/lib/src/restart/restart_reconciler.dart`), not off a projection. It is a read, never a write,
    and it needs no new projection field.
    **The scope, picked (verify-1).** The predicate quantifies over EVERY open session bead
    on the station, not only the target seats: `discipline` is one station-wide config value
-   (`trajectory_config.dart:54-67`), so a single long-open session on a non-target seat —
+   (`grid_sdk/lib/src/trajectory/trajectory_config.dart`), so a single long-open session on a non-target seat —
    the_grid's own included, which Q1 forbids driving — refuses the cut boot until it is
    drained or voided. W2-C's checklist is corrected to match: the drain covers every attached
    seat, and un-stamping the non-target seats only stops NEW work mounting there.
+   Operator-paused sessions are deliberately INCLUDED, per
+   `the_grid#pause-is-a-non-terminal-blocking-disposition`: pause releases capacity but
+   preserves the open session id and cursor for a later resume, so excluding it would permit
+   that resumed session to cross carriers. The refusal names it for an explicit void-or-resume
+   operator choice rather than silently re-running it.
 4. **Break-glass (Q11, O-M7).** `GRID_G1_BREAK_GLASS=<reason>` (the name is r2's; the
    space half may rename the env) is resolved at assembly into the config BEFORE any
    posture read: it forces `discipline: shadow` for the boot and carries the reason. Both
@@ -1615,15 +1579,15 @@ gate half needs (E2) and the bead-scoped eligibility basis revision W2-B's refus
    exception in it. **r6 design, not ruled:** the void-on-entry rule, the stamp names, and
    the post-W2-D meaning.
 5. **Acked appends and the R-set branches (E2/E5/Q3, Q5).** Under `cut`:
-   - `_persistStarted` (`capability_host.dart:673`) skips the bead update (`:684-688`) and
-     awaits `appendAcked(stepRunning)`; `_rearm` (`session_scope.dart:1525`) skips
-     `:1566-1569` and awaits `appendAcked(stepRearmed)`; the three session terminals
-     (`session_scope.dart:724`/`:854`/`:971` voided, `:1216` completed, `:1684`
-     escalated) await their ack AFTER the KEPT bd close, exactly as today's order. Every
+   - `_persistStarted` (`grid_engine/lib/src/circuit/capability_host.dart`) skips its bead
+     update and awaits `stepRunning`; `_rearm`
+     (`grid_engine/lib/src/circuit/session_scope.dart`) skips its bead update and awaits
+     `stepRearmed`; every `sessionVoided`, `sessionCompleted`, and `sessionEscalated` site in
+     `session_scope.dart` awaits its result AFTER the KEPT bd close, exactly as today's order. Every
      other recorder call stays `enqueue` (C-M1).
    - `Acked` ⇒ continue. `Dropped`/`Suppressed` ⇒ the HALT (E2): admission latched, the
      gate minted through whichever seam the class allows (E2 — step class through
-     `createGate`, terminal class and station-wide through the UNFILED station-scoped seam),
+     `createGate`, terminal class and station-wide through tg-v2rm's station-scoped seam),
      `trajectory.admissionHalted{reason, recordClass}` flared, no retry, no demotion. The
      running session continues to ITS terminal; its terminal's bd close is KEPT, so
      tg-ffl6's obligation repairs a lost terminal ack on the next healthy boot. Every
@@ -1631,33 +1595,35 @@ gate half needs (E2) and the bead-scoped eligibility basis revision W2-B's refus
      (E5's lifecycle contract), and an ack that misses its one-tick deadline completes as
      `Dropped`.
    - **`running` does not retire until the LEASE SWEEP adopts a fold read (E8).** Its
-     `spawned` derivation reads the step bead's state raw (`process_lease_vendor.dart:746-748`
-     over `restart_reconciler.dart:1055-1071`), and a `pending`-reading bead silences the
-     loud unfindable-process-group report. Adopt, or keep the write.
-   - `complete`/`failed`/`ready`/`gated` sites are untouched (§W2.2) — subject to the Q5/Q10
-     amendment: if it is DECLINED, `gated` retires and its two sole-carrier facts need a
-     second carrier designed first.
+     `spawned` derivation reads the step bead's state raw in
+     `grid_engine/lib/src/molecule/process_lease_vendor.dart`; the lease sweep in
+     `grid_engine/lib/src/restart/restart_reconciler.dart` therefore adopts the serviceable
+     P2 state before calling the vendor. A raw `pending` bead no longer silences the loud
+     unfindable-process-group report.
+   - `complete`/`failed`/`ready`/`gated` sites are untouched (§W2.2), as ratified by
+     `the_grid#wave-2-kept-set-includes-gated-and-ready`.
    - Under `shadow` every site is byte-identical to today (tg-ppo5 AC-7; tg-rcm3 AC-6).
 6. **The P6 mirror + the tick worktree reap (single home, O-B4).** Wave 1 built no P6
    mirror; W2-A seeds one from `proj_process_identity`
-   (`trajectory_schema.dart:254-268`; `worktree_state` at `:262`, `last_seq` at `:264`),
+   (`packages/grid_trajectory/lib/src/ddl/trajectory_schema.dart:254`;
+   `worktree_state` at `:262`, `last_seq` at `:264`),
    maintained post-ACK like P1/P2 (§0.2), evicted on `last_seq` age AND
    `worktree_state != 'live'` — E9's single predicate; live rows are unbounded by the
    horizon by design and bounded by the reap below. Under cut the
-   inline reap in `_completeAndClose` (`session_scope.dart:1153-1185`) branches OUT and a
+   inline reap in `_completeAndClose`
+   (`grid_engine/lib/src/circuit/session_scope.dart`) branches OUT and a
    tick obligation reaps: for each P6 row `worktree_state='live'` whose session is
    TERMINAL — P1 `status='closed'` OR the ledger says closed (`SessionClosureProbe`,
-   `stage1_obligations.dart:84` — Q6's input) — reap through the `ReapWorktree` seam
-   (`session_scope.dart:80`, `:126`), then append `worktree.reaped`/`worktree.held` keyed
+   `grid_runtime/lib/src/trajectory/stage1_obligations.dart` — Q6's input) — reap through
+   the `ReapWorktree` seam, then append `worktree.reaped`/`worktree.held` keyed
    on disk state, exactly the shape `WorktreeReapedBackfillObligation`
-   (`stage1_obligations.dart:462`; SQL `:479-486`) already runs for the record-only half —
-   its dartdoc names the live reap as "the CUT's live-reap obligation" (`:459-461`). Under
+   (`grid_runtime/lib/src/trajectory/stage1_obligations.dart`) already runs for the
+   record-only half. Under
    shadow the backfill obligation keeps running and the inline reap keeps reaping.
 7. **The restore runbook (E3/Q4)** is W2-A's operator text, verbatim from E3.
 8. **Docs riding the PR:** the §7 amendment (C-M3), the stage1-wiring §2.3 settle row
    (C-m2), the §9 exception cross-reference to §W2.2 (Q10), the `required` contract line,
-   the break-glass ladder, and — **BLOCKING (verify-1)** — the one-word Q6 amendment on
-   `inferred`/`reconstructed` (E6-a) plus the Q5/Q10 amendment on `gated`/`ready` (E4).
+   the break-glass ladder, the ratified `reconstructed` word, and the amended Q5/Q10 kept set.
 
 **Test plan (additions to tg-rcm3/tg-ppo5's ACs):** quiesce both directions with stamped and
 unstamped fixtures; break-glass voids cut-era sessions and stamps every listed key; a
@@ -1736,9 +1702,9 @@ lenny + butane with shape coverage) ∧ W2-A ∧ W2-B landed with their suites �
 break-glass drill on the scratch home (boot cut with a cut-era session open, break-glass
 in, verify the void + stamps) ∧ one restore drill on the scratch home (the E3 runbook end
 to end, verify zero re-drive of completed work) ∧ `traj show` lifecycle sample ∧ **the
-Q5/Q10 amendment on `gated`/`ready` RULED** (E4 — without it the retiring set is
-undetermined and W2-A's branch list is unfixed) ∧ **the Q6 one-word amendment on
-`inferred`/`reconstructed` ruled** (E6-a) ∧ **zero open shadow-era sessions ANYWHERE on the
+Q5/Q10 kept-set amendment receipt** (`the_grid#wave-2-kept-set-includes-gated-and-ready`)
+∧ **the Q6 provenance receipt** (`the_grid#terminal-provenance-word-is-reconstructed`)
+∧ **zero open shadow-era sessions ANYWHERE on the
 station, not only on the target seats** (verify-1: the quiesce quantifies over every open
 session bead, so one long-open session on a non-target seat refuses the boot) ∧ the barrier
 clause's observe-form counters from the shadow boots (W2-B).
@@ -2281,22 +2247,22 @@ round, needs a ruling · **LANDED** = shipped on main.
 
 | finding | disposition | ruling / bead / landing |
 |---|---|---|
-| E1 (O-B1) no lever×dualRead interlock | **RULED** — one lever; `cut` ⇒ `primary` + `required`, resolved once; `CutPostureRefused` after `trajectory.start()` (`work_assembly.dart:273`); C3/C4 rollback amended to pre-cut only (this revision) | Q2 (`wave-2-entry-criteria-rulings`); tg-rcm3 |
+| E1 (O-B1) no lever×dualRead interlock | **RULED** — one lever; `cut` ⇒ `primary` + `required`, resolved once; `CutPostureRefused` is checked at the first executable line of `assembleStationWork`, while `CutTrajectoryUnavailable` is checked after `trajectory.start()` (`packages/grid_sdk/lib/src/work/work_assembly.dart`) | Q2 (`wave-2-entry-criteria-rulings`); tg-rcm3; W2-A |
 | E2 (O-B2 / C-B4) `compromised` demotes to a dead carrier under cut | **RULED+r6** — accounting split from the REQUEST (`decisionBearing` flag on `TrajectoryAppendRequest`, `trajectory_harness.dart:82`); only decision-bearing drops latch (`:1010`); under cut = HALT via an `admission-halted` clause at both `composeMountEligibility` sites (`work_list.dart:303`, `station_admission_authority.dart:671`), one gate, the existing `trajectory.halted` flare (`trajectory_harness.dart:1663`) | Q3; tg-ppo5 |
-| E3 (O-B3) restore+replay regresses silently | **RULED+r6** — quiesced void-and-redrive runbook (W2-A item 7 / E3): station down by `traj_quiesce.dart`'s two witnesses → restore → `traj replay` → void EVERY open ledger session (not only P1-open) → boot; tg-ffl6 heals, remint-on-void re-drives. Optional `rebuilt_at` belt recorded, not built | Q4; W2-A (unfiled) |
-| E4 (F-B2 / C-B1) KEPT set retires and keeps the same write | **RULED+r6** — NARROW: `running` (`capability_host.dart:684-688`) + `pending` (`session_scope.dart:1566-1569`) retire; `complete` (`capability_host.dart:738-745`), `failed` (`:869-877`) KEPT; §W2.2 names the set and cites Q10 | Q5, Q10; §W2.2 |
-| E4-a `gated` carries KEPT facts | **r6-FINDING** — the exhaustion park (`capability_host.dart:940-945`) is the SOLE carrier of the exhausted `restartCount` (the `failed` write is skipped on that branch, `:860-866`); the route park (`:1057-1062`) carries `routeVerdict`; both through `persistRaisedEscalation` (`:105`/`:135`). Carried KEPT-PENDING-RULING (1.5% of churn); Q5 amendment requested | needs a ruling |
-| E4-b `ready` unnamed by Q5 | **r6-FINDING** — `_persistReady` (`:710-719`) merges a rendezvous payload via `nodeResultMetadata` (D-5); carried KEPT with `complete` | needs a ruling (or silent acceptance at re-judge) |
-| E5 (F-B3) suppressed ack hangs; `_rearm` has no breaker | **RULED** — sealed `{Acked, Dropped, Suppressed}` beside `enqueue` (`trajectory_harness.dart:1178`), always completes; `_rearm` (`session_scope.dart:1525`) failure = gate under cut; recursion-guard secondary moot under narrow | Q3; tg-ppo5 |
-| E6 (F-B5) `attempt.terminal` decision-bearing but fire-and-forget | **LANDED + RULED+r6** — `ExternalCloseTerminalObligation` (`stage1_obligations.dart:320`, #341); the acked half rides W2-A at `session_scope.dart:724/:854/:971/:1216/:1684`; the barrier's terminal predicate = P1-closed OR ledger-closed | Q6; tg-ffl6 |
-| E6-a provenance vocabulary | **r6-FINDING** — Q6 says `inferred`; #341 writes `reconstructed` (`stage1_obligations.dart:442-443`) so the settlement exclusion (`:231`) protects the heal; r6 records the shipped word | one-word entry amendment requested |
+| E3 (O-B3) restore+replay regresses silently | **RULED+r6 + LANDED** — the [quiesced void-and-redrive runbook](restore-under-cut.md) halts admission → takes the station down → restores the paired state/trajectory snapshot → voids EVERY session open at that snapshot → proves the station-wide open set empty → boots cut → resumes admission. There is no head-stamp detector. | Q4; W2-A |
+| E4 (F-B2 / C-B1) KEPT set retires and keeps the same write | **RULED+r6 + LANDED** — NARROW: `running` (`CapabilityHostState._persistStarted`) + `pending` (`SessionScopeState._rearm`) retire under cut; `complete`, `failed`, `gated`, and `ready` stay KEPT. §W2.2 names the sole §9 exception. | `the_grid#wave-2-kept-set-includes-gated-and-ready`; §W2.2 |
+| E4-a `gated` carries KEPT facts | **RATIFIED KEPT** — the exhaustion park remains the sole bead carrier of exhausted `restartCount`; the route park retains `routeVerdict`; both remain behind `persistRaisedEscalation` in `packages/grid_engine/lib/src/circuit/capability_host.dart`. No second carrier is required in this wave. | `the_grid#wave-2-kept-set-includes-gated-and-ready` |
+| E4-b `ready` unnamed by Q5 | **RATIFIED KEPT** — `_persistReady` retains the rendezvous payload merged through `nodeResultMetadata`. | `the_grid#wave-2-kept-set-includes-gated-and-ready` |
+| E5 (F-B3) suppressed ack hangs; `_rearm` has no breaker | **RULED + LANDED** — tg-f0fn places the discipline switch once in `TrajectoryHarness._appendDecisionBearing`; the five engine call sites always await the returned sealed `{Acked, Dropped, Suppressed}` result, and `_rearm` routes loss to the station halt under cut. | Q3; tg-ppo5; tg-f0fn; W2-A |
+| E6 (F-B5) `attempt.terminal` decision-bearing but fire-and-forget | **LANDED + RULED+r6** — `ExternalCloseTerminalObligation` remains the ledger-close repair; every `sessionVoided`, `sessionCompleted`, and `sessionEscalated` call in `packages/grid_engine/lib/src/circuit/session_scope.dart` now awaits the harness result after the KEPT bd close; the barrier/tick terminal predicate is P1-closed OR ledger-closed. | Q6; tg-ffl6; W2-A |
+| E6-a provenance vocabulary | **RATIFIED `reconstructed`** — `ExternalCloseTerminalObligation` writes reconstructed testimony and `UnknownTerminalSettlementObligation` excludes it from settlement. | `the_grid#terminal-provenance-word-is-reconstructed` |
 | E7 (C-B3 / F-M3) `admission.refused` idem key | **RULED** — no amendment; ratified key at `admission_records.dart:269-270`; no recorder derivation exists today (verified) — W2-B adds it, armed at the cut (`trajectory-schema.md:1936-1942`) | Q7; W2-B |
 | E8 (O-B5 / C-B2 adoption half) cursor consumers | **RULED** — fold-backed `sessionDispositionOf` (`session_disposition.dart:86`) / `staleFences` (`:139`) on C3 under primary, counted fallback on `DualReadAccounting` (`session_head_read.dart:648`); all 14 + 4 call sites re-verified | Q8; tg-6zan |
 | E9 (F-B1 schema half) open-retired rows | **RULED+r6** — shape accepted (`session_head_delta.dart:217-220`); P6 eviction on `last_seq` age (`trajectory_schema.dart:264`), r6 default horizon 50,000 records | Q9; tg-ffl6 (source), W2-A (bound) |
 | E10 (W2-E) `GRID_INSTANCE_TOKEN` | **N** — sites re-verified (`capability_host.dart:405/:411/:413`, `allocation.dart:724`, `station_process_transport.dart:70`, `incarnation_env.dart:35/:57/:69`); last, behind W2-D | none needed |
 | O-M1 / F-B3 ack-failure routing has no seam | **RULED** — no site routes into `_persistFailure`; decision-bearing loss halts | Q3 |
 | O-M2 breaker storm | **RULED** — the halt IS the budget | Q3 |
-| O-M3 abort has no freeze | **RULED+r6** — flip-back = halt → drain → down → shadow boot; quiesce refuses otherwise; halt verb wanted, UNFILED | Q2/Q3; W2-C |
+| O-M3 abort has no freeze | **RULED+r6** — flip-back = halt through filed verb `tg-9ud2` → drain → down → shadow boot; quiesce refuses otherwise | Q2/Q3; W2-C; tg-9ud2 |
 | O-M4 C9 gated on one round | **RULED+r6** — W2-D gets its own three-boot gate under cut + ratification | W2-D |
 | O-M6 / C-M5 refusal sourcing | **RULED+r6** — `mountAttemptId` REQUIRED (`admission_records.dart:218-225`, `:233-238`), minted per evaluation; `substation` from seat config (`work_list.dart:304`, `envelope.dart:107-109`); `snapshotRev` from the bridge snapshot version — no such field on the authority today (verified) | Q7; W2-B |
 | O-M7 break-glass site list | **RULED+r6** — one resolution site; both targets read the resolved value; void-on-entry of cut-era sessions + stamp names are r6 design | Q11; W2-A |
@@ -2332,17 +2298,17 @@ not file). Duplicate findings across the two judges are adjudicated once and cro
 | finding | verdict | what the tree said, and what changed |
 |---|---|---|
 | B1 (ordering) `appendAcked` still hangs: the mode table is not the proof | **CONFIRMED-FIXED** | `_latchFencedOut` (`trajectory_harness.dart:1642-1652`), `_latchHalted` (`:1655-1664`) and `_degrade` (`:1669-1676`) each do `_suppressed += _queue.length; _queue.clear();`, and the drain timeout does `_dropped += _queue.length` (`:1449-1455`) — four paths that destroy a request ACCEPTED at `live`. E5 now states the completion contract on the REQUEST LIFECYCLE (complete exactly once; `Suppressed` at every queue-destroying site) and asks tg-ppo5's AC-5 for the latch case |
-| B2 (ordering) the halt's gate cannot be minted through the named seam; the flare is overloaded | **CONFIRMED-FIXED** | `createGate` (`station_bead_writer.dart:630-646`) requires `{substation, sessionId, nodePath}` and `_assertGateSessionOpen` (`:646`, refusal `:1393-1400`); a terminal-class loss lands after the KEPT bd close, so the session is CLOSED and the mint throws. `trajectory.halted` fires once from `_latchHalted` under `if (_latched) return;` and that latch suppresses every later append. E2 now splits step-class (`createGate`) from terminal/station-wide (a station-scoped seam, **UNFILED and named**) and gives the breaker its own flare `trajectory.admissionHalted` |
+| B2 (ordering) the halt's gate cannot be minted through the named seam; the flare is overloaded | **CONFIRMED-FIXED + LANDED** | `createGate` requires `{substation, sessionId, nodePath}` and therefore remains step-only. tg-v2rm added `StationBeadWriter.createStationGate`, keyed by boot epoch, for terminal/station-wide loss; `TrajectoryAdmissionHalt` owns both placements and emits its distinct `trajectory.admissionHalted` flare. |
 | B3 (ordering) / M6 (fold) the cut signal is a per-pass gauge | **CONFIRMED-FIXED** | `'miss_post_epoch': 'gauge'` (`session_head_read.dart:78`), `'p2_miss': 'gauge'` (`:109`), zeroed by `beginPass()` (`:816-829`). §W2.5 now gates on cumulative event-deduped TWINS and says the gate rows are explicitly not a last-pass read |
 | B4 (ordering) two structural zeros in the scoped signal | **CONFIRMED-FIXED** | `classifyDualReadMiss` returns `legacyEra` on a null `startedAt` (`:596-597`) AND on a null `firstEpochClaimedAt` (`:601-602`) — the second zeroes the gate for a whole boot. `null_started_at = 0` and `first_epoch_claimed_at != null` are now GATING rows |
 | B5 (ordering) / B4 (fold) `snapshotRev` sourced from a field that is not the ruled one | **CONFIRMED-FIXED (design), CARRIER UNFILED** | `JoinedSnapshot` has no revision (no `version`/`rev` field); `snapshot_version` is `TrajectoryHeadSnapshot.version`, "Bumped on every published change" (`trajectory_views.dart:174-176`) — the P1 mirror's publish counter, which churns per fold apply and breaks the ratified key's level shape. The substitution is WITHDRAWN; §W2.3 now names a bead-scoped eligibility basis revision that must be added (unfiled), W2-B KEEPS the 30 s dedupe until it lands, and Q7 re-opens rather than being satisfied by a fold-side counter |
-| B6 (ordering) E3 cites a deadness proof that does not exist | **CONFIRMED-FIXED** | `grep -rn refuseVoidMint packages` is EMPTY; the fence check is station-side `staleFences(...).where(_liveness)` + `_reportVoidRefused` (`station_admission_authority.dart:555-557`, `:809-817`, `:1363-1371`) and runs at the NEXT boot. E3 step 4 is restated as a HAND bd re-key with deadness true by construction, and the missing verb is named UNFILED |
+| B6 (ordering) E3 cites a deadness proof that does not exist | **CONFIRMED-FIXED + FILED** | The restore is quiesced by construction and uses filed session-void verb `tg-od2e`; the runbook adds no imaginary deadness proof and no hand-authored bd re-key. |
 | B1 (fold) retiring `running` strands the lease sweep's orphan detector | **CONFIRMED-FIXED** | `process_lease_vendor.dart:746-748` derives `spawned = state == running \|\| ready` from RAW bead metadata built at `restart_reconciler.dart:1055-1071`; under cut the bead reads `pending` and the LOUD unfindable-process-group report goes silent. `:728`'s `_isLatchedStepState` is unaffected (`:556-564`). E8's adoption set and W2-A item 5 now gate `running`'s retirement on the sweep adopting; the closed set of raw readers is enumerated |
 | B2 (fold) the cut-era P2-miss fallback re-creates the I-10 double-run | **REFUTED** | The named mechanism does not follow: the frontier treats `pending` and `running` IDENTICALLY — `StepState.pending => true` AND `StepState.running => true` (`frontier.dart:113-114`) — so a fallback reading `pending` instead of `running` changes no runnability, and the P2-MISS RULE's hazard is an OMITTED node, which does not occur (the node is present, with a state). The real residue of this finding is the raw-state reader in B1 (fold), which is fixed |
 | B3 (fold) fold-backed `staleFences` collapses a fence SET to one scalar | **CONFIRMED-FIXED** | `staleFences` walks every running/ready node's triple, deduped by pgid, scalar only when empty (`session_disposition.dart:139-158`); P2 has no pgid/pid/token column (`trajectory_schema.dart:171-182`) and P1 one per session (`:44`) — and tg-6zan's plan/AC-2 return exactly one fence. E8 now requires the fold fence set to be a UNION with the legacy per-node set (never fewer), with per-node fold fences deferred to the P6 mirror; tg-6zan's AC-2 gains the two-live-group case |
 | B5 (fold) three gate rows unscoped against known legacy residue | **CONFIRMED-FIXED** | epoch 50 measured `retirement_lag 63 (open 63)`, `terminal_lag open 20`, `cardinality_breaches 23` on legacy shapes; the table gated all three at 0 UNSCOPED, so the certificate was unreachable and the kill date would fire by default. The lag rows and `cardinality_breaches` are now scoped by `head_epoch >= soakWindowEpoch` like the divergence twins, and E9's false "§W2.5 scopes it out" sentence is corrected |
 | B6 (fold) the three schema staging sites do NOT all say "at the cut" | **CONFIRMED-FIXED** | `trajectory-schema.md:1371-1373` and `:1892-1897` still carry standing Stage-3 text for the `admission.refused`/`.restored` family, with only the BARRIER half struck; `:1936-1942` is the 2026-08-31 amendment that supersedes it. E7 quotes each site, names the superseding one, and W2-B's doc fix now STRIKES rather than cross-references. Arming the record at the cut is that amendment, not a second §9 partial cut |
-| M-1 (ordering) / M1 (fold) `gated` KEPT-PENDING-RULING leaves the retiring set undetermined | **CONFIRMED-FIXED** | Q5 and Q10 name `running`/`pending`/`gated`; the E4-a finding is true at the tree (`capability_host.dart:857-865` returns before the `failed` write at `:869-877`) but the disposition widened a ratified set by fiat. The amendment is now an explicit gate item on W2-A AND on W2-C's pre-flip pack, and §W2.2's row states BOTH branches |
+| M-1 (ordering) / M1 (fold) `gated` KEPT-PENDING-RULING left the retiring set undetermined | **CONFIRMED-FIXED + RATIFIED** | `the_grid#wave-2-kept-set-includes-gated-and-ready` closes the fork: `{running, pending}` retire and `{complete, failed, gated, ready}` remain KEPT. No second carrier is required in this wave. |
 | M-2 (ordering) the quiesce input is not on the surface it reads | **CONFIRMED-FIXED** | `SessionProjection` is a freezed value with named fields and no metadata map, so `grid.session.discipline` is invisible there. W2-A item 3 now names the carrier: the session BEADS off the reconciler's state snapshot (the shape `restart_reconciler.dart:1055-1063` already uses), no new projection field |
 | M-3 (ordering) a dry arm under cut is unspecified and both answers are wrong | **CONFIRMED-FIXED** | `asDisabled` forces `mode: disabled` and carries `dualRead` (`trajectory_config.dart:203-215`); at `disabled` `enqueue` silently returns (`trajectory_harness.dart:1179-1183`). E1 now makes `asDisabled` force `discipline: shadow` — a dry arm writes nothing, so it is shadow-era by definition |
 | M-4 (ordering) / M2 (fold) `CutPostureRefused` has no unwind and depends on an out-of-repo caller | **CONFIRMED-FIXED** | `start()` sets `_started = true` on its second line and returns early forever after (`work_assembly.dart:264-266`); its house style swallows subsystem failures (`:271-279`, `:298-302`). E1/C-M2 now split the two refusals — requested-posture at ASSEMBLY before any mutation, harness-not-`live` post-`start()` with a LATCH and a stated unwind — and state the caller obligation plus the in-repo AC that `start()` throws |
@@ -2366,9 +2332,36 @@ not file). Duplicate findings across the two judges are adjudicated once and cro
 | m3 (fold) the `mode` gate row cites the lag dartdoc | **CONFIRMED-FIXED** | `:975-979` is the five-number gate and never mentions `mode`; the row now cites `:997` and the dartdoc is left supporting the rows it does support |
 | m5 (fold) the C3/C4 splice cites start on comment lines | **CONFIRMED-FIXED** | The four-field rule is `station_join_bridge.dart:369-374` (splice `:375-378`); C4 is `:379-394` with the `copyWith` at `:391-394`. Both tightened in E8 |
 
-**What verify-1 leaves for the operator (nothing else is open):** the Q5/Q10 amendment on
-`gated`/`ready` (E4 — now a gate item, not a disposition), the one-word Q6 amendment on
-`reconstructed` (E6-a), Q7's re-opening if no bead-scoped basis revision can exist before the
-flip (§W2.3), and three UNFILED carriers this round names rather than files — the comparator/
-counter bead (§W2.5, FIRST in the order), the station-scoped gate seam (E2), and the
-void-every-open-session verb (E3). Verify pass 2 may proceed on this text.
+**What verify-1 left for the operator:** the Q5/Q10 and Q6 forks are now ratified and the
+station-scoped gate seam landed. Q7's re-opening and the later-wave comparator/counter and
+operator-verb work remain outside W2-A; this implementation does not silently absorb them.
+
+### W2-A implementation receipts (2026-09-13)
+
+The three r6 forks are closed. `the_grid#wave-2-kept-set-includes-gated-and-ready`
+ratifies the W2.2 kept set `{complete, failed, gated, ready}` and retiring set
+`{running, pending}`. `the_grid#terminal-provenance-word-is-reconstructed`
+ratifies `reconstructed` for external-close healing. Blocker `tg-f0fn` supplies
+Option A: the harness chooses acked-vs-immediate completion as a function of
+discipline; engine call sites contain no discipline branch.
+
+The mounted implementation anchors were re-read rather than inherited from
+r6: `grid_engine/lib/src/circuit/capability_host.dart` (`_persistStarted`,
+`_persistReady`, `_persistComplete`, `_persistFailureClassed`),
+`grid_engine/lib/src/circuit/session_scope.dart` (`_rearm`,
+`_completeAndClose`, every terminal recorder site),
+`grid_sdk/lib/src/work/work_assembly.dart` (trajectory start, teardown replay,
+driver start, and the single `TrajectoryConfig.resolveForAssembly` call), and
+`grid_runtime/lib/src/lifecycle/station_bead_writer.dart` (`createSession`).
+These symbol-qualified anchors are authoritative when line numbers drift.
+
+The quiesce scan includes every open station session, including non-target
+seats and operator-paused sessions. This explicitly composes
+`the_grid#pause-is-a-non-terminal-blocking-disposition`: pause frees capacity
+but preserves the open session id and cursor, so excluding it would allow that
+same session to resume across carriers. The raw complete `GraphSnapshot` is
+the carrier; `SessionProjection` remains unchanged.
+
+Requested-posture, required-harness, and discipline-quiesce refusals propagate and abort boot.
+
+`grid.session.discipline`, `grid.session.break_glass`, and the bidirectional quiesce refusal are permanent; W2-D does not delete them.

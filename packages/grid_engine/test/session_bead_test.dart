@@ -3,6 +3,21 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
 
 void main() {
+  group('session discipline birth fact', () {
+    test('only exact cut opts in; missing and unknown are shadow-era', () {
+      expect(sessionDisciplineOf(const {}), SessionDisciplineStamp.shadow);
+      expect(
+        sessionDisciplineOf(const {SessionBeadKeys.discipline: 'future'}),
+        SessionDisciplineStamp.shadow,
+      );
+      expect(
+        sessionDisciplineOf(const {SessionBeadKeys.discipline: 'cut'}),
+        SessionDisciplineStamp.cut,
+      );
+      expect(SessionBeadKeys.breakGlass, 'grid.session.break_glass');
+    });
+  });
+
   group('projectSession (the read half of the contract)', () {
     test('work-terminal composed metadata projects completion and reason', () {
       final projection = projectSession(

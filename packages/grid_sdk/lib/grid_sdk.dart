@@ -177,6 +177,7 @@ export 'src/trajectory/session_head_mirror.dart';
 // engine's `TrajectoryStepSnapshot` seam and its `byP2SessionId` index.
 export 'src/trajectory/step_cursor_mirror.dart';
 export 'src/trajectory/trajectory_config.dart';
+export 'src/trajectory/process_identity_mirror.dart';
 export 'src/trajectory/trajectory_harness.dart';
 
 // ── Station command extension ───────────────────────────────────────────────

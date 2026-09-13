@@ -21,6 +21,8 @@
 library;
 
 import 'package:beads_dart/beads_dart.dart';
+import 'package:grid_runtime/grid_runtime.dart'
+    show SessionDisciplineStamp, kSessionBreakGlassKey, kSessionDisciplineKey;
 
 import '../molecule/molecule_schema.dart';
 import 'rework.dart' show voidKeyFor;
@@ -32,6 +34,12 @@ import 'session_projection.dart';
 abstract final class SessionBeadKeys {
   /// The work bead this session drives (stamped at mint; the JOIN key).
   static const workBead = 'work_bead';
+
+  /// Permanent carrier-era birth fact. Absence is shadow-era compatibility.
+  static const discipline = kSessionDisciplineKey;
+
+  /// Break-glass reason stamped on sessions minted during that boot.
+  static const breakGlass = kSessionBreakGlassKey;
 
   /// The spawned agent's process-group id (stamped at `SessionStarted`; the
   /// legacy scalar restart orphan-kill fence).
@@ -116,6 +124,15 @@ abstract final class SessionBeadKeys {
   /// mount boundary that this session must re-compete for a concurrency slot.
   static const pauseState = 'grid.session.pause_state';
 }
+
+/// Reads the permanent carrier era from raw session metadata.
+///
+/// Only the exact `cut` wire value opts into cut semantics. Missing and
+/// unknown values are shadow-era by definition, preserving old sessions.
+SessionDisciplineStamp sessionDisciplineOf(Map<String, Object?> metadata) =>
+    metadata[SessionBeadKeys.discipline] == SessionDisciplineStamp.cut.wireValue
+    ? SessionDisciplineStamp.cut
+    : SessionDisciplineStamp.shadow;
 
 /// The [SessionBeadKeys.pauseState] vocabulary. Absence means [none].
 ///

@@ -529,6 +529,105 @@ void main() {
     });
   });
 
+  group('cut live-worktree reap obligation', () {
+    late Directory checkout;
+    late RootCheckout root;
+    late int reapCalls;
+
+    setUp(() {
+      checkout = Directory.systemTemp.createTempSync('w2-live-reap-');
+      root = RootCheckout(
+        path: checkout.path,
+        defaultBranch: 'main',
+        substation: 'proj',
+      );
+      reapCalls = 0;
+    });
+    tearDown(() => checkout.deleteSync(recursive: true));
+
+    LiveWorktreeReapObligation build({
+      SessionClosureProbe? closure,
+      ReapOutcome? outcome,
+    }) => LiveWorktreeReapObligation(
+      recorder: _recorder(),
+      sessionClosure: closure,
+      worktreeRoot: (_) => root,
+      reapWorktree:
+          ({
+            required root,
+            required worktree,
+            dryRun = false,
+            overrideUnsafe = false,
+          }) async {
+            reapCalls++;
+            return outcome ?? ReapOutcome.removed();
+          },
+    );
+
+    test('gone terminal path records reaped without calling git', () async {
+      final path = p.join(
+        WorktreeLayout.worktreesRoot(root.path),
+        'proj',
+        'tg-1',
+      );
+      final appends = await build().repair([
+        {
+          'session_id': 's-1',
+          'worktree': path,
+          'branch': 'grid/tg-1',
+          'head_status': 'closed',
+        },
+      ]);
+      expect(reapCalls, 0);
+      expect(appends.single.record, isA<WorktreeReaped>());
+      expect(appends.single.provenance, TrajectoryProvenance.observed);
+    });
+
+    test('ledger closure reaps a present path even while P1 is open', () async {
+      final path = p.join(
+        WorktreeLayout.worktreesRoot(root.path),
+        'proj',
+        'tg-2',
+      );
+      Directory(path).createSync(recursive: true);
+      final appends = await build(closure: (_) => const SessionClosure())
+          .repair([
+            {
+              'session_id': 's-2',
+              'worktree': path,
+              'branch': 'grid/tg-2',
+              'head_status': 'open',
+            },
+          ]);
+      expect(reapCalls, 1);
+      expect(appends.single.record, isA<WorktreeReaped>());
+    });
+
+    test('refusal records held with 0/1/null gate evidence', () async {
+      final path = p.join(
+        WorktreeLayout.worktreesRoot(root.path),
+        'proj',
+        'tg-3',
+      );
+      Directory(path).createSync(recursive: true);
+      final appends =
+          await build(
+            outcome: ReapOutcome.refused(
+              uncommitted: GateOutcome.clear,
+              unpushed: GateOutcome.present,
+              stashed: GateOutcome.probeError,
+              reason: 'unsafe',
+            ),
+          ).repair([
+            {'session_id': 's-3', 'worktree': path, 'head_status': 'closed'},
+          ]);
+      final held = appends.single.record as WorktreeHeld;
+      expect(held.uncommitted, 0);
+      expect(held.unpushed, 1);
+      expect(held.stashes, isNull);
+    });
+  });
+
   group('obligation 3 — the liveness detector', () {
     late Directory root;
     late _FakeDb db;
