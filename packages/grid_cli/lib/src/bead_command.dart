@@ -27,13 +27,14 @@ import 'station_command_client.dart';
 /// Operator bead commands serviced by the resident station.
 final class BeadCommand extends Command<int> {
   /// Creates the group. Every seam default-constructs, so a station runner
-  /// composes all three verbs with one `..addCommand(BeadCommand())` line.
+  /// composes all four verbs with one `..addCommand(BeadCommand())` line.
   BeadCommand({
     StationCommandClient? client,
     Stream<List<int>>? input,
     TrajectoryOpener? open,
   }) {
     addSubcommand(BeadSetCommand(client: client, input: input));
+    addSubcommand(BeadRearmCommand(client: client, input: input));
     addSubcommand(BeadBoardCommand(client: client));
     addSubcommand(BeadRoundCommand(client: client, open: open));
   }
@@ -43,6 +44,101 @@ final class BeadCommand extends Command<int> {
 
   @override
   String get description => 'Operate on resident-owned beads.';
+}
+
+/// `grid bead rearm <bead-id>` — rearm one exhausted mount-attempt record.
+final class BeadRearmCommand extends Command<int> {
+  /// Creates the resident-only rearm verb.
+  BeadRearmCommand({StationCommandClient? client, Stream<List<int>>? input})
+    : _client = client ?? StationCommandClient(),
+      _input = input {
+    _addGridRootOption(argParser);
+    argParser
+      ..addOption('actor', help: 'Operator identity recorded in the receipt.')
+      ..addOption('reason', help: 'Inline rearm reason.')
+      ..addOption('reason-file', help: 'UTF-8 reason file, or - for stdin.');
+  }
+
+  final StationCommandClient _client;
+  final Stream<List<int>>? _input;
+
+  @override
+  String get name => 'rearm';
+
+  @override
+  String get description =>
+      'Rearm one exhausted mount-attempt record through the resident.';
+
+  @override
+  Future<int> run() async {
+    final args = argResults!;
+    if (args.rest.length != 1 || args.rest.single.trim().isEmpty) {
+      stderr.writeln('grid bead rearm: exactly one bead id is required.');
+      return 64;
+    }
+    final root = _gridRoot(args, stderr.writeln, 'rearm');
+    if (root == null) return 64;
+    final actor = args.option('actor')?.trim();
+    if (actor == null || actor.isEmpty) {
+      stderr.writeln('grid bead rearm: --actor is required.');
+      return 64;
+    }
+
+    final inlineReason = args.option('reason');
+    final reasonFile = args.option('reason-file');
+    if ((inlineReason == null) == (reasonFile == null)) {
+      stderr.writeln(
+        'grid bead rearm: exactly one of --reason or --reason-file is required.',
+      );
+      return 64;
+    }
+
+    final String reason;
+    try {
+      reason = (await selectOperatorText(
+        inlineFlag: '--reason',
+        fileFlag: '--reason-file',
+        inlineValue: inlineReason,
+        filePath: reasonFile,
+        input: _input,
+      ))!;
+    } on OperatorTextUsage catch (error) {
+      stderr.writeln('grid bead rearm: ${error.message}');
+      return 64;
+    } on FileSystemException catch (error) {
+      stderr.writeln(
+        'grid bead rearm: cannot read --reason-file $reasonFile: ${error.message}',
+      );
+      return 64;
+    } on FormatException catch (error) {
+      stderr.writeln(
+        'grid bead rearm: --reason-file $reasonFile is not valid UTF-8: ${error.message}',
+      );
+      return 64;
+    }
+    if (reason.trim().isEmpty) {
+      stderr.writeln('grid bead rearm: reason must be nonblank.');
+      return 64;
+    }
+
+    final result = await _client.send(
+      gridRoot: root,
+      method: 'grid/mount-attempt/rearm',
+      params: {'beadId': args.rest.single, 'actor': actor, 'reason': reason},
+    );
+    switch (result) {
+      case StationCommandCompleted():
+        return 0;
+      case StationCommandRefused(:final message):
+        stderr.writeln('grid bead rearm: $message');
+        return 1;
+      case StationCommandUnavailable(:final message):
+        stderr.writeln(
+          'grid bead rearm: $message No direct fallback was attempted.',
+        );
+        return 69;
+    }
+  }
 }
 
 void _addGridRootOption(ArgParser parser) {
