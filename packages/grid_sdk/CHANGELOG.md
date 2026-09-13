@@ -1,3 +1,16 @@
+## 0.4.0-dev.3
+
+- Breaking: `projectBoard` drops its `linkBlockersByBeadId` named argument (#447). Every blocking
+  edge — same-store and cross-store alike — is now read inside the one store snapshot the
+  projection is given, because bd stores both on the consumer's own bead.
+- Migration: delete the `linkBlockersByBeadId:` argument at every `projectBoard(...)` call site; the
+  blocked-by set comes from the snapshot's own dependency rows and needs no pre-enforced map.
+- Wires the admission barrier into the work assembly (`admissionBarrier`,
+  `processIdentitySnapshot`) and forwards `onReadRefusal`, so an external-row read refusal reaches
+  the station's cross-store sink instead of dying in an unheard error stream (#445, #446).
+- Floors `beads_dart` at `^0.3.0-dev.2`, `grid_engine` at `^0.4.0-dev.3`, `grid_runtime` at
+  `^0.2.1-dev.2` and `grid_trajectory` at `^0.2.1-dev.2`.
+
 ## 0.4.0-dev.2
 
 - Publishes the sdk wiring main has carried unversioned since 0.4.0-dev.1: stranded work surfaced

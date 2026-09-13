@@ -1,3 +1,9 @@
+## 0.3.1-dev.2
+
+- Floors `beads_dart` at `^0.3.0-dev.2` — the external-dependency read surface this wave ships, so
+  every consumer of the 2026-09-13 grid wave resolves one coherent set.
+- No library changes; dependency floors only.
+
 ## 0.3.1-dev.1
 
 - Floors `beads_dart` at `^0.3.0-dev.1` (the 0.3.0 line carries the #420 guard, which is breaking for

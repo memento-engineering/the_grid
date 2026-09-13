@@ -1,3 +1,10 @@
+## 0.2.1-dev.2
+
+- Adds `traj certify` — the soak certificate as a PASS/FAIL verb over the last N boots — with its
+  pure fold (`src/cli/soak_certificate.dart`) and renderer
+  (`src/cli/soak_certificate_render.dart`) exported alongside the command (#441).
+- Additive only: no existing surface changed.
+
 ## 0.2.1-dev.1
 
 - Enforces the wave-2 cut boundary: decision-bearing appends are awaited only under a cut, and the

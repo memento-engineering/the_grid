@@ -1,3 +1,15 @@
+## 0.3.0-dev.2
+
+- Adds bd's NATIVE cross-project edge to the read surface. `BdCliService.queryGraph` reads the broad
+  query as a GRAPH — bd embeds each bead's dependency ROWS in its record, and that record surface is
+  the only bd read that carries a cross-project `external:` row — joined by `externalDepRows`,
+  `externalProjects`, `addLabels`, `ship`, and the shared `allStatusesQuery` expression (#445).
+- `CliSnapshotReader` surfaces those rows and REFUSES rather than publish a snapshot that cannot see
+  them; the refusal is reported once, on the rising edge, through a new optional `onRefusal` sink
+  (threaded as `GridRuntimeFactory.buildRuntime(onReadRefusal: ...)`) before it rethrows.
+- Adds the `Capability` model and the `BdExternalDepSurfaceUnavailable` exception.
+- Additive only: every existing member keeps its shape.
+
 ## 0.3.0-dev.1
 
 - Breaking: `BeadTextRefused` now requires the `call` argument (the bd argv the guard refused), so
