@@ -14,6 +14,12 @@ import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
 
+import 'support/molecule_spawn_semaphore.dart';
+
+// The shared cross-process spawn semaphore covers only each state trigger
+// through verification of its exact START, never running/completion or a
+// timeout increase.
+
 const _code = Circuit(
   id: 'code',
   terminalStepId: 'land',
@@ -539,11 +545,14 @@ void main() {
       m.owner.flush();
       await _pumpUntil(m.owner, () => f.runner.workCreates.length >= 2);
       expect(reg.events, isEmpty, reason: 'the joined pour still lags');
-      joined.push(
-        _joined({'tg-1': _moleculeProjection(sessionId: 'tgdog-sess1')}),
-      );
-      m.owner.flush();
-      await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
+      await MoleculeSpawnSemaphore.run(() async {
+        joined.push(
+          _joined({'tg-1': _moleculeProjection(sessionId: 'tgdog-sess1')}),
+        );
+        m.owner.flush();
+        await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
+        expect(reg.events, ['START agent(tgdog-sess1/tg-1/agent)']);
+      });
 
       // MINT: exactly one fresh session, plus its molecule pour (tg-eli
       // phase 2: every fresh mint pours a molecule graph) — the pre-fix
@@ -574,7 +583,6 @@ void main() {
 
       // The fresh round starts VIRGIN: the frontier mounts `agent`, NOT the dead
       // cursor's `verify` — a fresh session never inherits a dead row's cursor.
-      expect(reg.events, ['START agent(tgdog-sess1/tg-1/agent)']);
       expect(f.runner.neverShowOrSql, isTrue);
     });
 
@@ -621,21 +629,23 @@ void main() {
 
       // The join catches up: the dead key is gone (re-keyed) and the fresh
       // session projects its own cursor — `agent` done, so `verify` inflates.
-      joined.push(
-        _joined({
-          'tg-1': _moleculeProjection(
-            sessionId: 'tgdog-sess1',
-            states: const {
-              'agent': StepState.complete,
-              'verify': StepState.pending,
-              'land': StepState.pending,
-            },
-          ),
-        }),
-      );
-      m.owner.flush();
-      await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
-      expect(reg.events, ['START verify(tgdog-sess1/tg-1/verify)']);
+      await MoleculeSpawnSemaphore.run(() async {
+        joined.push(
+          _joined({
+            'tg-1': _moleculeProjection(
+              sessionId: 'tgdog-sess1',
+              states: const {
+                'agent': StepState.complete,
+                'verify': StepState.pending,
+                'land': StepState.pending,
+              },
+            ),
+          }),
+        );
+        m.owner.flush();
+        await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
+        expect(reg.events, ['START verify(tgdog-sess1/tg-1/verify)']);
+      });
       expect(f.runner.workCreates, hasLength(2));
     });
 
@@ -878,26 +888,29 @@ void main() {
       final f = buildFakes();
       final transport = _RecordingTransport();
       final reg = RecordingCapabilityRegistry(circuits: const {});
-      final m = _mount(
-        joined: JoinedSnapshotNotifier(
-          _joined(const {
-            'tg-1': SessionProjection(
-              workBeadId: 'tg-1',
-              sessionId: 'tgdog-live',
-              cursor: {'tg-1/agent': NodeCursor(state: StepState.running)},
-            ),
-          }),
-        ),
-        ctx: f.ctx,
-        registry: reg,
-        transport: transport,
-      );
-      addTearDown(m.owner.dispose);
-      await _pump();
-      m.owner.flush();
+      await MoleculeSpawnSemaphore.run(() async {
+        final m = _mount(
+          joined: JoinedSnapshotNotifier(
+            _joined(const {
+              'tg-1': SessionProjection(
+                workBeadId: 'tg-1',
+                sessionId: 'tgdog-live',
+                cursor: {'tg-1/agent': NodeCursor(state: StepState.running)},
+              ),
+            }),
+          ),
+          ctx: f.ctx,
+          registry: reg,
+          transport: transport,
+        );
+        addTearDown(m.owner.dispose);
+        await _pump();
+        m.owner.flush();
+        await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
+        expect(reg.events, ['START agent(tgdog-live/tg-1/agent)']);
+      });
 
       expect(f.runner.workCreates, isEmpty);
-      expect(reg.events, ['START agent(tgdog-live/tg-1/agent)']);
       expect(transport.flares, isEmpty);
     });
   });

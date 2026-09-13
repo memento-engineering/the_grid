@@ -18,6 +18,12 @@ import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
+import '../support/molecule_spawn_semaphore.dart';
+
+// The shared cross-process spawn semaphore covers only each state trigger
+// through verification of its exact START, never running/completion or a
+// timeout increase.
+
 /// The `code` circuit `track_c_session_scope_test.dart` also drives
 /// (`agent → verify → land`) — reused so the flat-mode assertions here read
 /// directly against that suite's own known-good shapes.
@@ -496,18 +502,37 @@ void main() {
           return false;
         }
 
-        Future<void> finish(String path) async {
+        Future<void> finish(
+          String path, {
+          required Future<void> Function() trigger,
+        }) async {
           final name = 'tgdog-sess1/$path';
-          final beadId = switch (path) {
-            'tg-9/build' => currentBuildStepId,
-            'tg-9/critic' => 'tgdog-step9-critic',
-            'tg-9/land' => 'tgdog-step9-land',
-            _ => throw StateError('unknown step path $path'),
-          };
-          await _pumpUntil(
-            () => f.provider.started.any((s) => s.name == name),
-            what: 'process $name to start',
-          );
+          late final String beadId;
+          final priorStarts = f.provider.started
+              .where((started) => started.name == name)
+              .length;
+          await MoleculeSpawnSemaphore.run(() async {
+            await trigger();
+            beadId = switch (path) {
+              'tg-9/build' => currentBuildStepId,
+              'tg-9/critic' => 'tgdog-step9-critic',
+              'tg-9/land' => 'tgdog-step9-land',
+              _ => throw StateError('unknown step path $path'),
+            };
+            final expectedStarts = path == 'tg-9/build' ? priorStarts + 1 : 1;
+            await _pumpUntil(
+              () =>
+                  f.provider.started
+                      .where((started) => started.name == name)
+                      .length ==
+                  expectedStarts,
+              what: 'process $name to start',
+            );
+            expect(
+              f.provider.started.where((started) => started.name == name),
+              hasLength(expectedStarts),
+            );
+          });
           f.provider.emit(SessionStarted(name: name, pid: 10, pgid: 10));
           await _pumpUntil(
             () => hasStepStamp(beadId, StepState.running),
@@ -538,13 +563,14 @@ void main() {
         );
         expect(f.runner.graphApplyCalls.single, isNot(contains('--ephemeral')));
 
-        await pushMolecule();
-        await finish('tg-9/build');
+        await finish('tg-9/build', trigger: pushMolecule);
         expect(hasStepStamp('tgdog-step9-build', StepState.running), isTrue);
         expect(hasStepStamp('tgdog-step9-build', StepState.complete), isTrue);
 
-        await pushMolecule(build: StepState.complete);
-        await finish('tg-9/critic');
+        await finish(
+          'tg-9/critic',
+          trigger: () => pushMolecule(build: StepState.complete),
+        );
         await pushMolecule(
           build: StepState.complete,
           critic: StepState.complete,
@@ -573,20 +599,24 @@ void main() {
           hasLength(1),
         );
 
-        await pushMolecule(
-          build: StepState.pending,
-          critic: StepState.complete,
-          criticGrade: 'A',
-          includeSuccessor: true,
+        await finish(
+          'tg-9/build',
+          trigger: () => pushMolecule(
+            build: StepState.pending,
+            critic: StepState.complete,
+            criticGrade: 'A',
+            includeSuccessor: true,
+          ),
         );
-        await finish('tg-9/build');
-        await pushMolecule(
-          build: StepState.complete,
-          critic: StepState.complete,
-          criticGrade: 'A',
-          includeSuccessor: true,
+        await finish(
+          'tg-9/land',
+          trigger: () => pushMolecule(
+            build: StepState.complete,
+            critic: StepState.complete,
+            criticGrade: 'A',
+            includeSuccessor: true,
+          ),
         );
-        await finish('tg-9/land');
         await pushMolecule(
           build: StepState.complete,
           critic: StepState.complete,
