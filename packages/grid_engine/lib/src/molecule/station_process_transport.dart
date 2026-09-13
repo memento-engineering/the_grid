@@ -147,6 +147,9 @@ Future<ProcessHandle> stationProcessSpawner(
       );
       assertProvisionedCheckout(workspace.workspaceDir);
     }
+    if (!context.mounted) {
+      throw StateError('unmounted before spawn ($name)');
+    }
     if (args.cancel.isCancelled) {
       throw StateError('cancelled before spawn ($name)');
     }
@@ -365,6 +368,7 @@ Future<StepOutcome> stationProcessDispatcher(
     }
   }
 
+  if (!context.mounted) return const Ok();
   switch (resolved.signal) {
     case StepSignal.none:
       // Unreachable (neither path resolves on none) — but the switch stays
@@ -376,6 +380,7 @@ Future<StepOutcome> stationProcessDispatcher(
       if (args.cancel.isCancelled) return const Ok();
       if (_mustFenceLeasedCompletion(request.capability, resolved.event)) {
         final signal = await _probeLeasedWorkSignal(context, inputs);
+        if (!context.mounted) return const Ok();
         switch (signal) {
           case GateOutcome.clear:
             break;
@@ -413,6 +418,7 @@ Future<StepOutcome> stationProcessDispatcher(
             );
         }
       }
+      if (!context.mounted) return const Ok();
       try {
         return Ok(await request.capability.result(context, args));
       } on CapabilityFailure catch (e) {

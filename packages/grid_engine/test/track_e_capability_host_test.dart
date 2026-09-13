@@ -1043,8 +1043,12 @@ void main() {
           hasLength(2),
         );
         expect(
+          RegExp(r'if \(!context\.mounted\) return;').allMatches(source),
+          hasLength(1),
+        );
+        expect(
           RegExp(r'\bcontext\.mounted\b').allMatches(source),
-          hasLength(11),
+          hasLength(12),
         );
       },
     );

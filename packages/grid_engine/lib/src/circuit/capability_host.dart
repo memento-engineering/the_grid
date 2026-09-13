@@ -1067,6 +1067,7 @@ class CapabilityHostState extends State<CapabilityHost>
       await _persistComplete(scope, routePayload);
       return;
     }
+    if (!context.mounted) return;
     // The ambient values, read SYNCHRONOUSLY at entry with the `read<T>()`
     // EFFECT verb (this runs off `build`, does not subscribe the branch, and is
     // guarded above) and handed to the method as VALUES, so a long push/PR
