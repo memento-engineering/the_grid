@@ -5,8 +5,18 @@
 // never blocking either.
 import 'dart:io';
 
-import 'package:grid_engine/grid_engine.dart' show DualReadMode;
+import 'package:beads_dart/beads_dart.dart';
+import 'package:grid_engine/grid_engine.dart'
+    show
+        DualReadMode,
+        JoinedSnapshot,
+        RelayObservation,
+        RelayObserver,
+        RelayVerdict,
+        SessionProjection,
+        WorkSessionLiveness;
 import 'package:grid_sdk/grid_sdk.dart';
+import 'package:grid_sdk/src/trajectory/work_session_liveness_obligation.dart';
 import 'package:grid_trajectory/grid_trajectory.dart'
     show SqlResult, TrajectoryDb;
 import 'package:test/test.dart';
@@ -43,6 +53,16 @@ final class _NoOpQuery extends ObligationQuery {
   Future<List<ObligationAppend>> repair(
     List<Map<String, String?>> rows,
   ) async => const [];
+}
+
+final class _RecordingRelayObserver implements RelayObserver {
+  final List<RelayObservation> observations = <RelayObservation>[];
+
+  @override
+  Future<RelayVerdict> observe(RelayObservation observation) async {
+    observations.add(observation);
+    return const RelayVerdict.escalate(reason: 'tick observed');
+  }
 }
 
 final class _BuildProbeDelegate extends GridDelegate {
@@ -186,6 +206,97 @@ void main() {
       expect(const TrajectoryConfig().obligationQueryExtensions, isEmpty);
     },
   );
+
+  test('work-session liveness obligation rides the fenced tick seam', () async {
+    const first = _NoOpQuery('first-extension');
+    const second = _NoOpQuery('second-extension');
+    const appended = _NoOpQuery('automatic-extension');
+    const source = TrajectoryConfig(
+      discipline: TrajectoryDiscipline.cut,
+      mode: TrajectoryConfigMode.disabled,
+      dualRead: DualReadMode.off,
+      tickInterval: Duration(seconds: 7),
+      obligationQueryExtensions: [first, second],
+      gcInterval: Duration(minutes: 7),
+      commitCadence: Duration(seconds: 31),
+      queueBound: 123,
+      livenessThreshold: Duration(minutes: 8),
+      pulseCoalesce: Duration(seconds: 41),
+      shutdownDrainTimeout: Duration(seconds: 17),
+      soakWindowEpoch: 9,
+      reconcileLedgerCloses: false,
+    );
+    final cloned = source.withAppendedObligationQueries(const [appended]);
+    expect(cloned.discipline, source.discipline);
+    expect(cloned.mode, source.mode);
+    expect(cloned.dualRead, source.dualRead);
+    expect(cloned.tickInterval, source.tickInterval);
+    expect(cloned.gcInterval, source.gcInterval);
+    expect(cloned.commitCadence, source.commitCadence);
+    expect(cloned.queueBound, source.queueBound);
+    expect(cloned.livenessThreshold, source.livenessThreshold);
+    expect(cloned.pulseCoalesce, source.pulseCoalesce);
+    expect(cloned.shutdownDrainTimeout, source.shutdownDrainTimeout);
+    expect(cloned.soakWindowEpoch, source.soakWindowEpoch);
+    expect(cloned.reconcileLedgerCloses, source.reconcileLedgerCloses);
+    expect(cloned.obligationQueryExtensions, [
+      same(first),
+      same(second),
+      same(appended),
+    ]);
+    expect(
+      () => cloned.obligationQueryExtensions.add(first),
+      throwsUnsupportedError,
+    );
+    expect(cloned.cutPostureRefusal, isNotNull);
+    expect(
+      cloned.cutPostureRefusal.toString(),
+      source.cutPostureRefusal.toString(),
+    );
+
+    final now = DateTime.utc(2026, 9, 12, 12);
+    final observer = _RecordingRelayObserver();
+    final liveness = WorkSessionLiveness(
+      writeHorizon: (_, _) async {},
+      clock: () => now,
+    );
+    addTearDown(liveness.dispose);
+    liveness.mountRelay(observer: observer, ceiling: 1);
+    liveness.refresh(
+      JoinedSnapshot(
+        graph: GraphSnapshot.fromParts(
+          beads: const [],
+          dependencies: const [],
+          readyIds: const [],
+          capturedAt: now,
+        ),
+        sessionsByWorkBead: {
+          'work-1': SessionProjection(
+            workBeadId: 'work-1',
+            sessionId: 'state-session-1',
+            relayNextObservationAt: now,
+          ),
+        },
+      ),
+    );
+    final obligation = WorkSessionLivenessObligation(liveness);
+    expect(obligation.name, 'work-session-liveness');
+    expect(obligation.sql, 'SELECT 1 AS fenced_tick');
+    expect(obligation.parameters, isEmpty);
+
+    expect(await obligation.repair(const []), isEmpty);
+    expect(observer.observations, isEmpty, reason: 'boot pass is inert');
+    liveness.activate();
+    expect(await obligation.repair(const []), isEmpty);
+    expect(observer.observations, hasLength(1));
+
+    final adapterSource = File(
+      'lib/src/trajectory/work_session_liveness_obligation.dart',
+    ).readAsStringSync();
+    expect(adapterSource, isNot(contains('Timer.periodic')));
+    expect(adapterSource, isNot(contains('Stream.periodic')));
+    expect(adapterSource, isNot(contains('TrajectoryTick(')));
+  });
 
   test('the runtime lifecycles the harness: start() brings it up, shutdown() '
       'settles it before the sources (§1.2)', () async {
