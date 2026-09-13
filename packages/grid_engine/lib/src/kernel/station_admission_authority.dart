@@ -170,6 +170,8 @@ final class StationMintVoided implements Exception {
 
 typedef _ScopeKey = ({String stateSubstation, String substationId});
 
+typedef _AdmissionPassProjection = ({List<StrandedWork> stranded});
+
 enum _MountAttemptWriteState { writing, recorded }
 
 final class _UnsnapshottedReservation {
@@ -214,8 +216,8 @@ final class _AdmissionScopeState {
   final Map<String, DateTime> _zeroAdmissionSinceByBead = <String, DateTime>{};
   // Started rival-cleanup microtasks are unavailable from JoinedSnapshot.
   final Set<String> _rivalCleanupsInFlight = <String>{};
-  // Current stranded rows are derived afresh from each synchronous pass.
-  final Map<String, StrandedWork> _strandedByBeadId = <String, StrandedWork>{};
+  // Current status facts are replaced from each supplied JoinedSnapshot pass.
+  _AdmissionPassProjection _passProjection = (stranded: const <StrandedWork>[]);
 }
 
 /// The single station-owned answer to “may this attempt start now?”.
@@ -315,7 +317,7 @@ final class StationAdmissionAuthority {
         });
     final stranded =
         <StrandedWork>[
-          for (final scope in _scopes.values) ...scope._strandedByBeadId.values,
+          for (final scope in _scopes.values) ...scope._passProjection.stranded,
         ]..sort((left, right) {
           final byWork = left.workBeadId.compareTo(right.workBeadId);
           return byWork != 0
@@ -378,7 +380,6 @@ final class StationAdmissionAuthority {
       substationId: config.substationId,
     );
     final scope = _scopes.putIfAbsent(scopeKey, _AdmissionScopeState.new);
-    scope._strandedByBeadId.clear();
     final suppliedIds = {for (final candidate in supplied) candidate.bead.id};
 
     // Structural unmount is a release. This is scoped, so another WorkList's
@@ -449,6 +450,7 @@ final class StationAdmissionAuthority {
     final waiting = <StationAdmissionCandidate>[];
     final capacityWaiting = <StationAdmissionCandidate>[];
     final refused = <StationAdmissionRefusal>[];
+    final stranded = <StrandedWork>[];
 
     for (final candidate in ordered) {
       final bead = candidate.bead;
@@ -515,13 +517,13 @@ final class StationAdmissionAuthority {
         bead,
       );
       if (verdict case BlockedLinkedSession(:final session)) {
-        final stranded = strandedWorkOf(
+        final row = strandedWorkOf(
           workBead: bead,
           session: session,
           eligibility: eligibility,
         );
-        if (stranded != null) {
-          scope._strandedByBeadId[bead.id] = stranded;
+        if (row != null) {
+          stranded.add(row);
         }
       }
       switch (eligibility) {
@@ -842,6 +844,15 @@ final class StationAdmissionAuthority {
     } else {
       scope._zeroAdmissionSinceByBead.clear();
     }
+    stranded.sort((left, right) {
+      final byWork = left.workBeadId.compareTo(right.workBeadId);
+      return byWork != 0
+          ? byWork
+          : left.blockingSessionId.compareTo(right.blockingSessionId);
+    });
+    scope._passProjection = (
+      stranded: List<StrandedWork>.unmodifiable(stranded),
+    );
     return StationAdmissionBatch(
       admitted: admitted,
       waiting: waiting,

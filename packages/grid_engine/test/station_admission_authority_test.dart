@@ -963,8 +963,8 @@ void main() {
     },
   );
 
-  test('admission retains current stranded rows in deterministic order', () {
-    final station = _stationOver(RecordingBdRunner(), maxConcurrentWork: 4);
+  test('admission replaces per-scope stranded projections from each pass', () {
+    final station = _stationOver(RecordingBdRunner(), maxConcurrentWork: 8);
     addTearDown(station.dispose);
     Bead approved(String id) => _bead(id).copyWith(
       metadata: const {
@@ -974,24 +974,23 @@ void main() {
       },
     );
 
-    final heldWork = approved('tg-a');
-    final doneWork = approved('tg-z');
-    final staleWork = approved('tg-stale').copyWith(
+    final doneWork = approved('tg-alpha-done');
+    final staleWork = approved('tg-alpha-stale').copyWith(
       metadata: const {
         'grid.approved_by': 'governor',
         'grid.approved_at': '2026-09-13T12:00:00Z',
         'grid.approved_rev': 'stale',
       },
     );
-    const held = SessionProjection(
-      workBeadId: 'tg-a',
-      sessionId: 'session-held',
-      isTerminal: true,
-      humanHeld: true,
-    );
+    final closedWork = approved(
+      'tg-alpha-closed',
+    ).copyWith(status: BeadStatus.closed);
+    final pausedWork = approved('tg-alpha-paused');
+    final voidedWork = approved('tg-alpha-voided');
+    final heldWork = approved('tg-beta-held');
     const done = SessionProjection(
-      workBeadId: 'tg-z',
-      sessionId: 'session-done',
+      workBeadId: 'tg-alpha-done',
+      sessionId: 'session-alpha-done',
       isTerminal: true,
       completed: true,
       results: {
@@ -1002,10 +1001,32 @@ void main() {
       },
     );
     const stale = SessionProjection(
-      workBeadId: 'tg-stale',
-      sessionId: 'session-stale',
+      workBeadId: 'tg-alpha-stale',
+      sessionId: 'session-alpha-stale',
       isTerminal: true,
       completed: true,
+    );
+    const closed = SessionProjection(
+      workBeadId: 'tg-alpha-closed',
+      sessionId: 'session-alpha-closed',
+      isTerminal: true,
+      completed: true,
+    );
+    const paused = SessionProjection(
+      workBeadId: 'tg-alpha-paused',
+      sessionId: 'session-alpha-paused',
+      pauseState: SessionPauseState.paused,
+    );
+    const voided = SessionProjection(
+      workBeadId: 'tg-alpha-voided',
+      sessionId: 'session-alpha-voided',
+      isTerminal: true,
+    );
+    const held = SessionProjection(
+      workBeadId: 'tg-beta-held',
+      sessionId: 'session-beta-held',
+      isTerminal: true,
+      humanHeld: true,
     );
     MountEligibilityDecision approval(Bead bead) =>
         bead.metadata['grid.approved_rev'] == 'current'
@@ -1013,46 +1034,82 @@ void main() {
         : const MountEligibilityDecision.refused(
             clause: 'approval revision is stale',
           );
-    final snapshot = _snapshot(
-      [doneWork, staleWork, heldWork],
-      sessions: const {'tg-a': held, 'tg-stale': stale, 'tg-z': done},
+    final alphaSnapshot = _snapshot(
+      [doneWork, staleWork, closedWork, pausedWork, voidedWork],
+      sessions: const {
+        'tg-alpha-done': done,
+        'tg-alpha-stale': stale,
+        'tg-alpha-closed': closed,
+        'tg-alpha-paused': paused,
+        'tg-alpha-voided': voided,
+      },
       stateCapturedAt: DateTime.utc(2026, 9, 13, 12, 1),
     );
-
-    station.admission.admitPending(
-      snapshot,
-      _config.copyWith(maxConcurrentWork: 4),
-      ServiceBundle(mountEligibility: approval),
-      [
-        StationAdmissionCandidate(bead: doneWork, session: done),
-        StationAdmissionCandidate(bead: staleWork, session: stale),
-        StationAdmissionCandidate(bead: heldWork, session: held),
-      ],
+    final betaSnapshot = _snapshot(
+      [heldWork],
+      sessions: const {'tg-beta-held': held},
+      stateCapturedAt: DateTime.utc(2026, 9, 13, 12, 1),
     );
+    final services = ServiceBundle(mountEligibility: approval);
+    final alphaConfig = _config.copyWith(
+      substationId: 'alpha',
+      maxConcurrentWork: 8,
+    );
+    final betaConfig = _config.copyWith(
+      substationId: 'beta',
+      maxConcurrentWork: 8,
+    );
+
+    station.admission.admitPending(alphaSnapshot, alphaConfig, services, [
+      StationAdmissionCandidate(bead: doneWork, session: done),
+      StationAdmissionCandidate(bead: staleWork, session: stale),
+      StationAdmissionCandidate(bead: closedWork, session: closed),
+      StationAdmissionCandidate(bead: pausedWork, session: paused),
+      StationAdmissionCandidate(bead: voidedWork, session: voided),
+    ]);
+    station.admission.admitPending(betaSnapshot, betaConfig, services, [
+      StationAdmissionCandidate(bead: heldWork, session: held),
+    ]);
 
     final stranded = station.admission.admissionStatus.stranded;
     expect(stranded, [
       (
-        workBeadId: 'tg-a',
-        blockingSessionId: 'session-held',
-        disposition: 'held',
-        deliveryMethod: null,
-        deliveryReference: null,
-      ),
-      (
-        workBeadId: 'tg-z',
-        blockingSessionId: 'session-done',
+        workBeadId: 'tg-alpha-done',
+        blockingSessionId: 'session-alpha-done',
         disposition: 'done',
         deliveryMethod: 'github-pr',
         deliveryReference: 'https://github.test/the-grid/pull/426',
+      ),
+      (
+        workBeadId: 'tg-beta-held',
+        blockingSessionId: 'session-beta-held',
+        disposition: 'held',
+        deliveryMethod: null,
+        deliveryReference: null,
       ),
     ]);
     expect(() => stranded.clear(), throwsUnsupportedError);
 
     station.admission.admitPending(
-      snapshot,
-      _config.copyWith(maxConcurrentWork: 4),
-      ServiceBundle(mountEligibility: approval),
+      alphaSnapshot,
+      alphaConfig,
+      services,
+      const [],
+    );
+    expect(station.admission.admissionStatus.stranded, [
+      (
+        workBeadId: 'tg-beta-held',
+        blockingSessionId: 'session-beta-held',
+        disposition: 'held',
+        deliveryMethod: null,
+        deliveryReference: null,
+      ),
+    ]);
+
+    station.admission.admitPending(
+      betaSnapshot,
+      betaConfig,
+      services,
       const [],
     );
     expect(station.admission.admissionStatus.stranded, isEmpty);
