@@ -212,6 +212,17 @@ Bead _bead(String id, {int priority = 2}) => Bead(
   priority: priority,
 );
 
+Bead _ownedSession(String id) => Bead(
+  id: id,
+  issueType: GridIssueTypes.session,
+  status: BeadStatus.open,
+  metadata: const {
+    'rig': 'tg',
+    SessionBeadKeys.workBead: 'tg-1',
+    SessionBeadKeys.model: kSessionModelMolecule,
+  },
+);
+
 JoinedSnapshot _snapshot(
   List<Bead> beads, {
   Map<String, SessionProjection> sessions = const {},
@@ -1583,6 +1594,168 @@ void main() {
       expect(invalidations, beforeBackoff + 1);
     },
   );
+
+  test('marks only the matching retired session terminal', () async {
+    final runner = RecordingBdRunner(createdId: 'tg-successor');
+    runner.exportBeads = [
+      _ownedSession('tg-retired'),
+      _ownedSession('tg-unrelated'),
+    ];
+    final station = _stationOver(runner, maxConcurrentWork: 1);
+    addTearDown(station.dispose);
+    final work = _bead('tg-1');
+    const retired = SessionProjection(
+      workBeadId: 'tg-1#r1',
+      sessionId: 'tg-retired',
+    );
+    final candidate = StationAdmissionCandidate(bead: work, session: retired);
+    final stale = _snapshot([work], sessions: const {'tg-1': retired});
+
+    final reservation = station.admission.admitPending(
+      stale,
+      _config.copyWith(maxConcurrentWork: 1),
+      const ServiceBundle(),
+      [candidate],
+    );
+    expect(reservation.admitted.single.reservationToken, isNotNull);
+
+    await station.admission.closeRetiredReworkSession(
+      workBeadId: work.id,
+      sessionId: 'tg-retired',
+      reapMolecule: false,
+      services: const ServiceBundle(),
+    );
+
+    const unrelated = SessionProjection(
+      workBeadId: 'tg-1',
+      sessionId: 'tg-unrelated',
+    );
+    final unrelatedStillOpen = await station.admission.createSessionAttempt(
+      _snapshot(
+        [work],
+        sessions: const {'tg-1': retired},
+        surplus: const {
+          'tg-1': [unrelated],
+        },
+      ),
+      candidate,
+      title: 'grid session ${work.id}',
+      metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
+    );
+    expect(unrelatedStillOpen.sessionId, isNull);
+    expect(unrelatedStillOpen.refusal?.clause, 'live-attempt');
+
+    final created = await station.admission.createSessionAttempt(
+      stale,
+      candidate,
+      title: 'grid session ${work.id}',
+      metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
+    );
+    expect(created.refusal, isNull);
+    expect(created.sessionId, 'tg-successor');
+  });
+
+  test(
+    "a different session's release does not evict the reservation",
+    () async {
+      for (final releaseKind in const ['close', 'completion']) {
+        final runner = RecordingBdRunner(
+          createdId: 'tg-successor-$releaseKind',
+        );
+        runner.exportBeads = [
+          _ownedSession('tg-retired'),
+          _ownedSession('tg-unrelated'),
+        ];
+        final station = _stationOver(runner, maxConcurrentWork: 1);
+        addTearDown(station.dispose);
+        final work = _bead('tg-1');
+        const retired = SessionProjection(
+          workBeadId: 'tg-1#r1',
+          sessionId: 'tg-retired',
+        );
+        final candidate = StationAdmissionCandidate(
+          bead: work,
+          session: retired,
+        );
+        final stale = _snapshot([work], sessions: const {'tg-1': retired});
+        final config = _config.copyWith(maxConcurrentWork: 1);
+
+        final before = station.admission
+            .admitPending(stale, config, const ServiceBundle(), [candidate])
+            .admitted
+            .single;
+        expect(before.reservationToken, isNotNull);
+
+        if (releaseKind == 'close') {
+          await station.admission.closeRetiredReworkSession(
+            workBeadId: work.id,
+            sessionId: 'tg-unrelated',
+            reapMolecule: false,
+            services: const ServiceBundle(),
+          );
+        } else {
+          await station.admission.completeSession(
+            workBeadId: work.id,
+            sessionId: 'tg-unrelated',
+            outcomeMarked: true,
+            outcomeMetadata: const {},
+            reapMolecule: false,
+            services: const ServiceBundle(),
+          );
+        }
+
+        final after = station.admission
+            .admitPending(stale, config, const ServiceBundle(), [candidate])
+            .admitted
+            .single;
+        expect(after.reservationToken, same(before.reservationToken));
+
+        await station.admission.closeRetiredReworkSession(
+          workBeadId: work.id,
+          sessionId: 'tg-retired',
+          reapMolecule: false,
+          services: const ServiceBundle(),
+        );
+        final created = await station.admission.createSessionAttempt(
+          stale,
+          candidate,
+          title: 'grid session ${work.id}',
+          metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
+        );
+        expect(created.refusal, isNull, reason: releaseKind);
+        expect(created.sessionId, 'tg-successor-$releaseKind');
+      }
+    },
+  );
+
+  test('retired-round break admits a second candidate in the same pass', () {
+    final station = _stationOver(RecordingBdRunner(), maxConcurrentWork: 2);
+    addTearDown(station.dispose);
+    final retiredWork = _bead('tg-1', priority: 1);
+    final nextWork = _bead('tg-2', priority: 1);
+    const retired = SessionProjection(
+      workBeadId: 'tg-1#r1',
+      sessionId: 'tgdog-retired',
+    );
+    final snapshot = _snapshot([retiredWork, nextWork]);
+
+    final batch = station.admission.admitPending(
+      snapshot,
+      _config.copyWith(maxConcurrentWork: 2),
+      const ServiceBundle(),
+      [
+        StationAdmissionCandidate(bead: nextWork, session: null),
+        StationAdmissionCandidate(bead: retiredWork, session: retired),
+      ],
+    );
+
+    expect(batch.admitted.map((reservation) => reservation.candidate.bead.id), [
+      'tg-1',
+      'tg-2',
+    ]);
+    expect(batch.waiting, isEmpty);
+    expect(batch.refused, isEmpty);
+  });
 
   test(
     'failed timeout close retains capacity and schedules no retry',

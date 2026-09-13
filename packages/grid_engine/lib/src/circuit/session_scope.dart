@@ -1203,6 +1203,7 @@ class SessionScopeState extends State<SessionScope>
             ? 'unmounted'
             : null);
     if (reason == null) return false;
+    _causallyClosedRetiredSessionId = null;
     final reservationToken = _admissionReservation?.reservationToken;
     final retiredMintSessionId = await _ctx?.admission.abandonSessionAttempt(
       workBeadId: seed.bead.id,
