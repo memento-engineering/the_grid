@@ -118,12 +118,14 @@ class StepArgs {
 /// opinion, the engine's concept is "a workspace"). A capability reads it with
 /// the effect verb: `context.getInheritedSeedOfExactType<Workspace>()`.
 class Workspace {
-  /// Bundles the stable [workspaceDir] home, the work [branch], and the
-  /// [baseBranch] a land opens its PR against.
+  /// Bundles the stable [workspaceDir] home, the work [branch], the
+  /// [baseBranch] a land opens its PR against, and the optional [baseSha] the
+  /// workspace was provisioned from.
   const Workspace({
     required this.workspaceDir,
     required this.branch,
     required this.baseBranch,
+    this.baseSha,
   });
 
   /// The stable home directory the work runs in (the cwd default; per-spawn
@@ -136,15 +138,20 @@ class Workspace {
   /// The base branch a land opens its PR against.
   final String baseBranch;
 
+  /// The provision-time commit the workspace started from, or null when that
+  /// identity is not known.
+  final String? baseSha;
+
   @override
   bool operator ==(Object other) =>
       other is Workspace &&
       other.workspaceDir == workspaceDir &&
       other.branch == branch &&
-      other.baseBranch == baseBranch;
+      other.baseBranch == baseBranch &&
+      other.baseSha == baseSha;
 
   @override
-  int get hashCode => Object.hash(workspaceDir, branch, baseBranch);
+  int get hashCode => Object.hash(workspaceDir, branch, baseBranch, baseSha);
 
   @override
   String toString() => 'Workspace($workspaceDir @ $branch → $baseBranch)';
@@ -505,6 +512,10 @@ abstract interface class SourceControl {
   /// The base branch a land opens its PR against (the substation's default
   /// branch — the git impl reads its root checkout's default branch).
   String get baseBranch;
+
+  /// The provision-time commit [beadId]'s workspace started from, or null when
+  /// the source-control implementation does not know it.
+  String? baseShaFor(String beadId);
 
   /// Materializes the workspace for [beadId] at [workspaceDir] (the git impl
   /// cuts a worktree off the root — ADR-0008 D5: "the git worktree is the

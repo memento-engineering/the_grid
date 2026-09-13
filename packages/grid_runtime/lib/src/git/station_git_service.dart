@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -51,6 +52,7 @@ class BeadWorktree {
     required this.beadId,
     required this.path,
     required this.branch,
+    this.baseSha,
   });
 
   final String beadId;
@@ -60,6 +62,58 @@ class BeadWorktree {
 
   /// `grid/<beadId>`.
   final String branch;
+
+  /// The commit this worktree was at immediately after provisioning, or null
+  /// when the non-fatal HEAD probe could not resolve it.
+  final String? baseSha;
+}
+
+/// Owns the station-lifetime projection of provisioned worktrees.
+///
+/// [StationGitService] remains stateless I/O (ADR-0001 Decision 2): its
+/// provision result carries the HEAD it observed. This repository retains that
+/// value by bead id and emits an immutable snapshot after every successful
+/// provision, including a removal when a later non-fatal HEAD probe returns
+/// null. Consumers that need the synchronous [baseShaFor] contract read the
+/// retained worktree value rather than probing git a second time.
+class StationGitRepository {
+  /// Creates a repository over the stateless git [service].
+  StationGitRepository({required StationGitService service})
+    : _service = service;
+
+  final StationGitService _service;
+  final Map<String, BeadWorktree> _worktreeByBeadId = {};
+  final StreamController<Map<String, BeadWorktree>> _snapshots =
+      StreamController<Map<String, BeadWorktree>>.broadcast(sync: true);
+
+  /// Immutable snapshots of the retained bead-id to worktree map.
+  Stream<Map<String, BeadWorktree>> get snapshots => _snapshots.stream;
+
+  /// The retained provision-time commit for [beadId], or null when unknown.
+  String? baseShaFor(String beadId) => _worktreeByBeadId[beadId]?.baseSha;
+
+  /// Provisions through the service, then retains and emits its observed HEAD.
+  Future<BeadWorktree> provisionWorktree({
+    required RootCheckout root,
+    required String beadId,
+  }) async {
+    final worktree = await _service.provisionWorktree(
+      root: root,
+      beadId: beadId,
+    );
+    final baseSha = worktree.baseSha;
+    if (baseSha == null) {
+      _worktreeByBeadId.remove(beadId);
+    } else {
+      _worktreeByBeadId[beadId] = worktree;
+    }
+    _snapshots.add(Map<String, BeadWorktree>.unmodifiable(_worktreeByBeadId));
+    return worktree;
+  }
+
+  /// Releases the repository's observation stream. Idempotency is delegated to
+  /// [StreamController.close].
+  Future<void> dispose() => _snapshots.close();
 }
 
 /// The one three-gate, fail-closed worktree reap seam shared by lifecycle,
@@ -401,21 +455,18 @@ class StationGitService {
         'target path "$path": ${result.output.trim()}',
       );
     }
-    // The trajectory observation (stage1-wiring §2.3), AFTER the legacy
-    // `git worktree add` succeeded and never before it: `preexisting` is the
-    // `adopted_existing` fact, and one `rev-parse HEAD` in the worktree just
-    // added names the commit it starts on. Non-fatal by construction — the
-    // probe cannot throw (`GitRunner` returns a failure result) and the
-    // recorder swallows its own derivation failures — so a provision never
-    // fails, and never fails DIFFERENTLY, for the trajectory's sake.
-    //
-    // Gated on `accepting`: the rev-parse is a real git subprocess whose ONLY
-    // consumer is the record, so a disabled/latched recorder skips the probe
-    // too — a dry station, an unprovisioned home, and every provisioning test
-    // pay nothing. This gates the EVIDENCE PROBE, never the legacy provision
-    // above (§1.1's no-branching rule is about the legacy path).
+    // The provision output, AFTER the legacy `git worktree add` succeeded and
+    // never before it: one non-fatal `rev-parse HEAD` names the commit this
+    // fresh or adopted worktree actually starts on. The value rides the
+    // returned BeadWorktree so a Repository-layer owner can retain it without
+    // making this Service stateful or probing git a second time (ADR-0001 D2;
+    // ADR-0013 D1/D4).
+    final baseSha = await _ops.headSha(path);
+
+    // The trajectory hand-off is unchanged: recorder acceptance gates only
+    // emission, and a missing SHA emits nothing. The unconditional probe above
+    // serves the provision result even when trajectory recording is disabled.
     if (_recorder.accepting) {
-      final baseSha = await _ops.headSha(path);
       if (baseSha != null) {
         _recorder.worktreeProvisioned(
           workBeadId: beadId,
@@ -426,7 +477,12 @@ class StationGitService {
         );
       }
     }
-    return BeadWorktree(beadId: beadId, path: path, branch: branch);
+    return BeadWorktree(
+      beadId: beadId,
+      path: path,
+      branch: branch,
+      baseSha: baseSha,
+    );
   }
 
   /// Lists the_grid's per-bead worktrees under [root], each re-bound to its bead

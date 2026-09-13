@@ -206,6 +206,9 @@ final class _WatchingSourceControl implements SourceControl {
   String get baseBranch => 'main';
 
   @override
+  String? baseShaFor(String beadId) => null;
+
+  @override
   Future<void> provisionWorkspace({
     required String beadId,
     required String workspaceDir,

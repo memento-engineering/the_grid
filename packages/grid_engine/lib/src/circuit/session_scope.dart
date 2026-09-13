@@ -2396,6 +2396,7 @@ class SessionScopeState extends State<SessionScope>
       workspaceDir: sc?.workspaceFor(beadId) ?? '/grid/workspaces/$beadId',
       branch: sc?.branchFor(beadId) ?? '',
       baseBranch: sc?.baseBranch ?? 'main',
+      baseSha: sc?.baseShaFor(beadId),
     );
     Seed inflater = CircuitScope(
       circuit: seed.circuit,
