@@ -179,6 +179,10 @@ abstract class SessionProjection with _$SessionProjection {
     /// before the stamp shipped. Never gates orchestration.
     DateTime? startedAt,
 
+    /// The durable UTC instant at which this live session next needs relay
+    /// observation. Null until a relay absorb verdict has persisted a horizon.
+    DateTime? relayNextObservationAt,
+
     /// Capture-only session lifecycle telemetry — the wall-clock instant the
     /// session bead was closed (its `closed_at` metadata, stamped inside the
     /// chokepoint's `close`); null while the session is still open.

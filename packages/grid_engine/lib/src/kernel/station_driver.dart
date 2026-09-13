@@ -10,6 +10,7 @@ import '../domain/wedge.dart';
 import '../sdk/capability.dart';
 import '../sdk/capability_facts.dart';
 import 'wedge_monitor.dart';
+import 'work_session_liveness.dart';
 
 /// The station's OFF-TREE work-axis machinery (extracted from the retired
 /// kernel so a tree mounted by a DIFFERENT owner — `runGrid`'s, tg-yl8 — reuses it
@@ -49,6 +50,7 @@ class StationDriver {
     CapabilityFacts stationFacts = const CapabilityFacts(),
     void Function(List<UnclaimedRequirement>)? onUnclaimedFrontier,
     ExplorationTransport? transport,
+    this.sessionLiveness,
     Duration wedgeThreshold = kDefaultWedgeThreshold,
     Duration wedgePollInterval = kDefaultWedgePollInterval,
   }) : _clock = clock ?? DateTime.now,
@@ -70,6 +72,10 @@ class StationDriver {
   /// The join bridge feeding the work axis — the driver owns its lifecycle
   /// (started in [start], disposed in [dispose]).
   final StationJoinBridge bridge;
+
+  /// The optional station-lifetime session relay coordinator refreshed from
+  /// the same producer-side join as the other driver scans.
+  final WorkSessionLiveness? sessionLiveness;
 
   final DateTime Function() _clock;
   final Timer Function(Duration, void Function()) _scheduleTimer;
@@ -101,6 +107,7 @@ class StationDriver {
     if (_started || _disposed) return;
     _started = true;
     bridge.start();
+    sessionLiveness?.refresh(bridge.latest);
     _scanCooldowns();
     _scanUnclaimedFrontier();
     // The wedge baseline. It arms its own poll timer only while STALLED (a
@@ -125,8 +132,13 @@ class StationDriver {
       _scanCooldowns();
       _scanUnclaimedFrontier();
     } finally {
-      // A resumed grid clears the alarm on the very next flush.
-      _wedge.poll();
+      try {
+        sessionLiveness?.refresh(bridge.latest);
+      } finally {
+        // A resumed grid clears the alarm on the very next flush. It remains
+        // last even if another driver scan or liveness refresh fails.
+        _wedge.poll();
+      }
     }
   }
 

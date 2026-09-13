@@ -147,6 +147,27 @@ final class TrajectoryConfig {
       soakWindowEpoch = source.soakWindowEpoch,
       reconcileLedgerCloses = source.reconcileLedgerCloses;
 
+  TrajectoryConfig._withAppendedObligationQueries(
+    TrajectoryConfig source,
+    Iterable<ObligationQuery> extensions,
+  ) : discipline = source.discipline,
+      mode = source.mode,
+      _requestedMode = source._requestedMode,
+      tickInterval = source.tickInterval,
+      obligationQueryExtensions = List<ObligationQuery>.unmodifiable(
+        <ObligationQuery>[...source.obligationQueryExtensions, ...extensions],
+      ),
+      gcInterval = source.gcInterval,
+      commitCadence = source.commitCadence,
+      queueBound = source.queueBound,
+      livenessThreshold = source.livenessThreshold,
+      pulseCoalesce = source.pulseCoalesce,
+      shutdownDrainTimeout = source.shutdownDrainTimeout,
+      dualRead = source.dualRead,
+      _requestedDualRead = source._requestedDualRead,
+      soakWindowEpoch = source.soakWindowEpoch,
+      reconcileLedgerCloses = source.reconcileLedgerCloses;
+
   /// The single trajectory cut lever.
   final TrajectoryDiscipline discipline;
 
@@ -322,4 +343,11 @@ final class TrajectoryConfig {
   /// disciplines, retaining the source cut-implied [dualRead] posture and the
   /// caller requests captured by the public constructor.
   TrajectoryConfig get asDisabled => TrajectoryConfig._disabledFrom(this);
+
+  /// Returns an immutable config with [extensions] appended after every
+  /// station-authored obligation query, preserving caller order and all
+  /// requested and resolved posture fields.
+  TrajectoryConfig withAppendedObligationQueries(
+    Iterable<ObligationQuery> extensions,
+  ) => TrajectoryConfig._withAppendedObligationQueries(this, extensions);
 }

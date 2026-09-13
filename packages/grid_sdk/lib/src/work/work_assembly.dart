@@ -14,6 +14,7 @@ import '../stores/stores.dart';
 import '../trajectory/session_closure.dart';
 import '../trajectory/trajectory_config.dart';
 import '../trajectory/trajectory_harness.dart';
+import '../trajectory/work_session_liveness_obligation.dart';
 import 'settle.dart';
 import 'store_connection.dart';
 import 'station_work.dart';
@@ -164,6 +165,7 @@ class StationWorkRuntime implements SubstationProvisioner {
     required this.commands,
     required this.git,
     required this.trajectory,
+    required this.sessionLiveness,
     required this.stateSubstation,
     required this.readPathName,
     required this.openStores,
@@ -232,6 +234,10 @@ class StationWorkRuntime implements SubstationProvisioner {
   /// THIS runtime's: up inside [start] (after the sources), down inside
   /// [shutdown] (before them) — never blocking either.
   final TrajectoryHarness trajectory;
+
+  /// The single station-lifetime work-session relay coordinator shared by the
+  /// driver, trajectory obligation, and ambient registrar.
+  final WorkSessionLiveness sessionLiveness;
 
   /// The owned state partition sessions are minted into — re-sourced from the
   /// grid's own state store identity (its `dolt_database`), never a flag
@@ -474,8 +480,14 @@ class StationWorkRuntime implements SubstationProvisioner {
   /// The `runGrid(onFlushed:)` hook — the driver's post-flush cooldown +
   /// unclaimed-frontier re-scans (D-5/F1), then the roster drain settle.
   void afterFlush() {
-    _driver.afterFlush();
-    unawaited(_settleRosterDrainsGuarded());
+    try {
+      _driver.afterFlush();
+      unawaited(_settleRosterDrainsGuarded());
+    } finally {
+      // The first flush occurs only after the authored tree (and any relay
+      // asset) mounted. The trajectory boot pass therefore remains inert.
+      sessionLiveness.activate();
+    }
   }
 
   /// Settles draining roster seats, reporting a failure instead of raising it.
@@ -723,6 +735,11 @@ class StationWorkRuntime implements SubstationProvisioner {
     if (_runtimeProviderDisposer(_provider) case final dispose?) {
       await settle('runtime provider dispose', dispose, onRefusal: _onRefusal);
     }
+    await settle(
+      'work-session liveness dispose',
+      sessionLiveness.dispose,
+      onRefusal: _onRefusal,
+    );
     await _sourcesShutdown();
   }
 }
@@ -1178,6 +1195,18 @@ Future<StationWorkRuntime> _acquireStationWork({
     onFlare: transport?.flare,
   );
 
+  // The relay horizon is the only write this coordinator can perform. Expiry
+  // itself stays read-only; every absorb goes through the owned chokepoint.
+  final sessionLiveness = WorkSessionLiveness(
+    writeHorizon: (sessionId, nextAt) =>
+        writer.update(sessionId, metadata: relayHorizonMetadata(nextAt)),
+    transport: transport,
+  );
+  disposers.add((
+    step: 'work-session liveness dispose',
+    dispose: sessionLiveness.dispose,
+  ));
+
   // --- the runtime provider (ONE dry/live posture, per-seam override = a
   // test). Built HERE rather than with the other transports below because the
   // trajectory harness takes its `lastActivity` poll — liveness surface (b) of
@@ -1212,10 +1241,16 @@ Future<StationWorkRuntime> _acquireStationWork({
   // transport. Dry-run forces `disabled` (§1.3): a dry arm must not claim an
   // epoch or write anything — same physics as the recording no-op bd.
   // [trajectoryOverride] is a TEST seam, like every other per-seam override.
+  final stationTrajectoryConfig = trajectoryConfig
+      .withAppendedObligationQueries([
+        WorkSessionLivenessObligation(sessionLiveness),
+      ]);
   trajectory =
       trajectoryOverride ??
       await TrajectoryHarness.build(
-        config: dryRun ? trajectoryConfig.asDisabled : trajectoryConfig,
+        config: dryRun
+            ? stationTrajectoryConfig.asDisabled
+            : stationTrajectoryConfig,
         gridHome: stateStore.gridRoot,
         station: stateSubstation,
         substationPrefixes: allowSet,
@@ -1585,6 +1620,7 @@ Future<StationWorkRuntime> _acquireStationWork({
     bridge: bridge,
     registry: resolvedRegistry,
     transport: transport,
+    sessionLiveness: sessionLiveness,
     wedgeThreshold: wedgeThreshold,
     wedgePollInterval: wedgePollInterval,
   );
@@ -1622,6 +1658,7 @@ Future<StationWorkRuntime> _acquireStationWork({
       // The SAME instance the restart reconciler sweeps with (tg-eli phase 1).
       processLeaseVendor: leaseVendor,
       transport: transport,
+      relayRegistrar: sessionLiveness,
       // Stage 1's ONE new ambient value (stage1-wiring §1.1).
       trajectory: TrajectoryRecorderScope(
         recorder,
@@ -1631,6 +1668,7 @@ Future<StationWorkRuntime> _acquireStationWork({
     commands: commands,
     git: git,
     trajectory: trajectory,
+    sessionLiveness: sessionLiveness,
     stateSubstation: stateSubstation,
     readPathName: readPathName,
     openStores: openStores,

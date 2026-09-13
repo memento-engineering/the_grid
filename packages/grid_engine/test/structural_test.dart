@@ -72,13 +72,16 @@ const _router = 'circuit/capability_host.dart';
 /// decision-bearing step append. It does not effect a route verdict.
 const _trajectoryAdmissionGate = 'kernel/trajectory_scope.dart';
 
-/// The DEFINITION sites the fence must not trip on. None currently need an
-/// exemption (the flat `nodeRewoundMetadata` declaration retired with the
-/// flat cursor). The `DeliveryMethod` / `EscalationHandler` interfaces (and
-/// their fakes) declare `deliver`/`escalate` with no leading dot, so they
-/// never match a CALL site and are deliberately NOT exempted: the fence stays
-/// tight enough to catch a second effector even inside the SDK.
-const _routingDefinitionFiles = <String>[];
+/// The DEFINITION sites the fence must not trip on. `RelayVerdict.escalate` is
+/// a held value constructor, never the route handler's `.escalate(` effect;
+/// freezed repeats that constructor in generated code. The
+/// `DeliveryMethod` / `EscalationHandler` interfaces (and their fakes) declare
+/// `deliver`/`escalate` with no leading dot, so they need no exemption: the
+/// fence stays tight enough to catch a second effector even inside the SDK.
+const _routingDefinitionFiles = <String>[
+  'sdk/relay.dart',
+  'sdk/relay.freezed.dart',
+];
 
 /// The SUPERSEDED tg-b3k workaround (tg-o90): a machine-actionable GATE-REASON
 /// STRING convention (`kRespecGatePrefix` / `isRespecGate` / `machineActionableGate`),
