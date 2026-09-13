@@ -211,7 +211,7 @@ return $default(_that.sessionId,_that.workBeadId,_that.startedAt,_that.deadline,
 
 class _RelayObservation implements RelayObservation {
   const _RelayObservation({required this.sessionId, required this.workBeadId, this.startedAt, required this.deadline, required this.observedAt});
-  
+
 
 @override final  String sessionId;
 @override final  String workBeadId;
@@ -445,7 +445,7 @@ return escalate(_that.reason);case _:
 
 class RelayAbsorb implements RelayVerdict {
   const RelayAbsorb({required this.nextHorizon});
-  
+
 
  final  Duration nextHorizon;
 
@@ -511,7 +511,7 @@ as Duration,
 
 class RelayEscalate implements RelayVerdict {
   const RelayEscalate({required this.reason});
-  
+
 
  final  String reason;
 

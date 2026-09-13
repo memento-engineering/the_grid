@@ -1232,6 +1232,9 @@ void main() {
         'federatedSourceBuilder?.call(',
         'buildDefault: buildFederatedSourceDefault',
         "step: 'federated source dispose'",
+        'final writer = StationBeadWriter(',
+        'final sessionLiveness = WorkSessionLiveness(',
+        "step: 'work-session liveness dispose'",
         'providerOverride ??',
         "step: 'runtime provider dispose'",
         'TrajectoryHarness.build(',
@@ -1250,6 +1253,29 @@ void main() {
         final next = assembly.indexOf(acquisition, cursor);
         expect(next, greaterThanOrEqualTo(cursor), reason: acquisition);
         cursor = next + acquisition.length;
+      }
+
+      final shutdownStart = source.indexOf('  Future<void> shutdown() async {');
+      final shutdownEnd = source.indexOf(
+        '\n}\n\nFuture<void> Function()? _runtimeProviderDisposer',
+        shutdownStart,
+      );
+      expect(shutdownStart, isNonNegative);
+      expect(shutdownEnd, greaterThan(shutdownStart));
+      final shutdown = source.substring(shutdownStart, shutdownEnd);
+      var shutdownCursor = 0;
+      for (final disposal in [
+        "'station driver dispose'",
+        "'join bridge dispose'",
+        "'station admission dispose'",
+        "'trajectory shutdown'",
+        "'runtime provider dispose'",
+        "'work-session liveness dispose'",
+        'await _sourcesShutdown()',
+      ]) {
+        final next = shutdown.indexOf(disposal, shutdownCursor);
+        expect(next, greaterThanOrEqualTo(shutdownCursor), reason: disposal);
+        shutdownCursor = next + disposal.length;
       }
     });
   });

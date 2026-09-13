@@ -29,6 +29,7 @@ class StationWorkWiring {
     this.processLeaseVendor,
     this.transport,
     this.trajectory,
+    this.relayRegistrar,
   });
 
   /// The work-axis notifier the substations' `WorkList`s observe — driven by
@@ -63,6 +64,11 @@ class StationWorkWiring {
   /// observation site downstream sees a recorder and none of them branches on
   /// whether the trajectory is up.
   final TrajectoryRecorderScope? trajectory;
+
+  /// The station's relay-registration seat. Null keeps hand-built and
+  /// authoring-only work trees unarmed; production assembly always supplies
+  /// the station-lifetime coordinator.
+  final RelayRegistrar? relayRegistrar;
 }
 
 /// The STATION-scoped work asset (tg-yl8): provides the engine's ambient
@@ -89,6 +95,7 @@ class StationWork extends SingleChildStatelessSeed {
   @override
   Seed buildWithChild(TreeContext context, Seed child) {
     final registry = wiring.registry;
+    final relayRegistrar = wiring.relayRegistrar;
     // The molecule model's process-lease seam — between the registry and the
     // resolver (tg-h4u / tg-2mb). The PRODUCTION runGrid path uses THIS seat:
     // without this seed a molecule step's `requireProcessLeaseVendor` throws
@@ -118,6 +125,8 @@ class StationWork extends SingleChildStatelessSeed {
         Provider<TrajectoryRecorderScope>.value(
           wiring.trajectory ?? TrajectoryRecorderScope.disabled,
         ),
+        if (relayRegistrar != null)
+          Provider<RelayRegistrar>.value(relayRegistrar),
         if (registry != null) Provider<CapabilityRegistry>.value(registry),
       ],
       child: child,

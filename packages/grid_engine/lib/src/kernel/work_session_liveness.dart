@@ -253,10 +253,17 @@ final class WorkSessionLiveness implements RelayRegistrar {
       return;
     }
 
+    var operationSettled = false;
     unawaited(
       operation.then<void>(
-        (_) => relay.unsettled -= 1,
-        onError: (Object _, StackTrace __) => relay.unsettled -= 1,
+        (_) {
+          operationSettled = true;
+          relay.unsettled -= 1;
+        },
+        onError: (Object _, StackTrace __) {
+          operationSettled = true;
+          relay.unsettled -= 1;
+        },
       ),
     );
 
@@ -267,19 +274,32 @@ final class WorkSessionLiveness implements RelayRegistrar {
       _escalate(session, kRelayErrorFlare, observedAt, error.toString());
       return;
     }
-    unawaited(_resolve(session, bounded, observedAt));
+    unawaited(
+      _resolve(
+        session,
+        bounded,
+        observedAt,
+        operationSettled: () => operationSettled,
+      ),
+    );
   }
 
   Future<void> _resolve(
     _TrackedSession session,
     Future<RelayVerdict> bounded,
-    DateTime observedAt,
-  ) async {
+    DateTime observedAt, {
+    required bool Function() operationSettled,
+  }) async {
     late final RelayVerdict verdict;
     try {
       verdict = await bounded;
     } on TimeoutException catch (error) {
-      _escalate(session, kRelayTimeoutFlare, observedAt, error.toString());
+      _escalate(
+        session,
+        operationSettled() ? kRelayErrorFlare : kRelayTimeoutFlare,
+        observedAt,
+        error.toString(),
+      );
       return;
     } catch (error) {
       _escalate(session, kRelayErrorFlare, observedAt, error.toString());

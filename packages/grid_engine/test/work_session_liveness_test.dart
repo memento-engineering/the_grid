@@ -263,7 +263,9 @@ void main() {
     addTearDown(asyncError.dispose);
     asyncError.mountRelay(
       observer: _FakeRelayObserver.from(
-        (_) => Future<RelayVerdict>.error(StateError('async relay failure')),
+        (_) => Future<RelayVerdict>.error(
+          TimeoutException('observer-originated timeout exception'),
+        ),
       ),
       ceiling: 1,
     );

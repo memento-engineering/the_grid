@@ -9,11 +9,10 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart'
     show
         DualReadMode,
+        Idle,
         JoinedSnapshot,
-        RelayObservation,
-        RelayObserver,
-        RelayVerdict,
         SessionProjection,
+        StationDriver,
         WorkSessionLiveness;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:grid_sdk/src/trajectory/work_session_liveness_obligation.dart';
@@ -65,6 +64,18 @@ final class _RecordingRelayObserver implements RelayObserver {
   }
 }
 
+final class _RegistrarProbe extends StatelessSeed {
+  const _RegistrarProbe(this.seen);
+
+  final List<RelayRegistrar?> seen;
+
+  @override
+  Seed build(TreeContext context) {
+    seen.add(context.watch<RelayRegistrar>());
+    return const Idle();
+  }
+}
+
 final class _BuildProbeDelegate extends GridDelegate {
   bool built = false;
 
@@ -98,6 +109,7 @@ void main() {
   Future<StationWorkRuntime> assemble({
     TrajectoryConfig trajectoryConfig = const TrajectoryConfig(),
     TrajectoryHarness? trajectoryOverride,
+    StationWorkDriverBuilder? driverBuilder,
   }) => assembleStationWork(
     stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
     substations: [SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj')],
@@ -105,6 +117,7 @@ void main() {
     dryRun: true,
     trajectoryConfig: trajectoryConfig,
     trajectoryOverride: trajectoryOverride,
+    driverBuilder: driverBuilder,
   );
 
   test("the assembly vends the harness's sockets", () async {
@@ -184,7 +197,7 @@ void main() {
   );
 
   test(
-    'station composition forwards ordered obligation query extensions',
+    'station assembly appends one liveness obligation after authored extensions',
     () async {
       const first = _NoOpQuery('first-extension');
       const second = _NoOpQuery('second-extension');
@@ -201,9 +214,83 @@ void main() {
       expect(work.trajectory.config.obligationQueryExtensions, [
         same(first),
         same(second),
+        isA<WorkSessionLivenessObligation>(),
       ]);
-      expect(defaultWork.trajectory.config.obligationQueryExtensions, isEmpty);
+      expect(
+        work.trajectory.config.obligationQueryExtensions.last,
+        isA<WorkSessionLivenessObligation>().having(
+          (obligation) => obligation.liveness,
+          'liveness',
+          same(work.sessionLiveness),
+        ),
+      );
+      expect(defaultWork.trajectory.config.obligationQueryExtensions, [
+        isA<WorkSessionLivenessObligation>(),
+      ]);
       expect(const TrajectoryConfig().obligationQueryExtensions, isEmpty);
+    },
+  );
+
+  test(
+    'station assembly shares registrar identity and activates after mount',
+    () async {
+      late StationDriver driver;
+      final work = await assemble(
+        driverBuilder: ({required buildDefault}) => driver = buildDefault(),
+      );
+      expect(driver.sessionLiveness, same(work.sessionLiveness));
+      expect(work.wiring.relayRegistrar, same(work.sessionLiveness));
+      final obligation = work.trajectory.config.obligationQueryExtensions
+          .whereType<WorkSessionLivenessObligation>()
+          .single;
+      expect(obligation.liveness, same(work.sessionLiveness));
+
+      final observer = _RecordingRelayObserver();
+      work.wiring.relayRegistrar!.mountRelay(observer: observer, ceiling: 1);
+      final due = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+      JoinedSnapshot dueSnapshot() => JoinedSnapshot(
+        graph: GraphSnapshot.fromParts(
+          beads: const [],
+          dependencies: const [],
+          readyIds: const [],
+          capturedAt: due,
+        ),
+        sessionsByWorkBead: {
+          'work-1': SessionProjection(
+            workBeadId: 'work-1',
+            sessionId: 'tgstate-session-1',
+            relayNextObservationAt: due,
+          ),
+        },
+      );
+      work.sessionLiveness.refresh(dueSnapshot());
+      expect(await obligation.repair(const []), isEmpty);
+      expect(observer.observations, isEmpty, reason: 'boot tick stays inert');
+
+      final seen = <RelayRegistrar?>[];
+      final owner = TreeOwner();
+      owner.mountRoot(
+        ProviderScope(
+          child: StationWork(wiring: work.wiring, child: _RegistrarProbe(seen)),
+        ),
+      );
+      owner.flush();
+      expect(seen.single, same(work.sessionLiveness));
+
+      work.afterFlush();
+      work.sessionLiveness.refresh(dueSnapshot());
+      expect(await obligation.repair(const []), isEmpty);
+      expect(observer.observations, hasLength(1));
+      work.afterFlush();
+      expect(await obligation.repair(const []), isEmpty);
+      expect(observer.observations, hasLength(1));
+
+      owner.dispose();
+      await work.shutdown();
+      expect(
+        () => work.sessionLiveness.mountRelay(observer: observer, ceiling: 1),
+        throwsStateError,
+      );
     },
   );
 
@@ -316,6 +403,11 @@ void main() {
     );
     final work = await assemble(trajectoryOverride: harness);
     expect(identical(work.trajectory, harness), isTrue);
+    expect(
+      harness.config.obligationQueryExtensions,
+      isEmpty,
+      reason: 'a caller-owned harness remains substitutive',
+    );
     expect(harness.mode, TrajectoryHarnessMode.down);
 
     await work.start();
