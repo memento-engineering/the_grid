@@ -479,7 +479,11 @@ abstract class Allocation with TreeLifecycleParticipant {
   bool canUpdate(Allocation next) => false;
 
   /// Mutate in place to serve [next]'s config (only called when [canUpdate] is
-  /// true). Rebinds [inputs] to [next]'s. Defaults to a no-op rebind.
+  /// true). The [TreeContext] passed to [startOrAdopt] is call-scoped and is
+  /// NEVER retained across [update]. The default implementation rebinds only
+  /// [inputs]. A subclass with [canUpdate] returning true must re-read tree values
+  /// from the [TreeContext] handed to each call, never cache one from an earlier
+  /// call.
   Future<void> update(Allocation next) async {
     inputs = next.inputs;
   }
