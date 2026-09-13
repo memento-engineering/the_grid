@@ -83,7 +83,13 @@ Future<void> defaultChmod600(String path) async {
 }
 
 /// Reads the lock at [file], or null when it is absent or does not parse.
-Future<StationLockRecord?> _readRecord(File file) async {
+///
+/// The ONE lock reader: the arbitration paths below and the `--grid-home`
+/// watch's resident probe (`probeStationResident`, `station_watch.dart`) share
+/// it, so "what counts as a readable lock" is defined once. A null answer is
+/// deliberately ambiguous between absent and torn — a caller that must tell
+/// them apart probes [File.exists] itself, exactly as the watch does.
+Future<StationLockRecord?> readStationLockRecord(File file) async {
   try {
     return StationLockRecord.fromJson(
       jsonDecode(await file.readAsString()) as Map<String, Object?>,
@@ -278,7 +284,7 @@ class StationLockService {
     var backoff = _holdInterval;
     for (;;) {
       if (!await file.exists()) return null;
-      final holder = await _readRecord(file);
+      final holder = await readStationLockRecord(file);
       if (holder != null) return holder;
       if (waited >= _holdWindow) {
         final message =
@@ -369,7 +375,7 @@ class StationLockHandle {
   /// unless it is still ours, then publish [next] by temp + chmod + rename.
   /// The in-memory [record] advances only after the rename succeeds.
   Future<void> _replace(StationLockRecord next, String verb) async {
-    final disk = await _readRecord(_file);
+    final disk = await readStationLockRecord(_file);
     if (!_isOurs(disk)) {
       final message =
           'grid run: refusing $verb on station.lock at ${_file.path} — the '
@@ -399,7 +405,7 @@ class StationLockHandle {
   /// start-throw unwind may both reach it.
   Future<void> release() async {
     if (!await _file.exists()) return;
-    final disk = await _readRecord(_file);
+    final disk = await readStationLockRecord(_file);
     if (!_isOurs(disk)) {
       _log(
         'grid run: NOT releasing station.lock at ${_file.path} — the on-disk '

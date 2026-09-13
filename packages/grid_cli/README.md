@@ -44,6 +44,44 @@ service URI. Flags: `--json` (NDJSON, one event per line), `--no-sql` (force
 the bd-CLI read path even when pooled Dolt SQL is available),
 `--for-seconds N` (fixed duration instead of until Ctrl-C).
 
+`--until <predicate> --timeout N` blocks until a named condition holds and then
+exits 0 (2 on the timeout). The set is CLOSED: `gate-open`, `gate-closed`,
+`session-terminal`, `bead-status=<status>`, `ready-count=0`.
+
+## `grid watch --grid-home <home>`
+
+Watch the STATION instead of a substation work graph: the grid state store at
+`<home>/.grid/.beads` (gate and session beads) plus the resident's RS-2 lock at
+`<home>/.grid/station.lock`. One typed line per event — `--json` makes each an
+NDJSON object:
+
+| Event | Line |
+|---|---|
+| `gate.opened` | `<gate> <bead> <node>` — a gate bead entered the open-gate shape |
+| `gate.closed` | `<gate> <bead> <node>` — closed, stripped, or hard-deleted |
+| `session.minted` | `<bead>` (the NDJSON record adds `workBead`) |
+| `session.terminal` | `<bead> <disposition>` (`done` / `held` / `voided`) |
+| `zero-live` | every live session went terminal, after at least one was live |
+| `resident.down` | `<reason> [pid <n>]` — the lock is gone, or its pid is dead |
+| `heartbeat` | `gates <g> sessions <s> ready <r>` — the census, every `--heartbeat` minutes (default 5; `0` disables), and once at attach |
+
+`--until` takes its own CLOSED set here: `gate-open`, `gate-closed`,
+`session-minted`, `session-terminal`, `zero-live`, `resident-down`, `any`
+(the first event of any kind BUT the heartbeat — the heartbeat exists to prove
+the watch is alive, so it never ends one). The exit contract is 0 when the
+predicate held, 2 on `--timeout`, and **3 when the resident went down and that
+was not the awaited event** — so a governor's standing arming
+
+```bash
+grid watch --grid-home <home> --until any --timeout 2700
+```
+
+re-armed by that one line after every relaunch tells "my work moved" from "I
+gave up" from "there is no station any more" without parsing prose, and nothing
+lives in a scratchpad. The read path is the same pooled Dolt SQL the verb
+already uses; `bd show` is never spawned in the loop. Delivery (an open PR
+reaching a terminal state) is NOT this verb.
+
 ## `grid gate`
 
 List and resolve the committee gates The Circuit parks. A gate bead lives in

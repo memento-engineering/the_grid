@@ -16,6 +16,17 @@ const int kWatchUntilTimedOut = 2;
 /// contract (a ready delta before the baseline). `EX_SOFTWARE`.
 const int kWatchUntilBrokenStream = 70;
 
+/// `grid watch --grid-home` exit code: the RESIDENT went down (its
+/// `.grid/station.lock` vanished, or the pid it names is dead) and that was
+/// NOT the awaited event.
+///
+/// A THIRD answer, distinct from both [kWatchUntilSatisfied] and
+/// [kWatchUntilTimedOut]: the governor's re-armed watch must be able to tell
+/// "the thing I waited for happened" from "I gave up" from "there is no
+/// station to watch any more" without parsing prose. `--until resident-down`
+/// makes it the awaited event, and then it exits [kWatchUntilSatisfied].
+const int kWatchResidentDown = 3;
+
 /// The gate-bead metadata key naming the session an open gate blocks.
 ///
 /// A bare literal at every other reader too (`StationBeadWriter.createGate`,
@@ -23,6 +34,20 @@ const int kWatchUntilBrokenStream = 70;
 /// there is no shared constant to import, and minting one would have to be
 /// threaded through three packages, so this reader matches the house shape.
 const String kGateBlocksKey = 'blocks';
+
+/// The park-predicate shape, quantified existentially over sessions instead of
+/// naming one: an OPEN `type=gate` bead whose `blocks` metadata NAMES a
+/// session. Never cursor state, never a boolean flag.
+///
+/// The ONE definition of "an open gate" both watch modes read: the
+/// substation-root predicates fold it over a work graph, and `--grid-home`'s
+/// station fold (`StationFold`, `station_watch.dart`) folds it over the state
+/// store's gate beads.
+bool isOpenGateBead(Bead bead) {
+  if (bead.issueType != GridIssueTypes.gate || bead.isClosed) return false;
+  final blocks = bead.metadata[kGateBlocksKey];
+  return blocks is String && blocks.isNotEmpty;
+}
 
 /// The CLOSED set of `--until` literals, in help order.
 const List<String> kWatchPredicateLiterals = <String>[
@@ -169,6 +194,31 @@ WatchUntil? armWatchUntil({
   String? timeout,
   String? forSeconds,
 }) {
+  final flags = validateUntilFlags(
+    until: until,
+    timeout: timeout,
+    forSeconds: forSeconds,
+  );
+  if (flags == null) return null;
+  return WatchUntil(
+    predicate: parseWatchPredicate(flags.literal),
+    timeout: flags.timeout,
+  );
+}
+
+/// The `--until` / `--timeout` / `--for-seconds` MODE SELECTOR, validated as
+/// ONE unit and shared by both watch modes.
+///
+/// Returns null when `--until` was not passed (the duration modes), or the
+/// validated literal + deadline for the caller's own predicate parser — the
+/// substation-root set ([parseWatchPredicate]) or the station set
+/// (`parseStationPredicate`). Throws [WatchUntilRefusal] for every illegal
+/// combination; the rules are identical in both modes, so they live here once.
+({String literal, Duration timeout})? validateUntilFlags({
+  String? until,
+  String? timeout,
+  String? forSeconds,
+}) {
   if (until == null) {
     if (timeout != null) {
       throw const WatchUntilRefusal(
@@ -199,10 +249,7 @@ WatchUntil? armWatchUntil({
       '--timeout must be a positive whole number of seconds — got "$timeout".',
     );
   }
-  return WatchUntil(
-    predicate: parseWatchPredicate(until),
-    timeout: Duration(seconds: seconds),
-  );
+  return (literal: until, timeout: Duration(seconds: seconds));
 }
 
 /// Folds the typed event stream into the single question `--until` asks: has
@@ -231,25 +278,16 @@ class PredicateEvaluator {
     UntilReadyCountZero() => _readyCountReachedZero(event),
   };
 
-  /// The park-predicate shape, quantified existentially over sessions instead
-  /// of naming one: an OPEN `type=gate` bead whose `blocks` metadata NAMES a
-  /// session. Never cursor state, never a boolean flag.
-  static bool _isOpenGate(Bead bead) {
-    if (bead.issueType != GridIssueTypes.gate || bead.isClosed) return false;
-    final blocks = bead.metadata[kGateBlocksKey];
-    return blocks is String && blocks.isNotEmpty;
-  }
-
   static bool _gateOpened(GraphEvent event) => switch (event) {
-    BeadCreated(:final bead) => _isOpenGate(bead),
-    BeadReopened(:final after) => _isOpenGate(after),
+    BeadCreated(:final bead) => isOpenGateBead(bead),
+    BeadReopened(:final after) => isOpenGateBead(after),
     // The mint is `bd create -t gate` carrying NO metadata, then a merge
     // `bd update --set-metadata blocks=… node=…`, so the `blocks` stamp
     // routinely lands on a SECOND event. Fire only on the EDGE into the open
     // shape, so a later unrelated field change on an already-open gate cannot
     // re-fire it.
     BeadUpdated(:final before, :final after) =>
-      _isOpenGate(after) && !_isOpenGate(before),
+      isOpenGateBead(after) && !isOpenGateBead(before),
     BeadClosed() ||
     BeadDeleted() ||
     SnapshotInitialized() ||
@@ -261,10 +299,10 @@ class PredicateEvaluator {
   static bool _gateStoppedBeingOpen(GraphEvent event) => switch (event) {
     // `diffSnapshots` emits BeadClosed only on a real !closed→closed edge, so
     // `before` being an open gate IS the transition.
-    BeadClosed(:final before) => _isOpenGate(before),
+    BeadClosed(:final before) => isOpenGateBead(before),
     // A hard `bd delete` ends the gate's EXISTENCE, and existence is what the
     // park decision makes the evidence — so deletion ends the park too.
-    BeadDeleted(:final bead) => _isOpenGate(bead),
+    BeadDeleted(:final bead) => isOpenGateBead(bead),
     BeadCreated() ||
     BeadUpdated() ||
     BeadReopened() ||
