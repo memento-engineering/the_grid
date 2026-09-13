@@ -12,7 +12,7 @@ environment:
   sdk: ^3.11.0
 
 dependencies:
-  beads_dart: ^0.2.1-dev.1
+  beads_dart: ^0.3.0-dev.1
   freezed_annotation: ^3.0.0
   # Stage-1 dep edge (tg-zfek, stage1-wiring §1.1): the engine-side derivation
   # layer (`StationTrajectoryRecorder`, chunk W3) constructs grid_trajectory's

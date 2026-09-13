@@ -9,7 +9,7 @@
   `ReapWorktree`, `SessionDisciplineStamp`, `kSessionDisciplineKey` and `kSessionBreakGlassKey`
   (#431), and the guarded silent-success bd writes (`allowNotesReplacement`, `BdGuardrailRefused`
   surfaced through `StationBeadWriter`; #420).
-- Floors `beads_dart` and `grid_trajectory` at `^0.2.1-dev.1`: the code above uses API that
+- Floors `beads_dart` at `^0.3.0-dev.1` and `grid_trajectory` at `^0.2.1-dev.1`: the code above uses API that
   `0.2.0` of each does not have (declared-floor scrub, 2026-09-13).
 
 ## 0.2.0

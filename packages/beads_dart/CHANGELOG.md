@@ -1,9 +1,13 @@
-## 0.2.1-dev.1
+## 0.3.0-dev.1
 
+- Breaking: `BeadTextRefused` now requires the `call` argument (the bd argv the guard refused), so
+  any consumer constructing it directly no longer compiles (#420; surfaced by `release classify`
+  on 2026-09-13 — the 0.2.1-dev.1 entry in the_grid#438 understated this and was never tagged).
+- Migration: pass `call: <the List<String> bd argv>` at every `BeadTextRefused(...)` construction
+  site; code that only catches the exception is unaffected.
 - Guards silent-success bd operations: `BdCliService` refuses a notes write that would replace the
   field unless the caller passes `allowNotesReplacement`, and a refused guardrail surfaces as
-  `BdGuardrailRefused` with its `reason` and `remedy` (#420). Additive; the default keeps the
-  previous accrue-only behaviour.
+  `BdGuardrailRefused` with its `reason` and `remedy` (#420).
 
 ## 0.2.0
 
