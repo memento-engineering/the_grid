@@ -11,10 +11,16 @@ void main() {
       grades: {'critic': 'A'},
       rationale: 'false negative',
     );
+    const rearm = GridCommandRequest.rearmMountAttempt(
+      beadId: 'tg-1',
+      actor: 'operator',
+      reason: 'corrected mount configuration',
+    );
     const list = GridCommandRequest.listGates();
 
     expect(rework, isA<GridRework>());
     expect((rework as GridRework).beyondCap, isFalse);
+    expect(rearm, isA<GridMountAttemptRearm>());
     expect(list, isA<GridGateLs>());
     expect(resolve, isA<GridGateResolve>());
     expect(

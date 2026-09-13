@@ -228,6 +228,8 @@ final class StationCommandHandler implements GridCommandHandler {
         append: append,
         allowNotesReplacement: allowNotesReplacement,
       ),
+    GridMountAttemptRearm(:final beadId, :final actor, :final reason) =>
+      _rearmMountAttempt(beadId: beadId, actor: actor, reason: reason),
     GridPauseSession(:final beadId) => _setPauseState(
       beadId: beadId,
       pause: true,
@@ -823,6 +825,124 @@ final class StationCommandHandler implements GridCommandHandler {
         'operation': 'grid/bead/set',
         'beadId': beadId,
         'field': field.name,
+      },
+    );
+  }
+
+  /// Resets the exhausted singleton mount-attempt counter on the state store.
+  Future<GridCommandResult> _rearmMountAttempt({
+    required String beadId,
+    required String actor,
+    required String reason,
+  }) async {
+    final normalizedActor = actor.trim();
+    if (normalizedActor.isEmpty) {
+      return _refused(
+        'actor_required',
+        'Mount-attempt rearm requires a nonblank actor.',
+      );
+    }
+    if (reason.trim().isEmpty) {
+      return _refused(
+        'reason_required',
+        'Mount-attempt rearm requires a nonblank reason.',
+      );
+    }
+
+    final identity = BeadOwnershipPredicate.ownedPrefixOf(
+      beadId,
+      _workStoresByIdentity.keys,
+    );
+    final workStore = identity == null ? null : _workStoresByIdentity[identity];
+    if (workStore == null) {
+      return _refused(
+        'work_store_not_owned',
+        'No resident work store owns "$beadId".',
+      );
+    }
+
+    await _refreshState();
+    await workStore.refresh();
+    final state = _stateSource.current;
+    final work = workStore.source.current;
+    if (state == null || work == null) {
+      return _refused(
+        'snapshot_unavailable',
+        'A resident store has no current snapshot.',
+      );
+    }
+    if (work.bead(beadId) == null) {
+      return _refused(
+        'work_bead_missing',
+        'Work bead "$beadId" is absent from its resident store.',
+      );
+    }
+
+    final matches = state.beads
+        .where(
+          (bead) =>
+              !bead.isClosed &&
+              bead.issueType == GridIssueTypes.mountAttempt &&
+              _meta(bead, MountAttemptKeys.workBead) == beadId,
+        )
+        .toList(growable: false);
+    if (matches.isEmpty) {
+      return _refused(
+        'mount_attempt_not_found',
+        'No open mount-attempt record exists for "$beadId"; current count 0.',
+      );
+    }
+    if (matches.length > 1) {
+      final ids = matches.map((bead) => bead.id).toList(growable: false)
+        ..sort();
+      return _refused(
+        'mount_attempt_ambiguous',
+        'Multiple open mount-attempt records exist for "$beadId": '
+            '${ids.join(', ')}.',
+      );
+    }
+
+    final bead = matches.single;
+    final record = projectMountAttempt(bead)!;
+    if (!record.isExhausted) {
+      return _refused(
+        'mount_attempt_not_exhausted',
+        'Mount-attempt record "${record.recordId}" has current count '
+            '${record.count}; cap $kMaxMountAttempts has not been reached.',
+      );
+    }
+
+    final timestamp = DateTime.now().toUtc().toIso8601String();
+    final receipt =
+        '--- grid mount-attempt RE-ARM ($timestamp) ---\n'
+        'actor: $normalizedActor\n'
+        'work bead: $beadId\n'
+        'prior attempt count: ${record.count}\n'
+        'reason:\n'
+        '$reason';
+    try {
+      await _stateWriter.update(
+        record.recordId,
+        metadata: const {MountAttemptKeys.count: '0'},
+        appendNotes: receipt,
+        ifAssignee: bead.assignee,
+        ifStatus: bead.status,
+      );
+    } on OwnershipRefused catch (error) {
+      return _refused('ownership_refused', error.toString());
+    } on OwnershipGuardRefused catch (error) {
+      return _refused('ownership_refused', error.toString());
+    }
+    await _refreshState();
+    return GridCommandResult.completed(
+      message:
+          'Rearmed mount-attempt record "${record.recordId}" for "$beadId".',
+      value: {
+        'operation': 'grid/mount-attempt/rearm',
+        'beadId': beadId,
+        'recordId': record.recordId,
+        'priorCount': record.count,
+        'actor': normalizedActor,
       },
     );
   }

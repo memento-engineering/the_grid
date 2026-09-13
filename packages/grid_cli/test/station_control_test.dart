@@ -268,7 +268,7 @@ void main() {
     });
 
     test(
-      'POST /command decodes both methods and maps completed and refused',
+      'POST /command decodes operator methods and maps completed and refused',
       () async {
         final handler = _FakeCommandHandler();
         final control = await StationControl.start(
@@ -382,9 +382,35 @@ void main() {
           ),
         );
 
+        final rearm = await _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '10',
+          idempotencyKey: 'mount-attempt-rearm-1',
+          body: const {
+            'id': 'rearm-1',
+            'method': 'grid/mount-attempt/rearm',
+            'params': {
+              'beadId': 'tg-1',
+              'actor': 'Nico',
+              'reason': 'mount conditions repaired',
+            },
+          },
+        );
+        expect(rearm.statusCode, HttpStatus.ok);
+        expect(
+          handler.calls.last,
+          const GridCommandRequest.rearmMountAttempt(
+            beadId: 'tg-1',
+            actor: 'Nico',
+            reason: 'mount conditions repaired',
+          ),
+        );
+
         for (final entry in const [
-          ('grid/session/pause', 'pause-1', '10'),
-          ('grid/session/resume', 'resume-1', '11'),
+          ('grid/session/pause', 'pause-1', '11'),
+          ('grid/session/resume', 'resume-1', '12'),
         ]) {
           final response = await _post(
             control.url,
@@ -483,6 +509,53 @@ void main() {
         );
 
         expect(response.statusCode, HttpStatus.badRequest);
+        expect(handler.calls, isEmpty);
+      },
+    );
+
+    test(
+      'POST /command rejects malformed mount-attempt rearm fields',
+      () async {
+        final handler = _FakeCommandHandler();
+        final control = await StationControl.start(
+          port: 0,
+          token: 't',
+          view: _sampleStatus,
+          commandHandler: handler,
+        );
+        addTearDown(control.dispose);
+
+        for (final entry in <Map<String, Object?>>[
+          {'beadId': 'tg-1', 'actor': 7, 'reason': 'retry'},
+          {
+            'beadId': 'tg-1',
+            'actor': 'Nico',
+            'reason': 'retry',
+            'unexpected': true,
+          },
+        ]) {
+          final response = await _post(
+            control.url,
+            '/command',
+            token: 't',
+            fence: '1',
+            idempotencyKey: 'bad-rearm-${entry.length}',
+            body: {
+              'id': 'bad-rearm',
+              'method': 'grid/mount-attempt/rearm',
+              'params': entry,
+            },
+          );
+          expect(response.statusCode, HttpStatus.badRequest);
+          expect(
+            (jsonDecode(response.body) as Map<String, Object?>)['error'],
+            isA<Map<String, Object?>>().having(
+              (value) => value['code'],
+              'code',
+              'invalid_request',
+            ),
+          );
+        }
         expect(handler.calls, isEmpty);
       },
     );

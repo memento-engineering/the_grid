@@ -70,10 +70,14 @@ dart run grid_cli:grid watch <substation-root>
 ```
 
 `grid gate` lists/resolves the committee gates a circuit parks; `grid rework <bead>`
-mints a fresh round for a gated bead. Run a station under
-`dart run --enable-vm-service` (JIT) to let exploration tools attach; a composed
-runner binds the exported `reload` command to hot-swap a resident JIT station's
-sources without a bounce (live sessions are adopted, never killed).
+mints a fresh round for a gated bead. `grid bead rearm <bead-id> --grid-root
+<absolute-root> --actor <actor> (--reason <text> | --reason-file <path-or-->)`
+re-arms one exhausted mount-attempt record through the resident station. It
+requires attributable, nonblank operator context and no linked session. Run a
+station under `dart run --enable-vm-service` (JIT) to let exploration tools
+attach; a composed runner binds the exported `reload` command to hot-swap a
+resident JIT station's sources without a bounce (live sessions are adopted,
+never killed).
 
 ## Reading order
 

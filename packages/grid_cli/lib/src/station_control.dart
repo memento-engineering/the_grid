@@ -806,6 +806,23 @@ class StationControl implements ExplorationTransport {
           allowNotesReplacement: allowNotesReplacement,
         );
       }
+    } else if (method == 'grid/mount-attempt/rearm') {
+      final beadId = params['beadId'];
+      final actor = params['actor'];
+      final reason = params['reason'];
+      const allowed = {'beadId', 'actor', 'reason'};
+      if (params.keys.every(allowed.contains) &&
+          params.length == allowed.length &&
+          beadId is String &&
+          beadId.isNotEmpty &&
+          actor is String &&
+          reason is String) {
+        command = GridCommandRequest.rearmMountAttempt(
+          beadId: beadId,
+          actor: actor,
+          reason: reason,
+        );
+      }
     } else if (method == 'grid/session/pause' ||
         method == 'grid/session/resume') {
       final beadId = params['beadId'];

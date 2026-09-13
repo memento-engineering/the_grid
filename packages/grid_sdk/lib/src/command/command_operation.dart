@@ -44,6 +44,13 @@ sealed class GridCommandRequest with _$GridCommandRequest {
     @Default(false) bool allowNotesReplacement,
   }) = GridSetBeadText;
 
+  /// Rearms [beadId]'s one exhausted mount-attempt record in place.
+  const factory GridCommandRequest.rearmMountAttempt({
+    required String beadId,
+    required String actor,
+    required String reason,
+  }) = GridMountAttemptRearm;
+
   /// Parks the live session driving [beadId] without closing its round.
   const factory GridCommandRequest.pauseSession({required String beadId}) =
       GridPauseSession;

@@ -39,10 +39,25 @@ void main() {
     );
   });
 
-  test('a no-argument BeadCommand vends all three verbs', () {
+  test('a no-argument BeadCommand vends all four verbs', () {
     expect(
       BeadCommand().subcommands.keys,
-      containsAll(const <String>['set', 'board', 'round']),
+      containsAll(const <String>['set', 'board', 'round', 'rearm']),
+    );
+  });
+
+  test('the dev runner resolves bead rearm by name', () async {
+    final result = await Process.run(Platform.resolvedExecutable, const [
+      'run',
+      'bin/grid.dart',
+      'bead',
+      'rearm',
+    ]);
+
+    expect(result.exitCode, 64);
+    expect(
+      result.stderr,
+      contains('grid bead rearm: exactly one bead id is required.'),
     );
   });
 
