@@ -1,3 +1,10 @@
+## 0.3.1-dev.1
+
+- Floors `beads_dart` at `^0.3.0-dev.1` (the 0.3.0 line carries the #420 guard, which is breaking for
+  direct constructors; a `^0.2.0` floor cannot admit a 0.3.0 prerelease, so every consumer of the
+  2026-09-13 grid wave needs this release to resolve).
+- No library changes; dependency floors only.
+
 ## 0.3.0
 
 - PROMOTED from 0.3.0-rc.4. This is the stable release of the 0.3.0 line; the code is the

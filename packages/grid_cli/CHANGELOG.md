@@ -1,3 +1,15 @@
+## 0.6.0-dev.2
+
+- Publishes what main has carried unversioned since 0.6.0-dev.1:
+- feat(engine): surface stranded work in the admission status (#435)
+- feat(cli): expose bead mount-attempt rearm (#429)
+- fix(cli): make cross-link mint idempotent (#428)
+- fix(beads): guard silent-success bd operations (#420)
+- fix(cli): correct rework and link flag guidance (#418)
+- Floors the 2026-09-13 grid wave: `beads_dart ^0.3.0-dev.1` (the station control uses
+  `allowNotesReplacement`), `grid_engine`/`grid_sdk ^0.4.0-dev.2` (the admission status `stranded`
+  view), `grid_runtime ^0.2.1-dev.1`, `grid_trajectory ^0.2.1-dev.1`, `grid_exploration ^0.3.1-dev.1`.
+
 ## 0.6.0-dev.1
 
 - Breaking: rides the genesis_tree 0.4.0 adoption wave — floors `grid_engine` at `^0.4.0-dev.1`,
