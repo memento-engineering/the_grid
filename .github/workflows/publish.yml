@@ -48,6 +48,31 @@ jobs:
           # which still run before the publish job.
           echo "bd_refs=$(jq -cn --arg floor "$floor" --arg latest "$latest" '[$floor,$latest]|unique')" >> "$GITHUB_OUTPUT"
 
+  # memento-engineering#releases-publish-only-through-the-gated-release-command:
+  # enforce the release command's declared-floor gate even for a hand-pushed tag.
+  declared-floors:
+    needs: parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+      - name: Activate the declared-floor scrub
+        run: dart pub global activate dart_grid_assets 0.2.0
+      - name: Run the declared-floor scrub
+        run: |
+          status=1
+          for attempt in $(seq 1 120); do
+            if dart pub global run dart_grid_assets:dart_grid_assets dart release scrub --dir packages/${{ needs.parse.outputs.package }} --json; then
+              exit 0
+            else
+              status=$?
+            fi
+            if [[ "$attempt" -lt 120 ]]; then
+              sleep 5
+            fi
+          done
+          exit "$status"
+
   bd-compatibility:
     # Runs ONLY for beads_dart. A job-level `if` is required (not step-level):
     # GitHub resolves every DECLARED action at job setup regardless of step
@@ -91,12 +116,12 @@ jobs:
         run: tool/bd_compatibility/run.sh "${{ github.workspace }}/upstream-beads" "${{ runner.temp }}/bin/bd"
 
   publish:
-    needs: [parse, bd-compatibility]
+    needs: [parse, bd-compatibility, declared-floors]
     # bd-compatibility SKIPS for every package except beads_dart; a skipped
     # need must not skip the publish.
     # grid_exploration publishes through its own job below (it needs a built
     # DevTools bundle the reusable workflow cannot produce).
-    if: ${{ !cancelled() && needs.parse.result == 'success' && needs.parse.outputs.package != 'grid_exploration' && (needs.bd-compatibility.result == 'success' || needs.bd-compatibility.result == 'skipped') }}
+    if: ${{ !cancelled() && needs.parse.result == 'success' && needs.declared-floors.result == 'success' && needs.parse.outputs.package != 'grid_exploration' && (needs.bd-compatibility.result == 'success' || needs.bd-compatibility.result == 'skipped') }}
     permissions:
       id-token: write # pub.dev OIDC trusted publishing
     uses: dart-lang/setup-dart/.github/workflows/publish.yml@v1
@@ -112,8 +137,8 @@ jobs:
     # and the only tag-push run (v0.1.1) failed. This job builds the bundle
     # with tool/build_devtools_extension.sh before `dart pub publish`; the OIDC
     # trusted-publishing exchange happens inside pub itself under id-token.
-    needs: parse
-    if: needs.parse.outputs.package == 'grid_exploration'
+    needs: [parse, declared-floors]
+    if: ${{ !cancelled() && needs.parse.result == 'success' && needs.declared-floors.result == 'success' && needs.parse.outputs.package == 'grid_exploration' }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write # pub.dev OIDC trusted publishing
