@@ -524,7 +524,11 @@ void main() {
       );
       stateSrc.push(
         _state([
-          _round1Session('tgdog-round1', workBead: 'tg-1#r1'),
+          // The successor is written only after the owned predecessor close
+          // succeeds, so a state-store snapshot that sees round 2 must also
+          // see round 1 terminal. The stale OPEN projection above is the
+          // causal close-to-mint gap this test exercises.
+          _closedRound1Session('tgdog-round1', workBead: 'tg-1#r1'),
           ..._round1Steps('tgdog-round1'),
           _openGate('gate-1', sessionId: 'tgdog-round1'),
           _freshSession('tgdog-round2', workBead: 'tg-1'),

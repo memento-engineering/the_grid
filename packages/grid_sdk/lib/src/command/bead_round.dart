@@ -49,10 +49,13 @@ sealed class RoundContext with _$RoundContext {
 
 /// Joins [workBead] to its live session among [stateBeads].
 ///
-/// The live session is the one whose `work_bead` is EXACTLY the bead id.
-/// Retired rounds carry `<id>#r<N>` and voided ones `<id>#void-<session>`
-/// (`grid_engine`'s `src/domain/rework.dart`), so both drop out of this join
-/// by construction — the same predicate `StationCommandHandler._rework` uses.
+/// This read-only resident projection deliberately matches `work_bead`
+/// EXACTLY to the bare bead id: it reports a fully minted current round, which
+/// is narrower than linked-session membership. Retired rounds carry
+/// `<id>#r<N>` and voided ones `<id>#void-<session>` (`grid_engine`'s
+/// `src/domain/rework.dart`), so both drop out here; an anomalously OPEN
+/// tombstone is handled by the engine membership rule rather than reported as
+/// a fully minted round.
 /// The round number is `maxReworkRound(...) + 1`, rework.dart's own stated
 /// rule ("The next round is `maxReworkRound(...) + 1`"), not a second
 /// definition of it.
