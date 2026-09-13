@@ -88,6 +88,18 @@ class _JobCap extends ProcessCapability {
   }
 }
 
+class _SignallingJobCap extends _JobCap {
+  _SignallingJobCap(this.spawnCalled);
+
+  final Completer<void> spawnCalled;
+
+  @override
+  RuntimeConfig spawn(TreeContext context, StepArgs args) {
+    spawnCalled.complete();
+    return super.spawn(context, args);
+  }
+}
+
 class _FlatChannelSession implements ProcessSession {
   _FlatChannelSession(this.terminal);
 
@@ -313,6 +325,37 @@ void main() {
       expect(job.isDetachable, isFalse);
     });
   });
+
+  test(
+    'unmount after ProcessCapability.spawn leaves ProcessAllocation gone without runtime start',
+    () async {
+      final reports = <AllocationReport>[];
+      final provider = FakeRuntimeProvider();
+      addTearDown(provider.close);
+      final spawnCalled = Completer<void>();
+      final allocation =
+          _SignallingJobCap(spawnCalled).createAllocation(
+                _inputs(
+                  transport: provider,
+                  sink: reports.add,
+                  cancel: CancelToken(),
+                  kind: StepKind.job,
+                  fence: const AdoptFence(),
+                ),
+              )
+              as ProcessAllocation;
+      final context = _treeCtx();
+
+      final start = allocation.startMounted(context);
+      await spawnCalled.future;
+      context.mounted = false;
+      await start;
+
+      expect(allocation.state, AllocationState.gone);
+      expect(provider.started, isEmpty);
+      expect(reports, isEmpty);
+    },
+  );
 
   group('Track C — daemon adopt-or-respawn (no-adopt-on-faith, D4/D5)', () {
     test('a proven-fresh survivor (liveness ∧ endpoint proof) is ADOPTED — '
