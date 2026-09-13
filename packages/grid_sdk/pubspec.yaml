@@ -14,7 +14,7 @@ environment:
 dependencies:
   # The store/controller layer the work assembly builds sources over (tg-yl8:
   # `buildStationWork` — BeadsWorkspace / GridRuntimeFactory / BdCliService).
-  beads_dart: ^0.2.1-dev.1
+  beads_dart: ^0.3.0-dev.1
   freezed_annotation: ^3.0.0
   # The element model the composition Seeds are authored on (re-exported: one
   # import authors a station). The 0.2 wave shares foundation's native

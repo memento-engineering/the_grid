@@ -4,7 +4,7 @@
   in the admission status (#435), the wave-2 cut boundary (#431), the bead mount-attempt rearm
   exposed to the cli (#429), decision appends awaited only under cut (#427), open tombstones joined
   to their work bead (#426) and work-session liveness coordinated with verdicts (#421).
-- Floors `beads_dart`, `grid_trajectory` and `grid_runtime` at `^0.2.1-dev.1` and `grid_engine` at
+- Floors `beads_dart` at `^0.3.0-dev.1`, `grid_trajectory` and `grid_runtime` at `^0.2.1-dev.1` and `grid_engine` at
   `^0.4.0-dev.2` — the wave that publishes the API this wiring compiles against.
 
 ## 0.4.0-dev.1
