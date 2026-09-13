@@ -140,13 +140,7 @@ Future<int> runLink({
       final factory = bdFactory ?? _processBd;
       final stateWorkspace = openStateStore(stateStore, dirExists: dirExists);
       final stateProbe = await _probeReader(factory(stateWorkspace));
-      // A scoped read REFUSES an unregistered type (bd: invalid issue type
-      // 'link'), where the whole-store export this replaced simply found
-      // nothing. A store without the `link` custom type cannot hold link
-      // beads, so that is an empty result, not an error.
-      final links = stateProbe.types.contains(GridIssueTypes.link)
-          ? await stateProbe.reader.openBeads(types: {GridIssueTypes.link})
-          : <Bead>[];
+      final links = await _openLinkBeads(stateProbe);
       final statuses = <String, String>{};
       final endpointIds = <String>{
         for (final bead in links) ...[
@@ -171,7 +165,6 @@ Future<int> runLink({
           if (bead != null) statuses[id] = bead.status.wire;
         }
       }
-      links.sort((a, b) => a.id.compareTo(b.id));
       final rows = links
           .map((bead) {
             final from = _metadata(bead, CrossLinkKeys.from);
@@ -274,6 +267,17 @@ Future<int> runLink({
     if (refusal != null) {
       writeErr(refusal);
       return 1;
+    }
+    final existing = await _openLinkBeads(
+      probe,
+      metadataAll: {CrossLinkKeys.from: from, CrossLinkKeys.to: to},
+    );
+    if (existing.isNotEmpty) {
+      write(
+        '${existing.first.id} '
+        '(already wired; returned existing link, minted nothing)',
+      );
+      return 0;
     }
     final writer = StationBeadWriter(
       bd: bd,
@@ -387,10 +391,8 @@ Future<int> runUnlink({
               types: probe.types,
             ),
           ].whereType<Bead>().toList()
-        : !probe.types.contains(GridIssueTypes.link)
-        ? <Bead>[]
-        : await probe.reader.openBeads(
-            types: {GridIssueTypes.link},
+        : await _openLinkBeads(
+            probe,
             metadataAll: {
               CrossLinkKeys.from: arguments.rest[0],
               CrossLinkKeys.to: arguments.rest[1],
@@ -452,6 +454,23 @@ Future<({CliBeadProbeReader reader, Set<IssueType> types})> _probeReader(
   }
   final types = {for (final name in names) IssueType(name)};
   return (reader: CliBeadProbeReader(bd, lifecycleTypes: types), types: types);
+}
+
+Future<List<Bead>> _openLinkBeads(
+  ({CliBeadProbeReader reader, Set<IssueType> types}) probe, {
+  Map<String, String> metadataAll = const {},
+}) async {
+  // A scoped read REFUSES an unregistered type (bd: invalid issue type
+  // 'link'), where a whole-store export simply finds nothing. A store without
+  // the `link` custom type cannot hold link beads, so that is an empty result,
+  // not an error.
+  if (!probe.types.contains(GridIssueTypes.link)) return <Bead>[];
+  final links = await probe.reader.openBeads(
+    types: {GridIssueTypes.link},
+    metadataAll: metadataAll,
+  );
+  links.sort((a, b) => a.id.compareTo(b.id));
+  return links;
 }
 
 Map<String, LinkEndpointStore>? _roster(

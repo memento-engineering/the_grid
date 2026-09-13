@@ -156,6 +156,9 @@ void main() {
       everyElement(isNot(contains('--metadata'))),
     );
 
+    for (final store in [state, tg, pow]) {
+      store.calls.clear();
+    }
     state.beads.add(_link('houston-link1', 'tg-missing', 'pow-missing'));
     final lines = <String>[];
     final listed = await runLink(
@@ -275,6 +278,268 @@ void main() {
     expect([state, tg, pow].expand((store) => store.calls), isEmpty);
   });
 
+  test('open exact pair returns the existing id without minting', () async {
+    pow.beads[0] = pow.beads.single.copyWith(status: BeadStatus.open);
+    state.beads.add(_link('houston-link1', 'tg-q9k', 'pow-60g'));
+    final beadCount = state.beads.length;
+    final mutationCount = state.mutationCalls.length;
+    final output = <String>[];
+
+    expect(
+      await runLink(
+        arguments: _linkArgs([
+          'tg-q9k',
+          '--blocked-by',
+          'pow-60g',
+          '--grid-root',
+          temp.path,
+          '--prefix',
+          'tg',
+          '--prefix',
+          'pow',
+          '--actor',
+          'specify',
+          '--reason',
+          'waits on power',
+        ]),
+        stateStorePrefix: 'houston',
+        endpoints: endpoints,
+        bdFactory: factory,
+        out: output.add,
+      ),
+      0,
+    );
+
+    expect(output, [
+      'houston-link1 (already wired; returned existing link, minted nothing)',
+    ]);
+    expect(state.beads, hasLength(beadCount));
+    expect(state.mutationCalls, hasLength(mutationCount));
+    expect(state.calls.where((call) => call.first == 'list'), [
+      [
+        'list',
+        '-t',
+        'link',
+        '--status',
+        'open',
+        '--metadata-field',
+        'grid.link.from=tg-q9k',
+        '--metadata-field',
+        'grid.link.to=pow-60g',
+        '--json',
+        '--limit',
+        '0',
+      ],
+    ]);
+  });
+
+  test('closed exact pair permits a fresh mint', () async {
+    state.beads.add(
+      _link('houston-link1', 'tg-q9k', 'pow-60g', status: BeadStatus.closed),
+    );
+    final beadCount = state.beads.length;
+    final mutationCount = state.mutationCalls.length;
+    final output = <String>[];
+
+    expect(
+      await runLink(
+        arguments: _linkArgs([
+          'tg-q9k',
+          '--blocked-by',
+          'pow-60g',
+          '--grid-root',
+          temp.path,
+          '--prefix',
+          'tg',
+          '--prefix',
+          'pow',
+          '--actor',
+          'specify',
+          '--reason',
+          'rewired after retraction',
+        ]),
+        stateStorePrefix: 'houston',
+        endpoints: endpoints,
+        bdFactory: factory,
+        out: output.add,
+      ),
+      0,
+    );
+
+    expect(output, ['houston-link2']);
+    expect(state.beads, hasLength(beadCount + 1));
+    expect(state.mutationCalls, hasLength(mutationCount + 2));
+    expect(
+      state.beads.where(
+        (bead) =>
+            bead.issueType == GridIssueTypes.link &&
+            bead.status == BeadStatus.open,
+      ),
+      hasLength(1),
+    );
+  });
+
+  test('either endpoint mismatch mints normally', () async {
+    for (final existing in [
+      _link('houston-link1', 'tg-other', 'pow-60g'),
+      _link('houston-link1', 'tg-q9k', 'pow-other'),
+    ]) {
+      state.beads
+        ..clear()
+        ..add(existing);
+      state.calls.clear();
+      final output = <String>[];
+
+      expect(
+        await runLink(
+          arguments: _linkArgs([
+            'tg-q9k',
+            '--blocked-by',
+            'pow-60g',
+            '--grid-root',
+            temp.path,
+            '--prefix',
+            'tg',
+            '--prefix',
+            'pow',
+            '--actor',
+            'specify',
+            '--reason',
+            'waits on power',
+          ]),
+          stateStorePrefix: 'houston',
+          endpoints: endpoints,
+          bdFactory: factory,
+          out: output.add,
+        ),
+        0,
+      );
+
+      expect(output, ['houston-link2']);
+      expect(state.beads, hasLength(2));
+      expect(state.mutationCalls, hasLength(2));
+    }
+  });
+
+  test(
+    'historical open duplicates return the first id without minting',
+    () async {
+      state.beads.addAll([
+        _link('houston-link9', 'tg-q9k', 'pow-60g'),
+        _link('houston-link1', 'tg-q9k', 'pow-60g'),
+      ]);
+      final output = <String>[];
+
+      expect(
+        await runLink(
+          arguments: _linkArgs([
+            'tg-q9k',
+            '--blocked-by',
+            'pow-60g',
+            '--grid-root',
+            temp.path,
+            '--prefix',
+            'tg',
+            '--prefix',
+            'pow',
+            '--actor',
+            'specify',
+            '--reason',
+            'waits on power',
+          ]),
+          stateStorePrefix: 'houston',
+          endpoints: endpoints,
+          bdFactory: factory,
+          out: output.add,
+        ),
+        0,
+      );
+
+      expect(output, [
+        'houston-link1 (already wired; returned existing link, minted nothing)',
+      ]);
+      expect(state.mutationCalls, isEmpty);
+    },
+  );
+
+  test('repeatable prefix order does not affect an existing match', () async {
+    state.beads.add(_link('houston-link1', 'tg-q9k', 'pow-60g'));
+    final output = <String>[];
+
+    for (final prefixes in [
+      ['tg', 'pow'],
+      ['pow', 'tg'],
+    ]) {
+      expect(
+        await runLink(
+          arguments: _linkArgs([
+            'tg-q9k',
+            '--blocked-by',
+            'pow-60g',
+            '--grid-root',
+            temp.path,
+            for (final prefix in prefixes) ...['--prefix', prefix],
+            '--actor',
+            'specify',
+            '--reason',
+            'waits on power',
+          ]),
+          stateStorePrefix: 'houston',
+          endpoints: endpoints,
+          bdFactory: factory,
+          out: output.add,
+        ),
+        0,
+      );
+    }
+
+    expect(output, [
+      'houston-link1 (already wired; returned existing link, minted nothing)',
+      'houston-link1 (already wired; returned existing link, minted nothing)',
+    ]);
+    expect(state.mutationCalls, isEmpty);
+  });
+
+  test(
+    'open link with a closed target still returns the existing id',
+    () async {
+      expect(pow.beads.single.status, BeadStatus.closed);
+      state.beads.add(_link('houston-link1', 'tg-q9k', 'pow-60g'));
+      final output = <String>[];
+
+      expect(
+        await runLink(
+          arguments: _linkArgs([
+            'tg-q9k',
+            '--blocked-by',
+            'pow-60g',
+            '--grid-root',
+            temp.path,
+            '--prefix',
+            'tg',
+            '--prefix',
+            'pow',
+            '--actor',
+            'specify',
+            '--reason',
+            'waits on power',
+          ]),
+          stateStorePrefix: 'houston',
+          endpoints: endpoints,
+          bdFactory: factory,
+          out: output.add,
+        ),
+        0,
+      );
+
+      expect(output, [
+        'houston-link1 (already wired; returned existing link, minted nothing)',
+      ]);
+      expect(state.mutationCalls, isEmpty);
+      expect(pow.calls, isEmpty);
+    },
+  );
+
   test(
     'unlink by pair closes through the writer and removes listing',
     () async {
@@ -302,6 +567,7 @@ void main() {
       );
       expect(code, 0);
       expect(state.beads.single.status, BeadStatus.closed);
+      expect(state.calls.where((call) => call.first == 'list'), hasLength(1));
       final close = state.calls.where((call) => call.first == 'close').single;
       expect(close, containsAllInOrder(['--actor', 'grid-controller']));
       expect(
@@ -602,7 +868,7 @@ void main() {
     expect(state.calls.where((call) => call.first == 'export'), isEmpty);
   });
 
-  test('command source has no raw mutation path', () {
+  test('command source centralizes link reads and mutations', () {
     final source = File('lib/src/link_command.dart').readAsStringSync();
     expect(source, isNot(contains('.create(')));
     expect(source, isNot(contains('.update(')));
@@ -611,6 +877,9 @@ void main() {
       RegExp(r'writer\.close\(').allMatches(source).length,
     );
     expect(source, contains('writer.createLink('));
+    expect(RegExp(r'\.reader\.openBeads\(').allMatches(source), hasLength(1));
+    expect(source, isNot(contains('GraphSnapshot')));
+    expect(source, isNot(contains('projectCrossLinks')));
   });
 }
 
@@ -646,8 +915,14 @@ Bead _bead(
   metadata: metadata,
 );
 
-Bead _link(String id, String from, String to) => _bead(
+Bead _link(
+  String id,
+  String from,
+  String to, {
+  BeadStatus status = BeadStatus.open,
+}) => _bead(
   id,
+  status: status,
   type: GridIssueTypes.link,
   metadata: {
     'rig': 'houston',
