@@ -14,7 +14,6 @@ import 'package:grid_runtime/grid_runtime.dart';
 
 import '../domain/session_projection.dart';
 import '../kernel/session_resolver.dart';
-import '../restart/restart_reconciler.dart' show ReapWorktree;
 import '../sdk/circuit.dart';
 import 'session_scope.dart';
 

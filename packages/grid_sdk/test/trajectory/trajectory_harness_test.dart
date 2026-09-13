@@ -171,6 +171,38 @@ final class _CountingNoOpQuery extends ObligationQuery {
   }
 }
 
+/// Emits one P6-bearing repair so the tick-owned append path is exercised
+/// independently of the recorder queue.
+final class _OneProcessStartQuery extends ObligationQuery {
+  var emitted = false;
+
+  @override
+  String get name => 'one-process-start';
+
+  @override
+  String get sql => 'SELECT 1 AS one';
+
+  @override
+  Future<List<ObligationAppend>> repair(List<Map<String, String?>> rows) async {
+    if (emitted) return const [];
+    emitted = true;
+    return const [
+      ObligationAppend(
+        AttemptProcessStarted(
+          attemptId: '01P6TICKATTEMPT0000000001',
+          sessionId: 'tranquility-tick',
+          round: 0,
+          stepPath: 'work/agent',
+          stepRound: 0,
+          incarnation: 0,
+          pid: 71,
+          pgid: 72,
+        ),
+      ),
+    ];
+  }
+}
+
 /// A scriptable appender: the harness drives THIS seam; the real §5 SQL path
 /// is Stage-0-tested in grid_trajectory.
 final class _FakeAppender extends TrajectoryAppender {
@@ -2415,19 +2447,19 @@ void main() {
         kWorktreeReapedBackfillObligation,
         kLivenessDetectorObligation,
       ]);
-      // SEVEN boot reads come first: the STALE-FOLD SHAPE PROBE (r12 — the
+      // EIGHT boot reads come first: the STALE-FOLD SHAPE PROBE (r12 — the
       // refusal that keeps a pre-cut home from dropping every terminal
       // append), the journal probe, then the fold boot seed's five (cut-wiring
-      // C1 + C4 / §0.2): the lag rule, the generation set, the P1 row scan,
-      // the P2 row scan, the era boundary — all before the mode goes live, so
+      // C1 + C4 / §0.2): the lag rule, generation set, P1/P2/P6 scans, and
+      // the era boundary — all before the mode goes live, so
       // no post-ACK delta can outrun them.
       final statements = connected.single.statements;
-      expect(statements.take(7), everyElement(startsWith('SELECT')));
+      expect(statements.take(8), everyElement(startsWith('SELECT')));
       expect(statements.first, contains('information_schema.columns'));
       // Then the boot pass ran the obligations: four SELECTs on the same
       // serial lane (the external-close heal joined the set in tg-ffl6), plus
       // the detector's pulse prune.
-      final passStatements = statements.skip(7);
+      final passStatements = statements.skip(8);
       expect(
         passStatements.where((sql) => sql.startsWith('SELECT')),
         hasLength(4),
@@ -2523,9 +2555,9 @@ void main() {
 
       expect(h.tick!.queries, isEmpty);
       // Only the stale-fold shape probe, the journal probe, plus the fold boot
-      // seed's own five reads (P1 + P2): an empty obligation set still issues
+      // seed's own six reads (P1 + P2 + P6): an empty obligation set still issues
       // nothing of its own.
-      expect(connected.single.statements, hasLength(7));
+      expect(connected.single.statements, hasLength(8));
       expect(connected.single.statements, everyElement(startsWith('SELECT')));
     });
 
@@ -2957,13 +2989,13 @@ void main() {
         expect(h.stepCursors.firstEpochClaimedAt, DateTime.utc(2026, 8, 1, 9));
         expect(h.stepCursors.byP2SessionId('tranquility-1'), hasLength(2));
         expect(h.stepCursors.byP2SessionId('tranquility-2'), hasLength(1));
-        // The two mirrors seed from ONE read pass, so a step row can never
+        // The mirrors seed from ONE read pass, so a step row can never
         // describe a session the head seed missed.
         expect(h.sessionHeads.seededAt, h.stepCursors.seededAt);
       },
     );
 
-    test('a STALE fold refuses BOTH mirrors — one verdict, one boot', () async {
+    test('a STALE fold refuses every mirror — one verdict, one boot', () async {
       dbScript = seedScript(
         appliedSeq: 10,
         maxSeq: 10 + staleLagLimit + 1,
@@ -2999,7 +3031,7 @@ void main() {
     });
 
     test(
-      'a DROPPED append latches BOTH mirrors compromised, and flares ONCE',
+      'a DROPPED append latches every mirror compromised, and flares ONCE',
       () async {
         dbScript = seedScript();
         final h = await harness();
@@ -3140,6 +3172,137 @@ void main() {
       );
       await pumpEventQueue();
       expect(versions, hasLength(seen));
+    });
+  });
+
+  // ── the P6 mirror (cut-wiring W2-A / §0.2) ──────────────────────────────
+  group('the P6 mirror', () {
+    Object? Function(String sql) seedScript({
+      List<Map<String, String?>> processes = const [],
+    }) => (sql) {
+      if (sql.contains('AS max_seq')) {
+        return const SqlResult(
+          rows: [
+            {'max_seq': '40', 'applied_seq': '40'},
+          ],
+        );
+      }
+      if (sql.contains('MIN(recorded_at)')) {
+        return const SqlResult(
+          rows: [
+            {'oldest': null},
+          ],
+        );
+      }
+      if (sql.contains('FROM proj_meta')) {
+        return const SqlResult(
+          rows: [
+            {
+              'projection': 'fold',
+              'fold_version': '2',
+              'applied_seq': '40',
+              'skipped': null,
+              'rebuilt_at': null,
+            },
+          ],
+        );
+      }
+      if (sql.contains('FROM proj_process_identity')) {
+        return SqlResult(rows: processes);
+      }
+      if (sql.contains('MIN(advanced_at)')) {
+        return const SqlResult(
+          rows: [
+            {'first_at': '2026-08-01 09:00:00.000000'},
+          ],
+        );
+      }
+      return null;
+    };
+
+    Map<String, String?> processRow({
+      required String attemptId,
+      required String sessionId,
+    }) => {
+      'attempt_id': attemptId,
+      'session_id': sessionId,
+      'round': '0',
+      'step_path': 'work/agent',
+      'step_round': '0',
+      'incarnation': '0',
+      'pid': '51',
+      'pgid': '52',
+      'lease_state': 'held',
+      'worktree': '/station/.grid/worktrees/proj/$sessionId',
+      'branch': 'grid/$sessionId',
+      'base_sha': 'abc123',
+      'adopted_existing': '0',
+      'worktree_state': 'live',
+      'predecessor_attempt_id': null,
+      'last_seq': '40',
+    };
+
+    test(
+      'boot seed and queued committed append publish typed P6 rows',
+      () async {
+        dbScript = seedScript(
+          processes: [
+            processRow(
+              attemptId: 'seed-attempt',
+              sessionId: 'tranquility-seed',
+            ),
+          ],
+        );
+        final h = await harness();
+        await h.start();
+
+        expect(h.processIdentities.health, TrajectorySnapshotHealth.live);
+        expect(h.processIdentities.seededAt, now);
+        expect(
+          h.processIdentities.bySessionId('tranquility-seed').single.pgid,
+          52,
+        );
+
+        h.recorder.processStarted(
+          attemptId: '01P6QUEUEATTEMPT000000001',
+          sessionId: 'tranquility-queue',
+          stepPath: 'work/agent',
+          pid: 61,
+          pgid: 62,
+        );
+        await pumpEventQueue();
+
+        expect(
+          h.processIdentities.bySessionId('tranquility-queue').single.pgid,
+          62,
+        );
+      },
+    );
+
+    test(
+      'tick-origin append updates P6 post-ACK and publishes heartbeat',
+      () async {
+        final query = _OneProcessStartQuery();
+        dbScript = seedScript();
+        final h = await harness(tickQueries: [query]);
+        await h.start();
+
+        expect(query.emitted, isTrue);
+        expect(
+          h.processIdentities.bySessionId('tranquility-tick').single.pgid,
+          72,
+        );
+        expect(h.processIdentities.lastTickAt, now);
+      },
+    );
+
+    test('a skipped tick does not publish a P6 heartbeat', () async {
+      dbScript = seedScript();
+      appender.fakeInert = true;
+      final h = await harness(tickQueries: [_ProbeQuery()]);
+      await h.start();
+
+      expect(h.processIdentities.lastTickAt, isNull);
     });
   });
 

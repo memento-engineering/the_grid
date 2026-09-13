@@ -79,7 +79,6 @@ import '../molecule/live_frontier.dart'
     show derivedEscalation, effectiveCursor, invalidatedNodes;
 import '../molecule/molecule_codec.dart';
 import '../molecule/molecule_schema.dart' show MoleculeStepKeys;
-import '../restart/restart_reconciler.dart' show ReapWorktree;
 import '../sdk/capability.dart';
 import '../sdk/cursor.dart';
 import '../sdk/circuit.dart';
@@ -1421,7 +1420,10 @@ class SessionScopeState extends State<SessionScope>
     final reapWorktree = seed.reapWorktree;
     final workRoot = seed.workRoot;
     final sourceControl = _services.sourceControl;
-    if (reapWorktree != null && workRoot != null && sourceControl != null) {
+    if (_ctx?.trajectoryAdmissionHalt == null &&
+        reapWorktree != null &&
+        workRoot != null &&
+        sourceControl != null) {
       try {
         final outcome = await reapWorktree(
           root: workRoot,
@@ -1835,13 +1837,18 @@ class SessionScopeState extends State<SessionScope>
       return;
     }
     try {
-      await ctx.writer.update(
-        moleculeTarget,
-        metadata: {MoleculeStepKeys.state: StepState.pending.name},
-      );
+      // The station-scoped halt is also the cut seam: shadow has no halt and
+      // retains the exact gated→pending bead write; cut retires that carrier
+      // and waits for the trajectory result below.
+      if (ctx.trajectoryAdmissionHalt == null) {
+        await ctx.writer.update(
+          moleculeTarget,
+          metadata: {MoleculeStepKeys.state: StepState.pending.name},
+        );
+      }
       // §2.3's re-arm row: `cause='gate_cleared'` with `step_round` BUMPED —
       // the record that kills the I-14 stale-join loop at the cut. During the
-      // shadow window it only shadows the legacy single-key flip above, which
+      // shadow window it follows the legacy single-key flip above, which
       // stays exactly as it is (nothing about what mounts changes).
       final result = await _recorder.stepRearmed(
         sessionId: id,

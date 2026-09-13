@@ -112,3 +112,8 @@ boundary — which is the decision's ratification gate.
 
 Working artifacts not landed here (panel designs, judgments, audit reports) are retained
 in the operator's station records and cited in schema §14.
+
+## Operator runbooks
+
+- [Restore under cut](restore-under-cut.md) — the quiesced void-and-redrive
+  procedure over a paired state/trajectory snapshot.

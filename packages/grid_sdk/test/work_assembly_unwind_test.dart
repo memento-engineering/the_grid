@@ -41,13 +41,96 @@ final class _EmptyBeadProbeReader implements BeadProbeReader {
   Future<List<Bead>> openSuperseding(Set<String> priorIds) async => const [];
 }
 
+final class _MutableStateReader implements SnapshotReader, BeadProbeReader {
+  _MutableStateReader(Iterable<Bead> beads) : beads = beads.toList();
+
+  List<Bead> beads;
+
+  @override
+  Future<GraphSnapshot> read() async => GraphSnapshot.fromParts(
+    beads: beads,
+    dependencies: const [],
+    readyIds: const [],
+    capturedAt: DateTime.utc(2026, 9, 13),
+  );
+
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) async {
+    for (final bead in beads) {
+      if (bead.id == id && types.contains(bead.issueType)) return bead;
+    }
+    return null;
+  }
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) async => [
+    for (final bead in beads)
+      if (bead.status == BeadStatus.open &&
+          types.contains(bead.issueType) &&
+          metadataAll.entries.every(
+            (entry) => '${bead.metadata[entry.key]}' == entry.value,
+          ) &&
+          (metadataAny.isEmpty ||
+              metadataAny.entries.any(
+                (entry) => '${bead.metadata[entry.key]}' == entry.value,
+              )))
+        bead,
+  ];
+
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) async => const [];
+
+  void close(String id) {
+    beads = [
+      for (final bead in beads)
+        bead.id == id ? bead.copyWith(status: BeadStatus.closed) : bead,
+    ];
+  }
+}
+
+final class _RecordingStateRunner implements BdRunner {
+  _RecordingStateRunner(this.state);
+
+  final _MutableStateReader state;
+  final List<List<String>> calls = [];
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    calls.add(List<String>.of(args));
+    if (args case ['close', final id, ...]) state.close(id);
+    return const BdResult(
+      exitCode: 0,
+      stdout: '{"schema_version":1,"data":{}}',
+      stderr: '',
+    );
+  }
+}
+
+final class _RecordingTransport implements ExplorationTransport {
+  final List<({String name, Map<String, String> data})> flares = [];
+
+  @override
+  void flare(String name, Map<String, String> data) {
+    flares.add((name: name, data: Map<String, String>.of(data)));
+  }
+}
+
 final class _GatedGridControllerRuntime extends GridControllerRuntime {
   _GatedGridControllerRuntime({
     required this.label,
     required List<String> events,
     this.startGate,
+    super.reader = const _EmptySnapshotReader(),
   }) : record = events,
-       super(reader: const _EmptySnapshotReader(), dirtySources: const []);
+       super(dirtySources: const []);
 
   final String label;
   final List<String> record;
@@ -85,11 +168,12 @@ GridRuntimeBundle _controllerBundle({
   required _GatedGridControllerRuntime runtime,
   required List<String> events,
   required String shutdownEvent,
+  BeadProbeReader probeReader = const _EmptyBeadProbeReader(),
 }) {
   var shutdown = false;
   return GridRuntimeBundle(
     runtime: runtime,
-    probeReader: const _EmptyBeadProbeReader(),
+    probeReader: probeReader,
     readPath: ReadPath.cli,
     shutdown: () async {
       if (shutdown) return;
@@ -329,6 +413,15 @@ void _seedStore(String dir, {required String database}) {
   ).writeAsStringSync('{"dolt_mode":"embedded","dolt_database":"$database"}');
 }
 
+void _seedProxyEndpoint(String dir, {required String database}) {
+  final dolt = Directory('$dir/.beads/dolt')..createSync(recursive: true);
+  File('$dir/.beads/metadata.json').writeAsStringSync(
+    '{"dolt_mode":"proxied-server","dolt_database":"$database"}',
+  );
+  File('${dolt.path}/beads_dart.secret').writeAsStringSync('test-secret');
+  File('${dolt.path}/proxy.pid').writeAsStringSync('{"pid":$pid,"port":65123}');
+}
+
 Future<TrajectoryHarness> _recordingTrajectory(
   List<String> events, {
   TrajectoryConfig config = const TrajectoryConfig(
@@ -495,15 +588,29 @@ void main() {
       required _RecordingJoinBridge bridge,
       required StationWorkDriverBuilder driverBuilder,
       TrajectoryConfig trajectoryConfig = const TrajectoryConfig(),
+      bool dryRun = true,
+      BdCliService? stateBdOverride,
+      ExplorationTransport? transport,
+      void Function(String)? onRefusal,
+      Map<String, String>? environment,
     }) => assembleStationWork(
       stateStore: GridStateStore.forGridRoot('${temporary.path}/home'),
       substations: [
-        SubstationWorkSpec(name: 'first', root: '${temporary.path}/first'),
+        SubstationWorkSpec(
+          name: 'first',
+          root: '${temporary.path}/first',
+          head: 'main',
+        ),
       ],
       resolver: const _NullResolver(),
-      dryRun: true,
+      dryRun: dryRun,
       preferSql: false,
       providerOverride: provider,
+      gitOverride: buildDryStationGitService(),
+      stateBdOverride: stateBdOverride,
+      transport: transport,
+      onRefusal: onRefusal,
+      environment: environment,
       trajectoryConfig: trajectoryConfig,
       trajectoryOverride: trajectory,
       bundleBuilder:
@@ -687,7 +794,123 @@ void main() {
       },
     );
 
-    test('cut refusal records the failed stage and original error', () async {
+    test('cut posture contradiction retains its typed request details', () {
+      final refusal = const TrajectoryConfig(
+        discipline: TrajectoryDiscipline.cut,
+        dualRead: DualReadMode.observe,
+      ).cutPostureRefusal;
+
+      expect(refusal, isA<CutPostureRefused>());
+      expect(refusal!.requestedDualRead, DualReadMode.observe);
+      expect(refusal.resolvedDualRead, DualReadMode.primary);
+    });
+
+    test('break-glass voids every open cut session before driver start and '
+        'emits one banner and flare', () async {
+      const reason = 'operator rollback';
+      _seedProxyEndpoint('${temporary.path}/home/.grid', database: 'state');
+      final events = <String>[];
+      final state = _MutableStateReader([
+        const Bead(
+          id: 'state-cut-2',
+          issueType: GridIssueTypes.session,
+          status: BeadStatus.open,
+          metadata: {
+            SessionBeadKeys.workBead: 'tg-work-2',
+            SessionBeadKeys.discipline: 'cut',
+          },
+        ),
+        const Bead(
+          id: 'state-cut-1',
+          issueType: GridIssueTypes.session,
+          status: BeadStatus.open,
+          metadata: {
+            SessionBeadKeys.workBead: 'tg-work-1',
+            SessionBeadKeys.discipline: 'cut',
+          },
+        ),
+      ]);
+      final runner = _RecordingStateRunner(state);
+      final workSource = _GatedGridControllerRuntime(
+        label: 'work',
+        events: events,
+      );
+      final stateSource = _GatedGridControllerRuntime(
+        label: 'state',
+        events: events,
+        reader: state,
+      );
+      final workBundle = _controllerBundle(
+        runtime: workSource,
+        events: events,
+        shutdownEvent: 'work bundle shutdown (first)',
+      );
+      final stateBundle = _controllerBundle(
+        runtime: stateSource,
+        events: events,
+        shutdownEvent: 'state bundle shutdown',
+        probeReader: state,
+      );
+      const base = TrajectoryConfig(mode: TrajectoryConfigMode.disabled);
+      final resolved = base.resolveForAssembly(
+        dryRun: false,
+        breakGlassReason: reason,
+      );
+      final trajectory = await TrajectoryHarness.build(
+        config: resolved,
+        gridHome: temporary.path,
+        station: 'state',
+      );
+      final federated = _RecordingFederatedSource(events);
+      final bridge = _RecordingJoinBridge(events);
+      final transport = _RecordingTransport();
+      final banners = <String>[];
+      late _RecordingStartDriver driver;
+      final runtime = await assembleRecordingRuntime(
+        workBundle: workBundle,
+        stateBundle: stateBundle,
+        provider: _RecordingProvider(events),
+        trajectory: trajectory,
+        federated: federated,
+        bridge: bridge,
+        trajectoryConfig: base,
+        dryRun: false,
+        stateBdOverride: BdCliService(runner),
+        transport: transport,
+        onRefusal: banners.add,
+        environment: const {kGridG1BreakGlass: reason},
+        driverBuilder: ({required buildDefault}) =>
+            driver = _RecordingStartDriver(bridge: bridge, events: events),
+      );
+      addTearDown(runtime.shutdown);
+
+      await runtime.start();
+
+      expect(driver.startCalls, 1);
+      expect(stateSource.requeryCalls, greaterThanOrEqualTo(3));
+      expect(
+        state.beads.every((bead) => bead.status == BeadStatus.closed),
+        isTrue,
+      );
+      expect(
+        runner.calls
+            .where((call) => call.first == 'close')
+            .map((call) => call[1]),
+        containsAll(<String>['state-cut-1', 'state-cut-2']),
+      );
+      final writes = runner.calls.map((call) => call.join(' ')).join('\n');
+      expect(writes, contains('grid.voided_reason=break-glass:$reason'));
+      expect(banners, ['grid: BREAK-GLASS reason=$reason voided=2']);
+      final breakGlassFlares = transport.flares
+          .where((flare) => flare.name == 'trajectory.breakGlass')
+          .toList(growable: false);
+      expect(breakGlassFlares, hasLength(1));
+      expect(breakGlassFlares.single.data, {'reason': reason, 'voided': '2'});
+    });
+
+    test('cut whose required harness is unavailable shuts it down, latches '
+        'the typed failure, and never starts the driver', () async {
+      _seedProxyEndpoint('${temporary.path}/home/.grid', database: 'state');
       final events = <String>[];
       final workSource = _GatedGridControllerRuntime(
         label: 'work',
@@ -708,12 +931,13 @@ void main() {
         shutdownEvent: 'state bundle shutdown',
       );
       final provider = _RecordingProvider(events);
-      final trajectory = await _recordingTrajectory(
-        events,
-        config: const TrajectoryConfig(
-          discipline: TrajectoryDiscipline.cut,
-          dualRead: DualReadMode.observe,
-        ),
+      const cut = TrajectoryConfig(discipline: TrajectoryDiscipline.cut);
+      final trajectory = await TrajectoryHarness.build(
+        config: cut,
+        gridHome: temporary.path,
+        station: 'state',
+        connect: () async => throw StateError('trajectory unavailable'),
+        onFlare: (name, _) => events.add(name),
       );
       final federated = _RecordingFederatedSource(events);
       final bridge = _RecordingJoinBridge(events);
@@ -725,25 +949,38 @@ void main() {
         trajectory: trajectory,
         federated: federated,
         bridge: bridge,
+        trajectoryConfig: cut,
+        dryRun: false,
         driverBuilder: ({required buildDefault}) =>
             driver = _RecordingStartDriver(bridge: bridge, events: events),
       );
       addTearDown(runtime.shutdown);
 
-      Object? caught;
-      StackTrace? caughtStack;
+      Object? first;
       try {
         await runtime.start();
-      } on Object catch (error, stackTrace) {
-        caught = error;
-        caughtStack = stackTrace;
+      } on Object catch (error) {
+        first = error;
       }
-
-      expect(caught, isA<CutPostureRefused>());
+      expect(first, isA<CutTrajectoryUnavailable>());
       final failure = runtime.lifecycle as StationWorkRuntimeFailed;
-      expect(failure.stage, StationWorkStartStage.cutPostureCheck);
-      expect(failure.error, same(caught));
-      expect(failure.stackTrace, same(caughtStack));
+      expect(failure.stage, StationWorkStartStage.trajectoryAvailability);
+      expect(failure.error, same(first));
+      expect(driver.startCalls, 0);
+      expect(events, contains('trajectory.shutdown'));
+
+      await expectLater(
+        runtime.start(),
+        throwsA(
+          isA<StationWorkStartRefused>()
+              .having((refusal) => refusal.failure, 'failure', same(failure))
+              .having(
+                (refusal) => refusal.originalError,
+                'originalError',
+                same(first),
+              ),
+        ),
+      );
       expect(driver.startCalls, 0);
     });
 
@@ -841,13 +1078,8 @@ void main() {
           shutdownEvent: 'state bundle shutdown',
         );
         final provider = _RecordingProvider(events);
-        const cutConfig = TrajectoryConfig(
-          discipline: TrajectoryDiscipline.cut,
-        );
-        final trajectory = await _recordingTrajectory(
-          events,
-          config: cutConfig,
-        );
+        const config = TrajectoryConfig();
+        final trajectory = await _recordingTrajectory(events, config: config);
         final federated = _RecordingFederatedSource(events);
         final bridge = _RecordingJoinBridge(events);
         final originalError = StateError('driver start exploded');
@@ -860,7 +1092,7 @@ void main() {
           trajectory: trajectory,
           federated: federated,
           bridge: bridge,
-          trajectoryConfig: cutConfig,
+          trajectoryConfig: config,
           driverBuilder: ({required buildDefault}) =>
               driver = _StartThrowingRecordingDriver(
                 bridge: bridge,
@@ -927,7 +1159,6 @@ void main() {
         expect(events, [
           'station driver dispose',
           'join bridge dispose',
-          'trajectory.shutdown',
           'runtime provider dispose',
           'state bundle shutdown',
           'work bundle shutdown (first)',
@@ -940,19 +1171,8 @@ void main() {
         expect(workSource.disposeCalls, 1);
         expect(federated.disposeCalls, 1);
 
-        final admissionHalt = runtime.wiring.trajectory!.admissionHalt!;
-        expect(
-          admissionHalt.latch(
-            reason: 'post-shutdown probe',
-            recordClass: 'test',
-          ),
-          isTrue,
-        );
-        expect(
-          admissionInvalidations,
-          0,
-          reason: 'shutdown disposed admission and removed its halt listener',
-        );
+        expect(runtime.wiring.trajectory!.admissionHalt, isNull);
+        expect(admissionInvalidations, 0);
       },
     );
 
@@ -1122,10 +1342,12 @@ void main() {
       for (final operation in [
         'await _sourcesStart();',
         'await trajectory.start();',
-        'trajectory.config.cutPostureRefusal',
+        'trajectory.status.mode',
         'await _freshnessBarrier();',
         'await _restart.reconcile();',
         'await _restart.replayTeardownTail();',
+        'await _stateRequery();',
+        '_openSessions(state)',
         '_driver.start();',
       ]) {
         final next = body.indexOf(operation, cursor);
@@ -1171,6 +1393,7 @@ void main() {
         'syncFloorInterval',
         'trajectoryConfig',
         'trajectoryOverride',
+        'environment',
         'bundleBuilder',
         'federatedSourceBuilder',
         'joinBridgeBuilder',
