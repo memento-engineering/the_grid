@@ -85,12 +85,251 @@ void main() {
     expect(derivedIds, containsAll(['tg-0', 'tg-119']));
   });
 
+  // tg-xh5d RULING 2026-09-13: BOTH read paths surface bd's native `external:`
+  // rows. bd stores them and resolves nothing against them, so a path that
+  // cannot see one would admit the work it blocks.
+  test('the CLI path carries the external rows bd\'s RESOLVING read '
+      'drops', () async {
+    final runner = _SnapshotRunner(
+      queryRows: const [
+        {
+          'id': 'tg-consumer',
+          'issue_type': 'task',
+          'status': 'open',
+          'dependencies': [
+            {
+              'issue_id': 'tg-consumer',
+              'depends_on_id': 'external:power_station:pow-cap',
+              'type': 'blocks',
+            },
+            {
+              'issue_id': 'tg-consumer',
+              'depends_on_id': 'tg-local',
+              'type': 'blocks',
+            },
+          ],
+        },
+      ],
+      // bd's resolving read answers with the ISSUE each dependency points at,
+      // so only the LOCAL edge comes back here — the external row has no issue
+      // in this store to resolve to.
+      dependencyRows: const [
+        {
+          'issue_id': 'tg-consumer',
+          'depends_on_id': 'tg-local',
+          'type': 'blocks',
+        },
+      ],
+      readyRows: const [],
+    );
+
+    final snapshot = await CliSnapshotReader(BdCliService(runner)).read();
+
+    expect(
+      snapshot.dependencies.map((dep) => dep.dependsOnId),
+      containsAll(['tg-local', 'external:power_station:pow-cap']),
+      reason:
+          'the external row rides in from the RECORD surface beside the '
+          'local edges bd resolved',
+    );
+    expect(
+      snapshot.dependencies.where((dep) => dep.dependsOnId == 'tg-local'),
+      hasLength(1),
+      reason: 'a row both surfaces return lands once',
+    );
+  });
+
+  test(
+    'the CLI path REFUSES when the record surface stops carrying rows',
+    () async {
+      // The control: bd RESOLVED edges for these beads, so the store has
+      // dependency rows — a record surface that returns none is dropping them,
+      // and a dropped cross-project row silently admits the work it blocks.
+      final runner = _SnapshotRunner(
+        queryRows: const [
+          {'id': 'tg-consumer', 'issue_type': 'task', 'status': 'open'},
+        ],
+        dependencyRows: const [
+          {
+            'issue_id': 'tg-consumer',
+            'depends_on_id': 'tg-local',
+            'type': 'blocks',
+          },
+        ],
+        readyRows: const [],
+      );
+
+      await expectLater(
+        CliSnapshotReader(BdCliService(runner)).read(),
+        throwsA(
+          isA<BdExternalDepSurfaceUnavailable>().having(
+            (e) => e.message,
+            'message',
+            allOf(
+              contains('no bd surface carried its `external:` dependency rows'),
+              contains('depends_on_external'),
+            ),
+          ),
+        ),
+        reason:
+            'never fail open: no snapshot at all beats a snapshot that '
+            'cannot see the blocker',
+      );
+    },
+  );
+
+  test('the refusal is REPORTED once per episode, then rethrown', () async {
+    // A thrown refusal lands on BeadsRepository.errors, which nothing in the
+    // resident listens to — so the composer hands the reader the station's
+    // cross-store sink and the operator sees WHICH store went unreadable.
+    final runner = _SnapshotRunner(
+      queryRows: const [
+        {'id': 'tg-consumer', 'issue_type': 'task', 'status': 'open'},
+      ],
+      dependencyRows: const [
+        {
+          'issue_id': 'tg-consumer',
+          'depends_on_id': 'tg-local',
+          'type': 'blocks',
+        },
+      ],
+      readyRows: const [],
+    );
+    final reported = <String>[];
+    final reader = CliSnapshotReader(
+      BdCliService(runner),
+      onRefusal: reported.add,
+    );
+
+    await expectLater(reader.read(), throwsA(isA<BdException>()));
+    await expectLater(reader.read(), throwsA(isA<BdException>()));
+    expect(reported, hasLength(1), reason: 'rising edge, not once per refresh');
+    expect(reported.single, contains('REFUSED to read this store'));
+
+    // A bd that starts carrying rows again recovers, and a later relapse is
+    // reported anew rather than remembered as already-said.
+    runner.queryRows = const [
+      {
+        'id': 'tg-consumer',
+        'issue_type': 'task',
+        'status': 'open',
+        'dependencies': [
+          {
+            'issue_id': 'tg-consumer',
+            'depends_on_id': 'tg-local',
+            'type': 'blocks',
+          },
+        ],
+      },
+    ];
+    expect((await reader.read()).dependencies, hasLength(1));
+    runner.queryRows = const [
+      {'id': 'tg-consumer', 'issue_type': 'task', 'status': 'open'},
+    ];
+    await expectLater(reader.read(), throwsA(isA<BdException>()));
+    expect(reported, hasLength(2));
+  });
+
+  test(
+    'a ready-only bead\'s edges are not evidence the surface dropped rows',
+    () async {
+      // `bd ready` can fall back a bead the broad record query did not carry.
+      // Its resolved edges say nothing about what the RECORD surface carries, so
+      // they must not trip the refusal.
+      final runner = _SnapshotRunner(
+        queryRows: const [
+          {'id': 'tg-plain', 'issue_type': 'task', 'status': 'open'},
+        ],
+        readyRows: const [
+          {'id': 'tg-wisp.1', 'issue_type': 'task', 'status': 'open'},
+        ],
+        dependencyRows: const [
+          {
+            'issue_id': 'tg-wisp.1',
+            'depends_on_id': 'tg-wisp',
+            'type': 'parent-child',
+          },
+        ],
+      );
+
+      final snapshot = await CliSnapshotReader(BdCliService(runner)).read();
+
+      expect(snapshot.beadsById.keys, containsAll(['tg-plain', 'tg-wisp.1']));
+      expect(snapshot.dependencies.single.issueId, 'tg-wisp.1');
+    },
+  );
+
+  test('a store with no dependency rows at all is not a refusal', () async {
+    final runner = _SnapshotRunner(
+      queryRows: const [
+        {'id': 'tg-alone', 'issue_type': 'task', 'status': 'open'},
+      ],
+      dependencyRows: const [],
+      readyRows: const [],
+    );
+
+    final snapshot = await CliSnapshotReader(BdCliService(runner)).read();
+
+    expect(snapshot.dependencies, isEmpty);
+    expect(snapshot.beadsById.keys, ['tg-alone']);
+  });
+
   const endpoint = DoltEndpoint(
     host: '127.0.0.1',
     port: 34947,
     database: 'tg',
     user: 'root',
     password: 'fake',
+  );
+
+  test(
+    'the SQL path carries an external row through depends_on_external',
+    () async {
+      // The target expression COALESCEs the three typed target columns, so a row
+      // whose target lives in `depends_on_external` reaches the frontier as the
+      // `external:` wire string the consumer was blocked on. The column is
+      // REQUIRED by the connect-time shape probe, so a store that cannot express
+      // one stands this path down rather than dropping the edges.
+      final dolt = DoltQueryService(
+        endpoint,
+        connectionFactory: (_) async => _SnapshotDoltConnection(
+          failOnQuery: null,
+          failure: StateError('unused'),
+          closeOnFailure: false,
+          issueRows: const [
+            {
+              'id': 'tg-consumer',
+              'title': 'held by a capability',
+              'issue_type': 'task',
+              'status': 'open',
+            },
+          ],
+          dependencyRows: const [
+            {
+              'issue_id': 'tg-consumer',
+              'depends_on_id': 'external:power_station:pow-cap',
+              'type': 'blocks',
+            },
+          ],
+        ),
+      );
+      addTearDown(dolt.close);
+      await dolt.connect();
+
+      expect(
+        dolt.dependenciesSelect,
+        contains('depends_on_external'),
+        reason: 'ADR-0000 A44: the cross-store edge lives in that column',
+      );
+      final snapshot = await SqlSnapshotReader(
+        dolt: dolt,
+        bd: BdCliService(_SnapshotRunner()..empty = true),
+      ).read();
+      expect(
+        snapshot.dependencies.single.dependsOnId,
+        'external:power_station:pow-cap',
+      );
+    },
   );
 
   test('SQL snapshot absorbs a reaped connection below the reader', () async {
@@ -229,7 +468,7 @@ class _SnapshotRunner implements BdRunner {
   _SnapshotRunner({this.queryRows, this.readyRows, this.dependencyRows});
 
   final List<List<String>> calls = [];
-  final List<Map<String, dynamic>>? queryRows;
+  List<Map<String, dynamic>>? queryRows;
   final List<Map<String, dynamic>>? readyRows;
   final List<Map<String, dynamic>>? dependencyRows;
   bool empty = false;
@@ -257,8 +496,21 @@ class _SnapshotRunner implements BdRunner {
       return _list(
         empty
             ? const []
+            // bd's RECORD surface embeds each bead's dependency ROWS beside
+            // the bead, which is where a cross-project row arrives.
             : const [
-                {'id': 'tg-gate', 'issue_type': 'gate', 'status': 'open'},
+                {
+                  'id': 'tg-gate',
+                  'issue_type': 'gate',
+                  'status': 'open',
+                  'dependencies': [
+                    {
+                      'issue_id': 'tg-gate',
+                      'depends_on_id': 'tg-task',
+                      'type': 'blocks',
+                    },
+                  ],
+                },
                 {'id': 'tg-task', 'issue_type': 'task', 'status': 'closed'},
               ],
       );
@@ -297,12 +549,14 @@ class _SnapshotDoltConnection implements DoltConnection {
     required this.failure,
     required this.closeOnFailure,
     this.issueRows = const [],
+    this.dependencyRows = const [],
   });
 
   final int? failOnQuery;
   final Object failure;
   final bool closeOnFailure;
   final List<Map<String, Object?>> issueRows;
+  final List<Map<String, Object?>> dependencyRows;
   var _open = true;
   var _queryCount = 0;
 
@@ -323,6 +577,7 @@ class _SnapshotDoltConnection implements DoltConnection {
     }
     if (sql == DoltSchemaShape.probeSql) return kV53ProbeRows;
     if (sql == DoltQueryService.issuesSelect) return issueRows;
+    if (sql.contains('FROM dependencies')) return dependencyRows;
     return const [];
   }
 

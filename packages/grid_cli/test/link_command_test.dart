@@ -275,6 +275,61 @@ void main() {
     expect(shipped['edgeState'], contains('SHIPPED'));
   });
 
+  // tg-xh5d RULING 2026-09-13 (2): `link ls` lists the external rows from the
+  // SAME read the frontier takes them from. bd's RESOLVING reads answer with
+  // the issue record a dependency points at, so a listing built on `bd dep
+  // list` would print an empty roster over a store full of edges.
+  test('link ls lists from the RECORD surface, and refuses when it stops '
+      'carrying rows', () async {
+    tg.dependencies.add(
+      const BeadDependency(
+        issueId: 'tg-q9k',
+        dependsOnId: 'external:power_station:pow-60g',
+      ),
+    );
+
+    final human = <String>[];
+    expect(
+      await runLink(
+        arguments: _linkArgs(['ls']),
+        endpoints: endpoints,
+        bdFactory: factory,
+        out: human.add,
+      ),
+      0,
+    );
+    expect(human.single, contains('external:power_station:pow-60g'));
+    expect(
+      tg.calls.any(
+        (call) =>
+            call.take(2).join(' ') ==
+            'query '
+                '${BdCliService.allStatusesQuery}',
+      ),
+      isTrue,
+      reason: 'the listing rides the frontier\'s own broad graph read',
+    );
+
+    // A bd whose record surface stops carrying rows must not read as "no
+    // external blockers": the verb reports the refusal and exits non-zero.
+    tg.dropRecordDependencies = true;
+    final errors = <String>[];
+    expect(
+      await runLink(
+        arguments: _linkArgs(['ls']),
+        endpoints: endpoints,
+        bdFactory: factory,
+        err: errors.add,
+      ),
+      1,
+    );
+    expect(errors.single, contains('grid link ls'));
+    expect(
+      errors.single,
+      contains('no bd surface carried its `external:` dependency rows'),
+    );
+  });
+
   test('link ls reads SHIPPED the way the FRONTIER does — a fan-in capability '
       'is not a bead id', () async {
     tg.dependencies.add(
@@ -532,6 +587,11 @@ class _FakeStore implements BdRunner {
 
   final List<Bead> beads;
   final List<BeadDependency> dependencies = [];
+
+  /// Fakes a bd whose RECORD surface stopped carrying dependency rows — the
+  /// shape the CLI read path must REFUSE rather than read as "no external
+  /// blockers".
+  bool dropRecordDependencies = false;
   List<Object> customTypes;
   String externalProjects;
   final List<List<String>> calls = [];
@@ -581,9 +641,26 @@ class _FakeStore implements BdRunner {
         );
       case 'query':
         final expression = args[1];
-        // The two expressions the verb authors: an id lookup, and the LABEL
-        // scan that answers "is this capability shipped?" the way the frontier
-        // answers it.
+        // The BROAD graph read is bd's RECORD surface: every bead record
+        // carries its dependency ROWS, which is the only bd read that returns
+        // an `external:` row at all (tg-xh5d). `dropRecordDependencies` fakes
+        // a bd that stopped carrying them.
+        if (expression == BdCliService.allStatusesQuery) {
+          return _listEnvelope([
+            for (final bead in beads)
+              {
+                ...bead.toJson(),
+                if (!dropRecordDependencies)
+                  'dependencies': [
+                    for (final dep in dependencies)
+                      if (dep.issueId == bead.id) dep.toJson(),
+                  ],
+              },
+          ]);
+        }
+        // The two scoped expressions the verb authors: an id lookup, and the
+        // LABEL scan that answers "is this capability shipped?" the way the
+        // frontier answers it.
         final match = switch (expression.split('=')) {
           ['id', final String id] => (Bead bead) => bead.id == id,
           ['label', final String label] => (Bead bead) => bead.labels.contains(

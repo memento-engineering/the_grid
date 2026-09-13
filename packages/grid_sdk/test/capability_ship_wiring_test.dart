@@ -35,6 +35,35 @@ void main() {
     );
   });
 
+  // tg-xh5d RULING 2026-09-13 (3): the ship observer STANDS, suppressed under
+  // --dry-run. `bd ship` publishes a capability to every other store's
+  // frontier, which is exactly the class of outcome a dry run withholds.
+  test('the capability settle is suppressed under --dry-run', () {
+    final src = File('lib/src/work/work_assembly.dart').readAsStringSync();
+    final settle = src.substring(
+      src.indexOf('Future<void> _settlePostFlushGuarded()'),
+      src.indexOf('Future<void> _settleGuarded('),
+    );
+
+    final gate = settle.indexOf('if (_dryRun) return;');
+    final drain = settle.indexOf('_handler.settleRosterDrains');
+    final ship = settle.indexOf('_handler.settleCapabilityExports');
+
+    expect(gate, greaterThan(-1), reason: 'a dry run publishes no capability');
+    expect(
+      gate,
+      lessThan(ship),
+      reason: 'the gate must precede the ship, not follow it',
+    );
+    expect(
+      drain,
+      lessThan(gate),
+      reason:
+          'the drain settle is NOT a publication and keeps running dry — only '
+          'the ship is withheld',
+    );
+  });
+
   test('the settle ships through the work store WRITER, not a second path', () {
     final src = File(
       'lib/src/command/station_command_handler.dart',

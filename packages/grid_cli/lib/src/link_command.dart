@@ -286,8 +286,16 @@ typedef _StoreProbe = ({
 /// Every `external:` dependency row [endpoint]'s store carries on an OPEN
 /// bead, with the edge's current state.
 ///
-/// Open-scoped by construction: a consumer still waiting on a capability is
-/// open, so a closed bead's historical row is not an edge anyone is held by.
+/// The rows come from [BdCliService.externalDepRows] — the SAME read the
+/// FRONTIER takes them from on the CLI path, so the listing and the engine
+/// cannot disagree about which edges exist. bd's resolving dependency reads
+/// (`bd dep list`, `bd show`) answer with the issue record a row points at and
+/// therefore return NO external row at all; listing off one of those would
+/// have printed an empty roster over a store full of edges.
+///
+/// Open-scoped: a consumer still waiting on a capability is open, so a closed
+/// bead's historical row is not an edge anyone is held by, and a row whose
+/// consumer this store does not observe as open is skipped.
 Future<List<Map<String, String>>> _externalRowsOf(
   LinkEndpointStore endpoint,
   Map<String, LinkEndpointStore> roster,
@@ -297,10 +305,11 @@ Future<List<Map<String, String>>> _externalRowsOf(
   final open = await probe.reader.openBeads(types: probe.types);
   if (open.isEmpty) return const [];
   final statusOf = {for (final bead in open) bead.id: bead.status.wire};
-  final deps = await probe.bd.depList([for (final bead in open) bead.id]);
   final rows = <Map<String, String>>[];
-  for (final dep in deps) {
+  for (final dep in await probe.bd.externalDepRows()) {
     if (!dep.type.affectsBlocking) continue;
+    final status = statusOf[dep.issueId];
+    if (status == null) continue;
     final ref = ExternalDepRef.parse(dep.dependsOnId);
     if (ref == null) continue;
     final target = roster.values
@@ -308,7 +317,7 @@ Future<List<Map<String, String>>> _externalRowsOf(
         .firstOrNull;
     rows.add({
       'from': dep.issueId,
-      'fromStatus': statusOf[dep.issueId] ?? 'unobserved',
+      'fromStatus': status,
       'to': ref.wire,
       'project': ref.project,
       'edgeState': target == null

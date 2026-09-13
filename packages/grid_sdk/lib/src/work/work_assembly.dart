@@ -704,6 +704,13 @@ class StationWorkRuntime implements SubstationProvisioner {
     // tg-xh5d WHAT #2: the OTHER half of ship-on-close — a work bead an
     // operator closed by hand ships the next time the station observes the
     // close, and a flush is that observation.
+    //
+    // SUPPRESSED under --dry-run (RULING 2026-09-13): `bd ship` publishes a
+    // capability to every other store's frontier, which is exactly the class
+    // of outcome a dry run withholds. The observer itself stands — the next
+    // live flush ships whatever the dry run observed, because the rising edge
+    // it keys on was never marked.
+    if (_dryRun) return;
     await _settleGuarded('capability export', _handler.settleCapabilityExports);
   }
 
@@ -1298,6 +1305,15 @@ Future<StationWorkRuntime> _acquireStationWork({
   required void Function(String message) refusalSink,
   required List<({String step, FutureOr<void> Function() dispose})> disposers,
 }) async {
+  // ONE sink for EVERY cross-store report — the union's UNARMED-project
+  // refusals (tg-xh5d: an `external:` row naming a substation this station
+  // does not arm blocks fail-closed and says so), the CLI read path's
+  // external-row refusal (a store bd cannot be read for cross-project rows
+  // publishes no snapshot, and says which store), and the join's state-owned
+  // link beads, authoritative until the migration retires them.
+  final unresolvedSink =
+      onUnresolvedExternalDep ?? (String m) => stdout.writeln(m);
+
   // --- the controllers (one per work store + the state store).
   final bundles = <String, GridRuntimeBundle>{};
   for (final entry in workspacesByName.entries) {
@@ -1311,6 +1327,7 @@ Future<StationWorkRuntime> _acquireStationWork({
         'sync.dirtySignalsClosed',
         {'substation': storeName, 'source': source},
       ),
+      onReadRefusal: (message) => unresolvedSink('[$storeName] $message'),
     );
     final bundle =
         await (bundleBuilder?.call(
@@ -1334,6 +1351,7 @@ Future<StationWorkRuntime> _acquireStationWork({
       'sync.dirtySignalsClosed',
       {'substation': 'state', 'source': source},
     ),
+    onReadRefusal: (message) => unresolvedSink('[state] $message'),
   );
   final stateBundle =
       await (bundleBuilder?.call(
@@ -1347,13 +1365,6 @@ Future<StationWorkRuntime> _acquireStationWork({
     for (final e in bundles.entries) '${e.key}=${e.value.readPath.name}',
     'state=${stateBundle.readPath.name}',
   ].join(', ');
-
-  // ONE sink for BOTH cross-store reports — the union's UNARMED-project
-  // refusals (tg-xh5d: an `external:` row naming a substation this station
-  // does not arm blocks fail-closed and says so) and the join's state-owned
-  // link beads, authoritative until the migration retires them.
-  final unresolvedSink =
-      onUnresolvedExternalDep ?? (String m) => stdout.writeln(m);
 
   FederatedSnapshotSource
   buildFederatedSourceDefault() => FederatedSnapshotSource(
@@ -2007,6 +2018,7 @@ Future<StationWorkRuntime> _acquireStationWork({
         'sync.dirtySignalsClosed',
         {'substation': storeName, 'source': source},
       ),
+      onReadRefusal: (message) => unresolvedSink('[$storeName] $message'),
     ),
     buildWorkWriter: (spec, bundle) => StationBeadWriter(
       bd: BdCliService(

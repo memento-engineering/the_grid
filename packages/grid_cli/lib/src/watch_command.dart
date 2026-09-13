@@ -267,6 +267,10 @@ Future<int> runWatch({
   final bundle = await GridRuntimeFactory.build(
     workspace: workspace,
     preferSql: !noSql,
+    // The CLI read path's external-row refusal publishes no snapshot; without
+    // a sink it would land on a repository error stream this verb does not
+    // render, and the watch would simply look quiet (tg-xh5d).
+    onReadRefusal: (message) => writeErr(message),
   );
   final runtime = bundle.runtime;
   final host = GridExplorationHost(

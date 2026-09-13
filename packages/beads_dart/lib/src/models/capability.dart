@@ -13,7 +13,9 @@
 /// spelling (`the_grid#the-grid-is-a-beads-controller`).
 library;
 
+import '../errors/bd_exception.dart';
 import 'bead.dart';
+import 'bead_dependency.dart';
 
 /// The `external:` dependency-row form: a blocker that lives in another bd
 /// project, named by a capability rather than by a foreign bead id.
@@ -121,4 +123,46 @@ Map<String, List<String>> unshippedExports(Iterable<Bead> beads) {
     if (capabilities.isNotEmpty) owed[bead.id] = capabilities;
   }
   return owed;
+}
+
+/// The `external:` dependency rows in [records] — bd's NATIVE cross-project
+/// blockers as they arrive on bd's RECORD surface (the rows `bd list` and
+/// `bd query --json` embed in each bead record).
+///
+/// The rows are read HERE rather than off bd's RESOLVING surface because that
+/// surface cannot express one: `bd dep list --json` and `bd show --json`
+/// answer with the ISSUE RECORD each dependency points at, and an
+/// `external:<project>:<capability>` target has no issue in this store to
+/// resolve to. bd stores the row either way — in
+/// `dependencies.depends_on_external` — and resolves NOTHING against it in any
+/// released build, which is what makes the station's own frontier resolver
+/// load-bearing rather than a convenience.
+///
+/// [resolved] is that resolving read over the SAME store, narrowed to the
+/// beads the record read returned, and it is the CONTROL: it tells "this store
+/// has no dependency rows" apart from "this surface stopped carrying them".
+/// Narrowed, because a row on a bead the record surface never returned is not
+/// evidence about what that surface carries. An empty [records] beside a non-empty
+/// [resolved] is a record surface that dropped rows, and a dropped
+/// cross-project row silently ADMITS the work it blocks — so that case throws
+/// [BdExternalDepSurfaceUnavailable] naming [call], and the caller publishes
+/// no snapshot at all. Both empty is a store with no dependency rows: there is
+/// no edge to miss.
+List<BeadDependency> externalDepRowsFrom({
+  required List<BeadDependency> records,
+  required List<BeadDependency> resolved,
+  required List<String> call,
+}) {
+  if (records.isEmpty && resolved.isNotEmpty) {
+    throw BdExternalDepSurfaceUnavailable(
+      call: call,
+      detail:
+          'the record surface returned no dependency rows while '
+          '`bd dep list` resolved ${resolved.length}',
+    );
+  }
+  return [
+    for (final dep in records)
+      if (ExternalDepRef.parse(dep.dependsOnId) != null) dep,
+  ];
 }

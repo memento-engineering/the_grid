@@ -8,6 +8,7 @@ import '../errors/bd_exception.dart';
 import '../models/bead.dart';
 import '../models/bead_dependency.dart';
 import '../models/bead_status.dart';
+import '../models/capability.dart';
 import '../models/bd_query_result.dart';
 import '../models/dependency_type.dart';
 import '../models/graph_apply_plan.dart';
@@ -136,6 +137,27 @@ class BdCliService {
     return _beadsFromList(env.dataList);
   }
 
+  /// `bd query "<expr>" --json` — the same read as [query], returning the
+  /// dependency ROWS bd embeds in each record beside the beads.
+  ///
+  /// bd's RECORD surface carries a row's target as `depends_on_id`, its own
+  /// COALESCE over the three typed target columns (MEASURED on
+  /// bd HEAD-a45199a: a row whose target lives in `depends_on_wisp_id`
+  /// surfaces there, so a `depends_on_external` target takes the same path).
+  /// Its RESOLVING surface (`bd dep list --json`, `bd show --json`) answers
+  /// with the ISSUE RECORD a dependency points at instead, and a cross-project
+  /// target has no issue in this store to resolve to — which is why the
+  /// external rows are read HERE and not off [depList].
+  Future<({List<Bead> beads, List<BeadDependency> dependencies})> queryGraph(
+    String expr, {
+    bool includeClosed = false,
+  }) async {
+    final env = await _runEnvelope(
+      queryArgs(expr, includeClosed: includeClosed),
+    );
+    return _parseIssueList(env.dataList);
+  }
+
   /// Runs [expression] with an independent positive control when it is empty.
   ///
   /// An exit-zero empty target is never returned as proof of absence by
@@ -235,6 +257,38 @@ class BdCliService {
     }
     return edges.values.toList(growable: false);
   }
+
+  /// Every `external:` dependency row this store carries — bd's NATIVE
+  /// cross-project blockers, on the CLI read path (tg-xh5d,
+  /// `the_grid#capability-edges-are-bd-native-and-link-is-sugar`).
+  ///
+  /// Two reads, because ONE of them cannot carry the rows and the other one
+  /// proves it: [queryGraph] is bd's RECORD surface (each bead record embeds
+  /// its dependency ROWS, whose target bd emits as its own COALESCE over
+  /// `depends_on_issue_id` / `depends_on_wisp_id` / `depends_on_external`),
+  /// and [depList] is bd's RESOLVING surface, the control. See
+  /// [externalDepRowsFrom] for what the pair decides and why an empty record
+  /// surface beside a non-empty resolving read REFUSES.
+  Future<List<BeadDependency>> externalDepRows() async {
+    final records = await queryGraph(allStatusesQuery, includeClosed: true);
+    // The control only spawns when the record surface came back with nothing
+    // to classify — it answers "no rows here" vs "not carrying rows".
+    final resolved = records.dependencies.isNotEmpty || records.beads.isEmpty
+        ? const <BeadDependency>[]
+        : await depList([for (final bead in records.beads) bead.id]);
+    return externalDepRowsFrom(
+      records: records.dependencies,
+      resolved: resolved,
+      call: ['bd', ...queryArgs(allStatusesQuery, includeClosed: true)],
+    );
+  }
+
+  /// The broad graph expression both external-row readers run: every status,
+  /// so the read is the COMPLETE graph and a closed consumer's row is in scope
+  /// with an open one's.
+  static const String allStatusesQuery =
+      'status=open OR status=in_progress OR status=blocked OR '
+      'status=deferred OR status=closed';
 
   /// `bd statuses --json` — the workspace's status definitions (object
   /// envelope: `built_in_statuses`, …).

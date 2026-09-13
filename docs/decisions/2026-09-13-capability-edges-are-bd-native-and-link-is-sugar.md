@@ -10,6 +10,8 @@ register:
   surfaces:
     - "packages/beads_dart/lib/src/models/capability.dart"
     - "packages/beads_dart/lib/src/services/bd_cli_service.dart"
+    - "packages/beads_dart/lib/src/reactivity/snapshot_readers.dart"
+    - "packages/beads_dart/lib/src/reactivity/grid_runtime_factory.dart"
     - "packages/grid_engine/lib/src/domain/external_dep.dart"
     - "packages/grid_engine/lib/src/bridge/federated_snapshot_source.dart"
     - "packages/grid_runtime/lib/src/lifecycle/station_bead_writer.dart"
@@ -84,6 +86,29 @@ prerequisites, per the previous entry's fan-in rule.
   diagnosis. Closed-ness is re-checked at the frontier rather than trusted from
   the label alone, so a `bd ship --force` against an open issue does not admit
   work behind it.
+* **BOTH read paths surface the rows, or the read REFUSES.** bd stores a
+  cross-project row in `dependencies.depends_on_external` and — measured on the
+  fleet bd, HEAD-a45199a — resolves NOTHING against it in any released build,
+  which is what makes the frontier resolver above load-bearing rather than a
+  convenience. It also decides where the rows are read. The SQL path already
+  reads that column: its dependency target expression COALESCEs it, and the
+  connect-time shape probe REQUIRES it, so a store that cannot express a
+  cross-project row stands the SQL path down instead of reading a graph with
+  those edges dropped. The CLI path reads them from bd's RECORD surface — the
+  dependency ROWS `bd query`/`bd list --json` embed in each bead record, whose
+  target bd emits as its own COALESCE over the three typed target columns.
+  bd's RESOLVING reads (`bd dep list --json`, `bd show --json`) cannot carry
+  one at all: they answer with the ISSUE RECORD a dependency points at, and an
+  `external:` target has no issue in the consumer's store to resolve to. When
+  the record surface comes back with no dependency rows while the resolving
+  read has some for the very beads that surface returned, the CLI path REFUSES
+  with a named diagnostic and publishes NO snapshot, rather than reading a store's silence as "no external blockers" —
+  never fail open. The diagnostic rides the station's ONE cross-store sink,
+  named by store and rising-edge, because a thrown read error otherwise lands
+  on a repository error stream nothing in the resident listens to. `bd sql` is
+  not the fallback: `BdCliService` is structurally SQL-free by a pinned
+  invariant (PDR §6.6 / ADR-0001 D4), and the CLI path does not become the SQL
+  path to answer one question.
 * **A project the roster does not arm is the LOUD hard refusal**, and it BLOCKS:
   an edge naming a store this station is not arming must never pass as
   satisfied. One line per authored row, rising-edge, naming both ends and the
@@ -108,7 +133,12 @@ prerequisites, per the previous entry's fan-in rule.
   capability would have no automated producer at all. Rising-edge, like the
   refusal log: one `bd ship` per observed owing bead, the key dropped as soon as
   the snapshot stops reporting it owed. A capability the bead already provides,
-  and a bead carrying no `export:` label, spawn no process.
+  and a bead carrying no `export:` label, spawn no process. The settle is
+  SUPPRESSED under `--dry-run`: `bd ship` publishes a capability to every other
+  store's frontier, which is the class of outcome a dry run withholds. The
+  observer itself stands — the rising edge is never marked in a dry run, so the
+  next live flush ships whatever the dry run observed. The roster drain settle
+  beside it is not a publication and keeps running dry.
 * **`link` is sugar.** `link <from> --blocked-by <to>` resolves `<to>`'s store
   from the roster, adds `export:<to>` to `<to>` if absent, and runs
   `bd dep add <from> external:<project>:<to>`. It mints no bead and never
@@ -118,7 +148,11 @@ prerequisites, per the previous entry's fan-in rule.
   reads SHIPPED exactly as the frontier does — a LABEL scan for a CLOSED bead
   carrying `provides:<capability>`, never a bead-id lookup — so the verb and the
   engine can never disagree about one edge, including the fan-in form where the
-  capability is not any bead's id.
+  capability is not any bead's id. It lists the rows off the SAME read the
+  frontier takes them from (the broad record read above), so a listing built on
+  a surface that cannot carry them — which is what `bd dep list` is — can never
+  print an empty roster over a store full of edges, and the read's refusal
+  reaches the operator as a non-zero exit.
 * **A SAME-store pair is refused**, pointing at `bd dep add <from> <to>`. A
   self-referential `external:` row resolves in no store, and a same-store
   blocker needs nothing this verb adds.
@@ -141,6 +175,14 @@ prerequisites, per the previous entry's fan-in rule.
 * Bad, because two mechanisms — authored link beads and `external:` rows — are
   both live until `tg-6t0h` lands. That window is deliberate and is measured in
   one bead, not in a release.
+* Bad, because the CLI read path now REFUSES a store whose record surface stops
+  carrying dependency rows, which takes the whole snapshot down for that member
+  rather than degrading. That is the deliberate direction: the alternative is a
+  snapshot that silently cannot see a blocker.
+* Bad, because `--dry-run` now means "no capability publication" as well as "no
+  PR/merge". A dry run that observes a hand-closed exporter leaves it unshipped
+  until a live flush, so a dry-run station is not a substitute for a live one
+  when a capability edge is waiting.
 * Bad, because the frontier's satisfaction test now reads bd LABELS, so a store
   whose labels are stale reads as unshipped. Fail-closed is the right direction
   for that error, but it is a new way to be wrong.
