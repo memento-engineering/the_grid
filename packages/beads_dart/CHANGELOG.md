@@ -1,3 +1,10 @@
+## 0.2.1-dev.1
+
+- Guards silent-success bd operations: `BdCliService` refuses a notes write that would replace the
+  field unless the caller passes `allowNotesReplacement`, and a refused guardrail surfaces as
+  `BdGuardrailRefused` with its `reason` and `remedy` (#420). Additive; the default keeps the
+  previous accrue-only behaviour.
+
 ## 0.2.0
 
 - PROMOTED from 0.2.0-rc.10. This is the stable release of the 0.2.0 line; the code is the

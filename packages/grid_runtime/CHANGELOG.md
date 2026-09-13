@@ -1,3 +1,17 @@
+## 0.2.1-dev.1
+
+- Adds `StationGitRepository` (exported from `grid_runtime.dart`): a resident registry of provisioned
+  bead worktrees that records each worktree's base commit and answers `baseShaFor(beadId)`, so a
+  committee can pin its review diff to the exact base the provisioner cut from instead of a moving
+  `origin/<base>`; `StationGitService.provisionWorktree` records that base sha on the returned
+  `BeadWorktree` (tg-2xdk, #436).
+- Publishes the wave-2 cut-boundary additions that main has carried unversioned since 0.2.0:
+  `ReapWorktree`, `SessionDisciplineStamp`, `kSessionDisciplineKey` and `kSessionBreakGlassKey`
+  (#431), and the guarded silent-success bd writes (`allowNotesReplacement`, `BdGuardrailRefused`
+  surfaced through `StationBeadWriter`; #420).
+- Floors `beads_dart` and `grid_trajectory` at `^0.2.1-dev.1`: the code above uses API that
+  `0.2.0` of each does not have (declared-floor scrub, 2026-09-13).
+
 ## 0.2.0
 
 - PROMOTED from 0.2.0-rc.19. This is the stable release of the 0.2.0 line; the code is the

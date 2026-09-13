@@ -1,3 +1,8 @@
+## 0.2.1-dev.1
+
+- Enforces the wave-2 cut boundary: decision-bearing appends are awaited only under a cut, and the
+  cut/quiesce contract main has carried since #431 is published (#427, #431).
+
 # Changelog
 
 ## 0.2.0
