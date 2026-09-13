@@ -133,6 +133,9 @@ const String kObligationStuckChannel = 'obligation-stuck';
 /// stop resetting the evidence: the wave-1 gates read notes ACROSS boots.
 const String kDualReadRoundSummaryChannel = 'dual-read-round-summary';
 
+/// The destructive G1 rollback note channel.
+const String kBreakGlassChannel = 'break-glass';
+
 /// `provenance_basis` for the teardown-replay observer append (cut-wiring §C2,
 /// r5): the reconciler closed an OPEN session bead and emitted no terminal, so
 /// the head would stay open forever. Reconstructed testimony about a session
@@ -881,6 +884,25 @@ class StationTrajectoryRecorder {
           sessionId: sessionId,
           body: body,
           channel: kDualReadRoundSummaryChannel,
+        ).record,
+        occurredAt: occurredAt,
+      );
+    });
+  }
+
+  /// `attempt.note(channel='break-glass')` — one durable note on each cut-era
+  /// session destructively voided before a shadow break-glass boot proceeds.
+  void breakGlassNoted({
+    required String sessionId,
+    required String reason,
+    DateTime? occurredAt,
+  }) {
+    _observe('breakGlassNoted', () {
+      _enqueue(
+        buildNote(
+          sessionId: sessionId,
+          body: 'break-glass:$reason',
+          channel: kBreakGlassChannel,
         ).record,
         occurredAt: occurredAt,
       );
@@ -1662,18 +1684,37 @@ class StationTrajectoryRecorder {
   }) {
     _observe('worktreeHeld', () {
       _enqueue(
-        WorktreeHeld(
+        buildWorktreeHeld(
           sessionId: sessionId,
           worktree: worktree,
           branch: branch,
           uncommitted: uncommitted,
           unpushed: unpushed,
           stashes: stashes,
-        ),
+        ).record,
         occurredAt: occurredAt,
       );
     });
   }
+
+  /// The tick-side `worktree.held` builder, shared with [worktreeHeld].
+  DerivedRecord buildWorktreeHeld({
+    required String sessionId,
+    required String worktree,
+    String? branch,
+    int? uncommitted,
+    int? unpushed,
+    int? stashes,
+  }) => DerivedRecord(
+    WorktreeHeld(
+      sessionId: sessionId,
+      worktree: worktree,
+      branch: branch,
+      uncommitted: uncommitted,
+      unpushed: unpushed,
+      stashes: stashes,
+    ),
+  );
 
   // ── internals ────────────────────────────────────────────────────────────
 

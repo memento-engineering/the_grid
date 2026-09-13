@@ -104,6 +104,7 @@ export 'src/git/git_ops.dart'
 export 'src/git/station_git_service.dart'
     show
         BeadWorktree,
+        ReapWorktree,
         StationGitService,
         LandResult,
         ReapOutcome,
@@ -120,6 +121,9 @@ export 'src/lifecycle/bead_ownership.dart' show BeadOwnershipPredicate;
 export 'src/lifecycle/station_bead_writer.dart'
     show
         StationBeadWriter,
+        SessionDisciplineStamp,
+        kSessionDisciplineKey,
+        kSessionBreakGlassKey,
         OperatorBeadTextField,
         OwnershipRefused,
         OwnershipGuardRefused,
@@ -186,6 +190,7 @@ export 'src/trajectory/station_trajectory_recorder.dart'
         TrajectoryRecorderStats,
         TrajectoryRecordSink,
         kDualReadRoundSummaryChannel,
+        kBreakGlassChannel,
         kExternalCloseUnknownReason,
         kLegacyAttemptCountKey,
         kObligationStuckChannel,
@@ -211,10 +216,12 @@ export 'src/trajectory/stage1_obligations.dart'
         ExternalCloseTerminalObligation,
         LastActivityPoll,
         LivenessDetectorObligation,
+        LiveWorktreeReapObligation,
         SessionClosure,
         SessionClosureProbe,
         UnknownTerminalSettlementObligation,
         WorktreeReapedBackfillObligation,
+        WorktreeRootSupplier,
         buildStage1ObligationQueries,
         kDefaultExternalCloseGrace,
         kDefaultLivenessThreshold,

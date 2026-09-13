@@ -11,6 +11,8 @@ library;
 
 import 'package:meta/meta.dart';
 
+import '../connect/trajectory_db.dart';
+
 /// One P6 row. Immutable; the fold advances an attempt by [applying] a column
 /// map — the SAME column vocabulary the incremental SQL uses, so the two
 /// application modes cannot drift on semantics.
@@ -34,6 +36,41 @@ class ProcessIdentityRow {
     this.worktreeState,
     this.predecessorAttemptId,
   });
+
+  /// Decodes one `SELECT * FROM proj_process_identity` row.
+  factory ProcessIdentityRow.fromSqlRow(Map<String, Object?> row) {
+    String? text(String column) {
+      final value = row[column];
+      return value == null ? null : '$value';
+    }
+
+    int? number(String column) {
+      final raw = text(column);
+      return raw == null ? null : int.parse(raw);
+    }
+
+    return ProcessIdentityRow(
+      attemptId: text('attempt_id') ?? '',
+      sessionId: text('session_id') ?? '',
+      round: number('round') ?? 0,
+      stepPath: text('step_path') ?? '',
+      stepRound: number('step_round') ?? 0,
+      incarnation: number('incarnation') ?? 0,
+      pid: number('pid'),
+      pgid: number('pgid'),
+      leaseState: text('lease_state'),
+      worktree: text('worktree'),
+      branch: text('branch'),
+      baseSha: text('base_sha'),
+      adoptedExisting: switch (number('adopted_existing')) {
+        final int value => value != 0,
+        _ => null,
+      },
+      worktreeState: text('worktree_state'),
+      predecessorAttemptId: text('predecessor_attempt_id'),
+      lastSeq: number('last_seq') ?? 0,
+    );
+  }
 
   final String attemptId;
   final String sessionId;
@@ -214,4 +251,17 @@ class ProcessIdentityRow {
 
   @override
   String toString() => 'ProcessIdentityRow(${toSqlParams()})';
+}
+
+/// The whole P6 projection, deterministically ordered for mirror seeding.
+const String scanProcessIdentityRowsSql =
+    'SELECT * FROM proj_process_identity '
+    'ORDER BY session_id, step_path, round, step_round, incarnation';
+
+/// Reads every P6 row through the caller's serialized trajectory connection.
+Future<List<ProcessIdentityRow>> scanProcessIdentityRows(
+  TrajectoryDb db,
+) async {
+  final result = await db.execute(scanProcessIdentityRowsSql);
+  return [for (final row in result.rows) ProcessIdentityRow.fromSqlRow(row)];
 }

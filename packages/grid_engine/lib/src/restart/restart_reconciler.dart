@@ -72,6 +72,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_head_read.dart';
 import '../domain/session_projection.dart';
+import '../domain/step_cursor_read.dart' show collapseStepCursors;
 import '../domain/trajectory_views.dart';
 import '../molecule/molecule_schema.dart' show MoleculeStepKeys;
 import '../molecule/process_lease_vendor.dart'
@@ -96,18 +97,6 @@ void _reportOnlyOrphanSink(String message) {}
 /// (ADR-0007 §1 opinion-free kernel).
 typedef ListBeadWorktrees =
     Future<List<BeadWorktree>?> Function(RootCheckout root);
-
-/// The reap seam: the three-gate fail-closed worktree remover. [dryRun]
-/// previews after running the same probes; [overrideUnsafe] permits only known
-/// present gates and never a scope or probe failure. Both default false so
-/// lifecycle and restart callers retain their automatic behavior.
-typedef ReapWorktree =
-    Future<ReapOutcome> Function({
-      required RootCheckout root,
-      required BeadWorktree worktree,
-      bool dryRun,
-      bool overrideUnsafe,
-    });
 
 /// The disposition of one surviving worktree after restart reconciliation.
 ///
@@ -455,12 +444,14 @@ class RestartReconciler {
     void Function(String message)? onOrphan,
     StationTrajectoryRecorder? recorder,
     TrajectoryHeadSnapshot Function()? headSnapshot,
+    TrajectoryStepSnapshot Function()? stepSnapshot,
     DualReadAccounting? dualReadAccounting,
     DualReadMode dualReadMode = DualReadMode.off,
     void Function(String name, Map<String, String> data)? onFlare,
   }) : assert(workRoot != null || workRoots.isNotEmpty),
        _recorder = recorder ?? StationTrajectoryRecorder.disabled(),
        _headSnapshot = headSnapshot,
+       _stepSnapshot = stepSnapshot,
        _dualRead = dualReadAccounting,
        _dualReadMode = dualReadMode,
        _onFlare = onFlare,
@@ -519,6 +510,10 @@ class RestartReconciler {
   /// reconciler stays synchronous and store-free. Null off-tree; then the
   /// comparison simply does not run and this pass is byte-identical to before.
   final TrajectoryHeadSnapshot Function()? _headSnapshot;
+
+  /// P2's optional fold-backed state for the lease sweep. Served only under
+  /// the same primary/live/not-disengaged posture as the other fold reads.
+  final TrajectoryStepSnapshot Function()? _stepSnapshot;
 
   /// Shared with the bridge's observer so ONE boot has ONE set of counters —
   /// the round summary must not report two different truths for one boot. It
@@ -1057,21 +1052,34 @@ class RestartReconciler {
     if (remountBySession.isEmpty) return const [];
 
     final candidates = <LeaseSweepCandidate>[];
+    final stepSnapshot = _stepSnapshot?.call();
+    final serveP2 =
+        _dualReadMode == DualReadMode.primary &&
+        stepSnapshot?.health == TrajectorySnapshotHealth.live &&
+        _dualRead != null &&
+        !_dualRead.overlayDisengaged;
     for (final bead in _stateSnapshot().beadsById.values) {
       if (bead.issueType != GridIssueTypes.step) continue;
       final owner = bead.metadata[MoleculeStepKeys.session];
       if (owner is! String) continue;
       final willRemount = remountBySession[owner];
       if (willRemount == null) continue;
+      final metadata = <String, String>{
+        for (final entry in bead.metadata.entries)
+          if (entry.value != null) entry.key: '${entry.value}',
+      };
+      if (serveP2) {
+        final active = collapseStepCursors(stepSnapshot!.byP2SessionId(owner));
+        final path = metadata[MoleculeStepKeys.path];
+        final state = path == null ? null : active[path]?.stepState;
+        if (state != null) metadata[MoleculeStepKeys.state] = state;
+      }
       candidates.add((
         stepBeadId: bead.id,
         willRemount: willRemount,
         // bd metadata is Map<String, dynamic> off the wire; the vendor's
         // breadcrumb codec reads flat strings.
-        metadata: {
-          for (final entry in bead.metadata.entries)
-            if (entry.value != null) entry.key: '${entry.value}',
-        },
+        metadata: metadata,
       ));
     }
     if (candidates.isEmpty) return const [];

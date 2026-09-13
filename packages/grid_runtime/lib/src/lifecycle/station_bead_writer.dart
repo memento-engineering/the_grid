@@ -5,6 +5,23 @@ import 'package:beads_dart/beads_dart.dart';
 import 'bead_ownership.dart';
 import '../models/grid_issue_types.dart';
 
+/// The permanent execution-carrier era stamped on every session at birth.
+///
+/// Missing and unknown values are interpreted by the read side as [shadow];
+/// only this exact wire vocabulary is ever written.
+enum SessionDisciplineStamp {
+  shadow('shadow'),
+  cut('cut');
+
+  const SessionDisciplineStamp(this.wireValue);
+
+  final String wireValue;
+}
+
+/// Permanent session birth-fact keys shared with the engine read contract.
+const String kSessionDisciplineKey = 'grid.session.discipline';
+const String kSessionBreakGlassKey = 'grid.session.break_glass';
+
 /// Raised when the [StationBeadWriter] chokepoint refuses a write because the
 /// target bead's substation is absent or not in the shared allow-set (fail-closed).
 ///
@@ -200,12 +217,20 @@ class StationBeadWriter {
     void Function(String message)? onRefusal,
     void Function(String name, Map<String, String> data)? onFlare,
     DateTime Function()? clock,
+    this.sessionDiscipline = SessionDisciplineStamp.shadow,
+    this.sessionBreakGlassReason,
   }) : _bd = bd,
        _reader = reader,
        _ownership = ownership,
        _onRefusal = onRefusal,
        _onFlare = onFlare,
        _clock = clock ?? DateTime.now;
+
+  /// The resolved station discipline stamped on every session minted here.
+  final SessionDisciplineStamp sessionDiscipline;
+
+  /// Loud provenance for sessions minted during a break-glass boot.
+  final String? sessionBreakGlassReason;
 
   final BdCliService _bd;
   final BeadProbeReader _reader;
@@ -329,7 +354,9 @@ class StationBeadWriter {
     // Stamp the owned substation marker + linkage FROM BIRTH (merge update; the substation
     // key is what every later write asserts against). The capture-only
     // `started_at` stamp (FT-1) rides the SAME birth write — no extra traffic;
-    // a caller-supplied [metadata] value wins (it can override the default).
+    // a caller-supplied [metadata] value wins for legacy fields. Discipline
+    // and break-glass provenance are resolved station facts and therefore
+    // follow the caller map so they cannot be overridden.
     await _updateBead(
       'createSession',
       id,
@@ -338,6 +365,9 @@ class StationBeadWriter {
         'work_bead': workBeadId,
         startedAtKey: _clock().toUtc().toIso8601String(),
         ...metadata,
+        kSessionDisciplineKey: sessionDiscipline.wireValue,
+        if (sessionBreakGlassReason case final reason?)
+          kSessionBreakGlassKey: reason,
       },
     );
     _flare('session.minted', {'sessionId': id, 'workBeadId': workBeadId});
