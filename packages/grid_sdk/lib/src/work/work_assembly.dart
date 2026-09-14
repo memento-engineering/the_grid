@@ -1512,9 +1512,17 @@ Future<StationWorkRuntime> _acquireStationWork({
         // join bridge joins — one map lookup per candidate row per tick and
         // never a bd round trip. `stateSource` is constructed above and
         // resolved at CALL time, so the probe follows every state emission.
+        // No snapshot yet is "nothing to say" (null); a snapshot that does
+        // not HOLD the bead is the ledger's lost session, and the obligation
+        // must hear the difference or 64 reaped heads own its window forever
+        // (tg-6uhz).
         sessionClosure: (sessionId) {
-          final bead = stateSource.current?.beadsById[sessionId];
-          return bead == null ? null : sessionClosureOf(bead);
+          final snapshot = stateSource.current;
+          if (snapshot == null) return null;
+          final bead = snapshot.beadsById[sessionId];
+          return bead == null
+              ? const SessionClosure.absent()
+              : sessionClosureOf(bead);
         },
         reapWorktree: trajectoryConfig.discipline != TrajectoryDiscipline.cut
             ? null

@@ -48,8 +48,10 @@ typedef LastActivityPoll = DateTime? Function(String providerName);
 /// What the LEDGER says about one session bead's closure — the one bd fact the
 /// external-close obligation consumes (decision
 /// `wave-2-flip-scope-soak-and-kill-date`, Q6: bd remains an input to terminal
-/// truth). A null answer from a [SessionClosureProbe] means "open, or not in
-/// the snapshot" — nothing to heal.
+/// truth). A null answer from a [SessionClosureProbe] means "open in the
+/// ledger, or no snapshot to read yet" — nothing to heal. A session bead the
+/// snapshot no longer HOLDS is a different fact ([SessionClosure.absent]): the
+/// ledger lost it, and the probe says so rather than folding it into null.
 ///
 /// [closedAt] is the bead's `closed_at` telemetry when the chokepoint stamped
 /// one; a hand `bd close` carries none, which is why the obligation keys its
@@ -68,7 +70,19 @@ final class SessionClosure {
     this.outcome,
     this.reason,
     this.retiredRound = false,
-  });
+  }) : absentFromLedger = false;
+
+  /// The ledger no longer holds this session bead at all (reaped or pruned):
+  /// the trajectory's `lost`. Measured 2026-09-14 (tg-6uhz): 280 of 439
+  /// candidate heads on one station were absent, and because the probe
+  /// answered null for them — "open" — the oldest 64 held the window forever
+  /// and the 151 closed heads behind them were never reached.
+  const SessionClosure.absent()
+    : closedAt = null,
+      outcome = TerminalOutcome.lost,
+      reason = kLedgerAbsentReason,
+      retiredRound = false,
+      absentFromLedger = true;
 
   final DateTime? closedAt;
   final TerminalOutcome? outcome;
@@ -78,12 +92,20 @@ final class SessionClosure {
   /// (`#rN` key). The fold keeps such heads open by schema design (the round
   /// bump is the retirement); the obligation counts and skips them.
   final bool retiredRound;
+
+  /// The session bead is gone from the state snapshot — see [absent].
+  final bool absentFromLedger;
 }
+
+/// The [SessionClosure.reason] of an absent head.
+const String kLedgerAbsentReason =
+    'ledger absent: the session bead is no longer in the state store';
 
 /// The engine-side answer to "is this session bead closed in bd?" — read off
 /// the state snapshot the join bridge already holds in memory (one lookup per
 /// row per tick, never a bd round trip). Null when the seam is unwired (a
-/// bare harness) or the bead is open/unknown.
+/// bare harness), the bead is open, or there is no snapshot yet; a bead the
+/// snapshot does not hold answers [SessionClosure.absent].
 typedef SessionClosureProbe = SessionClosure? Function(String sessionId);
 
 /// The harness's answer to "is an append for this attempt, or a terminal for
@@ -129,6 +151,11 @@ const Duration kDefaultPulseCoalesce = Duration(seconds: 30);
 /// That is the intended shape at Stage 1: both repairs are record-only, so a
 /// declined row costs nothing but its place in a 64-wide window, against a
 /// station whose whole storm is a handful of concurrent sessions.
+///
+/// The one row that must NEVER keep its slot is a head whose session bead the
+/// ledger no longer holds: it can never change, so the external-close
+/// obligation heals it as `lost` after the grace instead of reading it as
+/// open (tg-6uhz — 64 reaped heads held the window for a whole epoch).
 const int kObligationBatchSize = 64;
 
 /// Resolves the one registered root that strictly contains a P6 worktree.
@@ -481,6 +508,10 @@ final class ExternalCloseTerminalObligation extends ObligationQuery {
   /// read them OPEN, and rows still inside [grace] — telemetry for the
   /// operator's "why is this head still open" question.
   int lastOpenInLedger = 0;
+
+  /// Rows whose session bead the snapshot no longer holds — counted APART from
+  /// open, because they heal (as `lost`) where an open head waits.
+  int lastAbsentInLedger = 0;
   int lastWithinGrace = 0;
   int lastAppendQueued = 0;
   int lastRetiredRound = 0;
@@ -530,6 +561,7 @@ final class ExternalCloseTerminalObligation extends ObligationQuery {
   Future<List<ObligationAppend>> repair(List<Map<String, String?>> rows) async {
     final probe = _sessionClosure;
     lastOpenInLedger = 0;
+    lastAbsentInLedger = 0;
     lastWithinGrace = 0;
     lastAppendQueued = 0;
     lastRetiredRound = 0;
@@ -544,12 +576,18 @@ final class ExternalCloseTerminalObligation extends ObligationQuery {
       if (sessionId == null || attemptId == null) continue;
       final closure = probe(sessionId);
       if (closure == null) {
-        // Open in bd (or not in the snapshot): a live round, or a head the
+        // Open in bd, or no snapshot to read yet: a live round, or a head the
         // ledger has not caught up with. Forget any earlier sighting — a
         // reopened bead restarts the grace.
         _firstSeenClosed.remove(sessionId);
         lastOpenInLedger += 1;
         continue;
+      }
+      if (closure.absentFromLedger) {
+        // The ledger LOST this bead (reaped, pruned): nothing will ever close
+        // it, so it takes the same grace as a closed bead and heals as `lost`
+        // — the only way it leaves the window (tg-6uhz).
+        lastAbsentInLedger += 1;
       }
       if (closure.retiredRound) {
         // The fold's own model: a retired round is an open head with its
@@ -579,12 +617,16 @@ final class ExternalCloseTerminalObligation extends ObligationQuery {
         attemptId: attemptId,
         workBeadId: row['work_bead_id'],
         outcome: closure.outcome ?? TerminalOutcome.unknown,
-        reason:
-            'terminal-reconcile: the ledger closed this session'
-            '${closedAt == null ? '' : ' at ${closedAt.toUtc().toIso8601String()}'}'
-            '${ledgerReason == null || ledgerReason.isEmpty ? '' : ' ($ledgerReason)'}'
-            ' and no terminal record was ever observed for its attempt '
-            '(tick obligation, posture-independent)',
+        reason: closure.absentFromLedger
+            ? 'terminal-reconcile: the ledger no longer holds this session '
+                  'bead (absent from the state snapshot) and no terminal '
+                  'record was ever observed for its attempt '
+                  '(tick obligation, posture-independent)'
+            : 'terminal-reconcile: the ledger closed this session'
+                  '${closedAt == null ? '' : ' at ${closedAt.toUtc().toIso8601String()}'}'
+                  '${ledgerReason == null || ledgerReason.isEmpty ? '' : ' ($ledgerReason)'}'
+                  ' and no terminal record was ever observed for its attempt '
+                  '(tick obligation, posture-independent)',
       );
       _firstSeenClosed.remove(sessionId);
       appends.add(
