@@ -45,6 +45,7 @@ Map<String, Object?> summaryBody({
   'p1_orphan': 0,
   'p2_miss': 0,
   'p2_miss_total': 0,
+  'p2_miss_retired_round_total': 0,
   'unexplained_divergences_in_window': 0,
   'step_unexplained_divergences_in_window': 0,
   'cardinality_breaches_in_window': 0,

@@ -135,6 +135,7 @@ const List<String> kCertificateReportedCounters = [
   'soak_window_epoch',
   'miss_post_epoch',
   'p2_miss',
+  'p2_miss_retired_round_total',
   'miss_legacy_era',
   'fallbacks',
   'p1_orphan',
