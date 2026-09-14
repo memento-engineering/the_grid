@@ -1,3 +1,15 @@
+## 0.4.0-dev.4
+
+- Fixes the boot terminal-gate write sweep. `WorkList` fired one unawaited state-store write
+  per terminal session with no concurrency bound, and because the sweep runs from `build` it
+  re-fired the whole fan-out on every rebuild over sessions that stay terminal precisely
+  because their gate closes are failing. On a store with hundreds of closed sessions the tail
+  of that burst blew the 10 s `DoltQueryService` deadline, and the failed retirements then
+  cancelled the first mint of every ready bead (`session.mintAbandoned`), leaving a station UP
+  and ARMED with ready work and nothing mounted. The sweep now drains through
+  `kTerminalWriteConcurrency` workers and holds one drain at a time, so successive builds
+  extend it instead of duplicating it (#449).
+
 ## 0.4.0-dev.3
 
 - Breaking: the state-store cross-link surface is GONE. `src/domain/cross_link.dart` (`CrossLink`,
