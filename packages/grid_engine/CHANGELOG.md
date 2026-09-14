@@ -1,3 +1,13 @@
+## 0.4.0-dev.8
+
+- A post-epoch P1 head miss is held for `kHeadMissGrace` (90 s) before it enters the gated
+  `miss_post_epoch_total` (#463). The mint writes the session bead first and appends its head after,
+  so the join's first sighting of every fresh mint was headless by construction and latched into
+  the certificate's cumulative; a head that lands inside the grace now clears it. A terminal session
+  that never had a head — the abandoned-mint shape — is counted under the new reported
+  `miss_post_epoch_terminal_total`, never into the gated total. The per-pass gauge still counts
+  every sighting.
+
 ## 0.4.0-dev.7
 
 - The gated `p2_miss_total` no longer counts never-transitioned step nodes (#461). The state
