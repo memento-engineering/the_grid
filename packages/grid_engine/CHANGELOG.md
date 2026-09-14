@@ -1,3 +1,14 @@
+## 0.4.0-dev.6
+
+- Explains the open-retired shape in the step pass (#454). Under `primary` the overlay serves a
+  re-keyed session with the fold head's original bare `workBeadId`, so the step pass's
+  retired-key skip never fired for it and every node of its legacy step cursor was counted as a
+  p2 miss (measured `p2_miss_total 93` on a converged boot). A retired-round session, recognised
+  on the join's map key with the new narrow `isRetiredRoundKey` (`#r<digits>`), is now an
+  EXPLAINED miss - `step_retired_round_skipped` / `p2_miss_retired_round_total`, beside the miss
+  gauges and never into them - per the ruling
+  `the-soak-clean-row-honours-the-open-retired-shape`. A `#void-` key deliberately still counts.
+
 ## 0.4.0-dev.5
 
 - Makes the boot terminal-gate sweep converge. 0.4.0-dev.4 bounded and latched the sweep

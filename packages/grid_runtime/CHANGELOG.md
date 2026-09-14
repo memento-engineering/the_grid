@@ -1,3 +1,13 @@
+## 0.2.1-dev.3
+
+- The external-close terminal obligation stops starving behind its own retired-round skips
+  (#456): every retired head skipped this boot is excluded from the next window's query so the
+  cursor advances past the prefix, and a window that is nothing but retired skips with no append,
+  three ticks running, is said once through the obligation-stuck note. Measured on lunar: 114
+  retired heads older than every heal candidate filled the 64-row window on every tick and the
+  41 void-rekeyed closes behind them were never healed. A stopgap pending the projected retired
+  flag on the fold (its removal bead is filed in the_grid).
+
 ## 0.2.1-dev.2
 
 - Breaking: `StationBeadWriter.createLink` is removed (#447). Nothing authors a state-store link
