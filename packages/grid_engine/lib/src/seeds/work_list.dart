@@ -71,6 +71,15 @@ class _WorkListState extends State<WorkList>
   StationTrajectoryRecorder _recorder =
       TrajectoryRecorderScope.disabled.recorder;
 
+  /// True while a terminal-write drain is outstanding (tg-gxp6). The terminal
+  /// projection runs from [build], so a store whose gate closes are slow gets
+  /// the SAME still-terminal sessions re-swept on every rebuild; without this
+  /// guard each rebuild would start another drain and the overlapping drains
+  /// would re-form the very herd the bound exists to prevent. One drain at a
+  /// time — the next build re-derives what is still terminal and sweeps the
+  /// remainder.
+  bool _terminalDrainInFlight = false;
+
   /// The barrier's observer (§W2.4 W2-B) — the offline path's own handle to
   /// the counting arm and the refusal derivation. Null composes the clause in
   /// its observe form over a disarmed read, which refuses nothing.
@@ -567,9 +576,19 @@ class _WorkListState extends State<WorkList>
     List<StationAdmissionCandidate> candidates,
     StationAdmissionBatch batch,
   ) {
+    if (_terminalDrainInFlight) return;
     final refusedById = {
       for (final refusal in batch.refused) refusal.candidate.bead.id: refusal,
     };
+    // ONE CLOSURE PER TERMINAL ANSWER, drained under a concurrency bound
+    // rather than dispatched all at once (tg-gxp6). A store carrying hundreds
+    // of closed sessions used to get one unawaited write per session fired
+    // simultaneously at every boot; the tail of that burst blew
+    // DoltQueryService.queryTimeout, and the failed gate closes then cancelled
+    // the first mint of every ready bead - leaving the station UP and ARMED
+    // with `ready > 0, mounted 0` and no retry, because the mint failure is
+    // latched per scope.
+    final terminalWrites = <Future<void> Function()>[];
     for (final candidate in candidates) {
       final bead = candidate.bead;
       final session = candidate.session;
@@ -577,52 +596,109 @@ class _WorkListState extends State<WorkList>
       if (sessionId.isEmpty) continue;
       final disposition = sessionDispositionOf(session);
       if (bead.isClosed && disposition is LiveSession) {
-        unawaited(
-          station.admission
-              .settleWorkTerminalSession(
-                terminalWorkBead: bead,
-                sessionId: sessionId,
-                services: services,
-              )
-              .then((_) {
-                _recorder.sessionSettled(
-                  sessionId: sessionId,
-                  workBeadId: bead.id,
-                  workTerminalReason:
-                      StationBeadWriter.workTerminalReasonWorkBeadClosed,
-                );
-              })
-              .catchError((Object error) {
-                _flare(services, 'gate.autoCloseFailed', {
-                  'sessionId': sessionId,
-                  'cause': GateCloseCause.workBeadClosed.wireValue,
-                  'reason': truncateReason('$error'),
-                  ...stateStoreDeadlineMetadata(error),
-                });
-              }),
+        terminalWrites.add(
+          () => _settleTerminalWorkBead(
+            station: station,
+            services: services,
+            candidate: candidate,
+            sessionId: sessionId,
+          ),
         );
         continue;
       }
       final refusal = refusedById[bead.id];
       if (refusal?.clause == 'done') {
-        unawaited(
-          station.admission
-              .closeTerminalGates(
-                sessionId: sessionId,
-                cause: GateCloseCause.sessionTerminal,
-                disposition: GateSweepSessionDisposition.done,
-                services: services,
-              )
-              .catchError((Object error) {
-                _flare(services, 'gate.autoCloseFailed', {
-                  'sessionId': sessionId,
-                  'cause': GateCloseCause.sessionTerminal.wireValue,
-                  'reason': truncateReason('$error'),
-                  ...stateStoreDeadlineMetadata(error),
-                });
-              }),
+        terminalWrites.add(
+          () => _closeTerminalGates(
+            station: station,
+            services: services,
+            sessionId: sessionId,
+          ),
         );
       }
+    }
+    if (terminalWrites.isEmpty) return;
+    _terminalDrainInFlight = true;
+    unawaited(_runTerminalDrain(terminalWrites));
+  }
+
+  /// Owns the [_terminalDrainInFlight] latch for one drain, so the flag is
+  /// cleared even when a write escapes its own error handling.
+  Future<void> _runTerminalDrain(List<Future<void> Function()> writes) async {
+    try {
+      await _drainTerminalWrites(writes);
+    } finally {
+      _terminalDrainInFlight = false;
+    }
+  }
+
+  /// Runs [writes] at most [kTerminalWriteConcurrency] at a time. Every closure
+  /// swallows and flares its own failure, so one bad write never halts the
+  /// drain and the sweep still reaches every terminal session.
+  static Future<void> _drainTerminalWrites(
+    List<Future<void> Function()> writes,
+  ) async {
+    var next = 0;
+
+    Future<void> worker() async {
+      while (next < writes.length) {
+        final write = writes[next++];
+        await write();
+      }
+    }
+
+    final workerCount = math.min(kTerminalWriteConcurrency, writes.length);
+    await Future.wait(<Future<void>>[
+      for (var index = 0; index < workerCount; index++) worker(),
+    ]);
+  }
+
+  Future<void> _settleTerminalWorkBead({
+    required StationServices station,
+    required ServiceBundle services,
+    required StationAdmissionCandidate candidate,
+    required String sessionId,
+  }) async {
+    try {
+      await station.admission.settleWorkTerminalSession(
+        terminalWorkBead: candidate.bead,
+        sessionId: sessionId,
+        services: services,
+      );
+      _recorder.sessionSettled(
+        sessionId: sessionId,
+        workBeadId: candidate.bead.id,
+        workTerminalReason: StationBeadWriter.workTerminalReasonWorkBeadClosed,
+      );
+    } on Object catch (error) {
+      _flare(services, 'gate.autoCloseFailed', {
+        'sessionId': sessionId,
+        'cause': GateCloseCause.workBeadClosed.wireValue,
+        'reason': truncateReason('$error'),
+        ...stateStoreDeadlineMetadata(error),
+      });
+    }
+  }
+
+  static Future<void> _closeTerminalGates({
+    required StationServices station,
+    required ServiceBundle services,
+    required String sessionId,
+  }) async {
+    try {
+      await station.admission.closeTerminalGates(
+        sessionId: sessionId,
+        cause: GateCloseCause.sessionTerminal,
+        disposition: GateSweepSessionDisposition.done,
+        services: services,
+      );
+    } on Object catch (error) {
+      _flare(services, 'gate.autoCloseFailed', {
+        'sessionId': sessionId,
+        'cause': GateCloseCause.sessionTerminal.wireValue,
+        'reason': truncateReason('$error'),
+        ...stateStoreDeadlineMetadata(error),
+      });
     }
   }
 
