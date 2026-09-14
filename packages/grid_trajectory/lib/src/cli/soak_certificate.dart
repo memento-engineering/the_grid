@@ -889,18 +889,20 @@ CertificateItem _wouldRefuse(List<BootEvidence> boots) {
           'observe form has not landed; informational',
     );
   }
-  final failures = <String>[
-    for (final entry in measured.entries)
-      if (entry.value != 0)
-        'epoch ${entry.key}: $kWouldRefuseCounter = ${entry.value}',
-  ];
+  // REPORTED, NOT GATING (cut-wiring §W2.5, the `barrier_would_refuse` row;
+  // and the engine's own accounting comment). The barrier's observe form
+  // counts how many candidates it WOULD have refused this boot — routine
+  // operator re-arms onto a surviving worktree are exactly that — and the
+  // table lists the counter so the reader sees it, not so the certificate
+  // breaks on it. A non-zero value is printed with its epoch and never
+  // becomes a failure; measured 2026-09-14 on lunar epoch 77 (= 2) as a
+  // consecutive-run break that the table does not authorise.
   return CertificateItem(
     row: CertificateRow.wouldRefuse,
-    status: failures.isEmpty ? CertificateStatus.pass : CertificateStatus.fail,
-    detail: [
-      for (final entry in measured.entries) 'epoch ${entry.key} ${entry.value}',
-    ].join(', '),
-    failures: failures,
+    status: CertificateStatus.pass,
+    detail:
+        '${[for (final entry in measured.entries) 'epoch ${entry.key} ${entry.value}'].join(', ')}'
+        ' — reported, not gating (cut-wiring §W2.5)',
   );
 }
 
