@@ -261,6 +261,23 @@ void main() {
     expect(accounting.p2MissTotal, 5);
   });
 
+  test('a post-epoch miss is gated only when the caller says so, and a '
+      'terminal headless session is counted beside the total (tg-qqw5)', () {
+    final accounting = DualReadAccounting(soakWindowEpoch: 10)
+      ..recordPostEpochMiss('fresh', gated: false)
+      ..recordPostEpochMiss('fresh', gated: false)
+      ..recordPostEpochMiss('stale')
+      ..recordPostEpochMiss('abandoned', terminal: true)
+      ..recordPostEpochMiss('abandoned', terminal: true);
+    expect(accounting.missPostEpoch, 5, reason: 'every sighting is gauged');
+    expect(accounting.missPostEpochTotal, 1, reason: 'only the graced-out one');
+    expect(accounting.missPostEpochTerminalTotal, 1);
+    expect(
+      accounting.toCertificationJson()['miss_post_epoch_terminal_total'],
+      1,
+    );
+  });
+
   test('the structurally-absent share rides the gauge but never the GATED '
       'total (tg-8nmo): a fresh mint with a pending circuit owes no rows', () {
     final accounting = DualReadAccounting(soakWindowEpoch: 10)

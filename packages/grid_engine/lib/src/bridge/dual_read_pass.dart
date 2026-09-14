@@ -133,6 +133,11 @@ class DualReadSessionObserver {
   final Map<String, _SessionCompareWindow> _compareWindowBySession =
       <String, _SessionCompareWindow>{};
   final Set<String> _operatorEditedSessions = <String>{};
+
+  /// First headless sighting per session, for [kHeadMissGrace]: a post-epoch
+  /// miss enters the gated total only once the head is still absent past the
+  /// grace; a head that lands inside it clears the entry (tg-qqw5).
+  final Map<String, DateTime> _headMissFirstSeen = <String, DateTime>{};
   final Set<String> _foldAheadOfLegacySessions = <String>{};
 
   /// Sessions already seen terminal — the transition edge the per-terminal
@@ -199,6 +204,7 @@ class DualReadSessionObserver {
       _compareWindowBySession.clear();
       _operatorEditedSessions.clear();
       _foldAheadOfLegacySessions.clear();
+      _headMissFirstSeen.clear();
       _emitTerminalSummaries(sessions, snapshot);
       return const <String, SessionProjection>{};
     }
@@ -226,12 +232,21 @@ class DualReadSessionObserver {
         if (miss.nullStartedAt) accounting.nullStartedAt += 1;
         switch (miss.era) {
           case DualReadMissClass.postEpoch:
-            accounting.recordPostEpochMiss(sessionId);
+            final firstSeen = _headMissFirstSeen.putIfAbsent(
+              sessionId,
+              () => now,
+            );
+            accounting.recordPostEpochMiss(
+              sessionId,
+              terminal: legacy.isTerminal,
+              gated: now.difference(firstSeen) >= kHeadMissGrace,
+            );
           case DualReadMissClass.legacyEra:
             accounting.missLegacyEra += 1;
         }
         continue;
       }
+      _headMissFirstSeen.remove(sessionId);
       matchedSessionIds.add(sessionId);
       accounting.hits += 1;
       beadsToSentinel.add(head.workBeadId);

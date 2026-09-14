@@ -82,6 +82,7 @@ const Map<String, String> kDualReadCounterSemantics = <String, String>{
   'hits': 'gauge',
   'miss_post_epoch': 'gauge',
   'miss_post_epoch_total': 'cumulative',
+  'miss_post_epoch_terminal_total': 'cumulative',
   'miss_legacy_era': 'gauge',
   'null_started_at': 'gauge',
   'fallbacks': 'gauge',
@@ -670,6 +671,11 @@ enum DualReadMissClass {
 typedef DualReadMiss = ({DualReadMissClass era, bool nullStartedAt});
 
 /// Classifies one miss against the station's first epoch claim.
+/// How long a post-epoch head miss is HELD before it enters the gated
+/// cumulative: the mint's bead-first/append-later window seen from the join's
+/// side, the same 90 s every other lag on the axis is graced (tg-qqw5).
+const Duration kHeadMissGrace = Duration(seconds: 90);
+
 DualReadMiss classifyDualReadMiss(
   SessionProjection legacy,
   DateTime? firstEpochClaimedAt,
@@ -782,6 +788,11 @@ class DualReadAccounting {
   int hits = 0;
   int missPostEpoch = 0;
   int missPostEpochTotal = 0;
+
+  /// Post-epoch head misses on a legacy session that is already TERMINAL and
+  /// never had a head — the abandoned-mint shape. Counted beside, never into,
+  /// [missPostEpochTotal]: no append will ever match it (tg-qqw5).
+  int missPostEpochTerminalTotal = 0;
   int missLegacyEra = 0;
   int nullStartedAt = 0;
 
@@ -974,9 +985,28 @@ class DualReadAccounting {
 
   /// Records a post-epoch P1 miss in both the current-pass gauge and the
   /// boot-cumulative, per-session total.
-  void recordPostEpochMiss(String sessionId) {
+  ///
+  /// The pass gauge counts every sighting. The GATED cumulative admits a
+  /// session only when [gated] — the caller has held it for [kHeadMissGrace]
+  /// since its first headless sighting and the head still has not landed —
+  /// because the mint writes the session bead FIRST and appends its head
+  /// after, so the first sighting of every fresh mint is guaranteed headless
+  /// (tg-qqw5: 3 latched on one boot, all seven mints had heads minutes
+  /// later). A [terminal] session with no head is the abandoned-mint shape:
+  /// counted under its own name, never into the gated total.
+  void recordPostEpochMiss(
+    String sessionId, {
+    bool gated = true,
+    bool terminal = false,
+  }) {
     missPostEpoch += 1;
-    if (noteEvent('missPostEpoch:$sessionId')) missPostEpochTotal += 1;
+    if (terminal) {
+      if (noteEvent('missPostEpochTerminal:$sessionId')) {
+        missPostEpochTerminalTotal += 1;
+      }
+      return;
+    }
+    if (gated && noteEvent('missPostEpoch:$sessionId')) missPostEpochTotal += 1;
   }
 
   /// Records one session's missing P2 population.
@@ -1258,6 +1288,7 @@ class DualReadAccounting {
       'hits': hits,
       'miss_post_epoch': missPostEpoch,
       'miss_post_epoch_total': missPostEpochTotal,
+      'miss_post_epoch_terminal_total': missPostEpochTerminalTotal,
       'miss_legacy_era': missLegacyEra,
       'null_started_at': nullStartedAt,
       'fallbacks': fallbacks,

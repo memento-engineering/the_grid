@@ -1301,7 +1301,10 @@ class RestartReconciler {
         if (miss.nullStartedAt) accounting.nullStartedAt += 1;
         switch (miss.era) {
           case DualReadMissClass.postEpoch:
-            accounting.recordPostEpochMiss(sessionId);
+            accounting.recordPostEpochMiss(
+              sessionId,
+              terminal: legacy.isTerminal,
+            );
           case DualReadMissClass.legacyEra:
             accounting.missLegacyEra += 1;
         }
