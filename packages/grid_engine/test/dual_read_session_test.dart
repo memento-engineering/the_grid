@@ -645,10 +645,107 @@ void main() {
       );
       expect(observer.accounting.fallbacks, 1);
       expect(observer.accounting.missPostEpoch, 1);
+      // A FIRST sighting is inside the head-miss grace: gauged, not gated
+      // (tg-qqw5).
+      expect(observer.accounting.missPostEpochTotal, 0);
       expect(observer.accounting.divergences, isZero);
       // The sibling is inert for decisions and merely counted.
       expect(observer.accounting.p1Orphan, 1);
       expect(sinks.flares, isEmpty);
+    });
+
+    test('a post-epoch head miss is HELD for kHeadMissGrace: a head that '
+        'lands inside the grace clears it and the gated total never moves '
+        '(tg-qqw5 — the mint writes the bead first and appends after)', () {
+      final sinks = _Sinks();
+      var now = DateTime.utc(2026, 8, 31, 13);
+      final epoch = DateTime.utc(2026, 8, 31, 12);
+      final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
+        onFlare: sinks.flare,
+        clock: () => now,
+      );
+      final sessions = _map([
+        _legacy(startedAt: DateTime.utc(2026, 8, 31, 12, 30)),
+      ]);
+      observer.observe(
+        sessions,
+        _Snapshot(const [], firstEpochClaimedAt: epoch),
+      );
+      expect(observer.accounting.missPostEpoch, 1);
+      expect(observer.accounting.missPostEpochTotal, 0);
+      now = now.add(kHeadMissGrace - const Duration(seconds: 1));
+      observer.observe(
+        sessions,
+        _Snapshot(const [], firstEpochClaimedAt: epoch),
+      );
+      expect(observer.accounting.missPostEpochTotal, 0);
+      // The head lands inside the grace.
+      observer.observe(
+        sessions,
+        _Snapshot([_Head(sessionId: 's1')], firstEpochClaimedAt: epoch),
+      );
+      expect(observer.accounting.hits, 1);
+      expect(observer.accounting.missPostEpochTotal, 0);
+      expect(sinks.flares, isEmpty);
+    });
+
+    test('a session STILL headless past the grace enters the gated total '
+        'exactly once, as before', () {
+      final sinks = _Sinks();
+      var now = DateTime.utc(2026, 8, 31, 13);
+      final epoch = DateTime.utc(2026, 8, 31, 12);
+      final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
+        onFlare: sinks.flare,
+        clock: () => now,
+      );
+      final sessions = _map([
+        _legacy(startedAt: DateTime.utc(2026, 8, 31, 12, 30)),
+      ]);
+      observer.observe(
+        sessions,
+        _Snapshot(const [], firstEpochClaimedAt: epoch),
+      );
+      now = now.add(kHeadMissGrace);
+      observer.observe(
+        sessions,
+        _Snapshot(const [], firstEpochClaimedAt: epoch),
+      );
+      expect(observer.accounting.missPostEpochTotal, 1);
+      now = now.add(const Duration(minutes: 5));
+      observer.observe(
+        sessions,
+        _Snapshot(const [], firstEpochClaimedAt: epoch),
+      );
+      // The gauge is per pass; the cumulative counted the session once.
+      expect(observer.accounting.missPostEpoch, 1);
+      expect(observer.accounting.missPostEpochTotal, 1);
+    });
+
+    test('a TERMINAL session with no head is the abandoned-mint shape: '
+        'counted under its own name, never into the gated total', () {
+      final sinks = _Sinks();
+      var now = DateTime.utc(2026, 8, 31, 13);
+      final epoch = DateTime.utc(2026, 8, 31, 12);
+      final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
+        onFlare: sinks.flare,
+        clock: () => now,
+      );
+      final sessions = _map([
+        _legacy(isTerminal: true, startedAt: DateTime.utc(2026, 8, 31, 12, 30)),
+      ]);
+      for (var i = 0; i < 3; i++) {
+        observer.observe(
+          sessions,
+          _Snapshot(const [], firstEpochClaimedAt: epoch),
+        );
+        now = now.add(const Duration(minutes: 2));
+      }
+      expect(observer.accounting.missPostEpoch, 1, reason: 'per-pass gauge');
+      expect(observer.accounting.missPostEpochTotal, 0);
+      expect(observer.accounting.missPostEpochTerminalTotal, 1);
     });
 
     test('a genuine two-CURRENT-open plant breaches cardinality and serves no '
