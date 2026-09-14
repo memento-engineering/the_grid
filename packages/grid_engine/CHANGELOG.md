@@ -1,3 +1,15 @@
+## 0.4.0-dev.5
+
+- Makes the boot terminal-gate sweep converge. 0.4.0-dev.4 bounded and latched the sweep
+  but could not make it finish: every closed work bead with a linked session re-enters the
+  candidate list on every rebuild, so the same done sessions were re-settled on every
+  build, forever (measured at ~46 `gate.autoCloseFailed` per minute for 48 minutes against
+  a store holding zero open gates), and that contention pushed every fresh molecule pour
+  past its deadline on first attempt. `WorkList` now remembers each session whose terminal
+  write succeeded and skips it on later builds; a failed write is retried next build.
+  `kTerminalWriteConcurrency` drops from 4 to 2, because dolt serialises commits and the
+  bound is per substation (#451).
+
 ## 0.4.0-dev.4
 
 - Fixes the boot terminal-gate write sweep. `WorkList` fired one unawaited state-store write
