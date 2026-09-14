@@ -80,6 +80,17 @@ class _WorkListState extends State<WorkList>
   /// remainder.
   bool _terminalDrainInFlight = false;
 
+  /// Sessions whose terminal write has already SUCCEEDED this boot (tg-gxp6).
+  /// A terminal session stays terminal forever and a closed gate stays closed,
+  /// so re-issuing the settle or gate-close on every rebuild is pure store
+  /// load: measured on lunar, ~94 done sessions re-swept every build produced
+  /// ~46 gate.autoCloseFailed per minute for 48 minutes against a store that
+  /// held ZERO open gates, and that contention pushed every molecule pour
+  /// past its deadline. A FAILED write is deliberately not recorded, so it is
+  /// retried on the next build; a fresh WorkList (a new boot) starts empty and
+  /// sweeps once, which is the behaviour the restart reconciler expects.
+  final Set<String> _settledTerminalSessions = <String>{};
+
   /// The barrier's observer (§W2.4 W2-B) — the offline path's own handle to
   /// the counting arm and the refusal derivation. Null composes the clause in
   /// its observe form over a disarmed read, which refuses nothing.
@@ -594,6 +605,7 @@ class _WorkListState extends State<WorkList>
       final session = candidate.session;
       final sessionId = session?.sessionId ?? '';
       if (sessionId.isEmpty) continue;
+      if (_settledTerminalSessions.contains(sessionId)) continue;
       final disposition = sessionDispositionOf(session);
       if (bead.isClosed && disposition is LiveSession) {
         terminalWrites.add(
@@ -670,6 +682,7 @@ class _WorkListState extends State<WorkList>
         workBeadId: candidate.bead.id,
         workTerminalReason: StationBeadWriter.workTerminalReasonWorkBeadClosed,
       );
+      _settledTerminalSessions.add(sessionId);
     } on Object catch (error) {
       _flare(services, 'gate.autoCloseFailed', {
         'sessionId': sessionId,
@@ -680,7 +693,7 @@ class _WorkListState extends State<WorkList>
     }
   }
 
-  static Future<void> _closeTerminalGates({
+  Future<void> _closeTerminalGates({
     required StationServices station,
     required ServiceBundle services,
     required String sessionId,
@@ -692,6 +705,7 @@ class _WorkListState extends State<WorkList>
         disposition: GateSweepSessionDisposition.done,
         services: services,
       );
+      _settledTerminalSessions.add(sessionId);
     } on Object catch (error) {
       _flare(services, 'gate.autoCloseFailed', {
         'sessionId': sessionId,
