@@ -478,6 +478,162 @@ void main() {
       clock.advance(const Duration(hours: 1));
       expect(await query.repair([row(attemptId: null)]), isEmpty);
     });
+
+    // ── tg-nxov: the window must ADVANCE past the retired-round prefix ──
+    //
+    // Measured on lunar: 114 retired-round heads, all older than every heal
+    // candidate, filled the 64-row oldest-first window on EVERY tick, so the
+    // 41 void-rekeyed closes queued behind them were never reached. Zero heals
+    // in days, and not one flare — the obligation was working perfectly on
+    // rows it can never heal.
+
+    SessionClosure? retiredFor(String sessionId) => sessionId.startsWith('ret-')
+        ? const SessionClosure(
+            outcome: TerminalOutcome.cancelled,
+            reason: 'ledger close: reworked',
+            retiredRound: true,
+          )
+        : const SessionClosure(
+            outcome: TerminalOutcome.lost,
+            reason: 'ledger close: void re-key',
+          );
+
+    test(
+      'every head classified RETIRED-ROUND is excluded from the NEXT '
+      'window — the cursor advances instead of re-reading the prefix',
+      () async {
+        final query = build(closure: retiredFor);
+
+        // Before any pass there is nothing to exclude: the statement and its
+        // parameters are exactly what they always were.
+        expect(query.sql, isNot(contains('NOT IN')));
+        expect(query.parameters, {'station': 'tranquility'});
+
+        await query.repair([
+          row(sessionId: 'ret-c'),
+          row(sessionId: 'ret-a'),
+          row(sessionId: 'ret-b'),
+        ]);
+
+        // Sorted, so the statement is stable pass to pass rather than reordering
+        // with set iteration.
+        expect(
+          query.sql,
+          contains(
+            'AND h.session_id NOT IN '
+            '(:skip0, :skip1, :skip2)',
+          ),
+        );
+        expect(query.sql, contains('ORDER BY h.last_seq'));
+        expect(query.parameters, {
+          'station': 'tranquility',
+          'skip0': 'ret-a',
+          'skip1': 'ret-b',
+          'skip2': 'ret-c',
+        });
+        expect(query.lastRetiredRound, 3);
+      },
+    );
+
+    test('the exclusion never swallows a REAL heal — a void re-key behind the '
+        'skipped prefix still appends its one terminal', () async {
+      final query = build(closure: retiredFor);
+      final rows = [
+        row(sessionId: 'ret-a'),
+        row(sessionId: 'ret-b'),
+        row(sessionId: 'tranquility-void'),
+      ];
+
+      // First sighting starts the void's grace; the retired pair is skipped
+      // on both passes and never enters it.
+      expect(await query.repair(rows), isEmpty);
+      clock.advance(kDefaultExternalCloseGrace + const Duration(seconds: 1));
+
+      final appends = await query.repair(rows);
+
+      expect(appends, hasLength(1));
+      final record = appends.single.record as AttemptTerminal;
+      expect(record.sessionId, 'tranquility-void');
+      expect(record.outcome, TerminalOutcome.lost);
+      expect(record.healBasis, kTerminalReconcileBasis);
+      expect(appends.single.provenanceBasis, kTerminalReconcileBasis);
+      expect(query.lastRetiredRound, 2);
+      // …and the heal is NOT added to the exclusion set: only the two retired
+      // heads are, so a head that still owes a terminal keeps being read.
+      expect(query.parameters, {
+        'station': 'tranquility',
+        'skip0': 'ret-a',
+        'skip1': 'ret-b',
+      });
+      // An append happened, so the starvation streak is not running.
+      expect(query.skipOnlyWindows, 0);
+    });
+
+    test('STARVATION IS SAID ONCE: three consecutive skip-only windows note '
+        'the stuck obligation, and a fourth adds no second note', () async {
+      final sink = _CountingSink();
+      final query = build(
+        closure: retiredFor,
+        recorder: StationTrajectoryRecorder(
+          sink: sink,
+          substationPrefixes: const {'tg'},
+        ),
+      );
+      final rows = [row(sessionId: 'ret-a'), row(sessionId: 'ret-b')];
+
+      await query.repair(rows);
+      expect(query.skipOnlyWindows, 1);
+      await query.repair(rows);
+      expect(query.skipOnlyWindows, 2);
+      expect(sink.enqueued, isEmpty, reason: 'two windows is not a streak');
+
+      await query.repair(rows);
+
+      expect(query.skipOnlyWindows, 3);
+      expect(sink.enqueued, hasLength(1));
+      final note = sink.enqueued.single as AttemptNote;
+      expect(note.channel, kObligationStuckChannel);
+      expect(note.body, contains('external-close-terminal'));
+      expect(note.body, contains('3 consecutive windows'));
+      expect(note.sessionId, 'ret-a', reason: 'the window\'s oldest head');
+
+      // SAID ONCE PER STREAK, not once per tick — a stuck obligation must not
+      // become its own flood.
+      await query.repair(rows);
+      expect(query.skipOnlyWindows, 4);
+      expect(sink.enqueued, hasLength(1));
+
+      // A pass that actually appends RESETS the streak, so the next note is
+      // evidence of a NEW starvation rather than the old one.
+      clock.advance(kDefaultExternalCloseGrace + const Duration(seconds: 1));
+      final healing = [...rows, row(sessionId: 'tranquility-void')];
+      await query.repair(healing); // first sighting of the void
+      expect(query.skipOnlyWindows, 0, reason: 'the window was not skip-only');
+      clock.advance(kDefaultExternalCloseGrace + const Duration(seconds: 1));
+      expect(await query.repair(healing), hasLength(1));
+      expect(query.skipOnlyWindows, 0);
+      expect(sink.enqueued, hasLength(1));
+    });
+
+    test('the exclusion is BOUNDED — a pathological store cannot grow the '
+        'statement without limit', () async {
+      final query = build(closure: retiredFor);
+
+      await query.repair([
+        for (var i = 0; i < 1100; i++) row(sessionId: 'ret-$i'),
+      ]);
+
+      final marks = ':skip'.allMatches(query.sql).length;
+      expect(marks, 1024);
+      expect(
+        query.parameters.keys.where((key) => key != 'station'),
+        hasLength(1024),
+      );
+      expect(query.parameters['station'], 'tranquility');
+      // Past the bound the starvation counter is the signal, not a longer
+      // statement.
+      expect(query.skipOnlyWindows, 1);
+    });
   });
 
   group('obligation 2 — worktree.reaped backfill', () {
