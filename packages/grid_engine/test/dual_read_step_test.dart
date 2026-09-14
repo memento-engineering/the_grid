@@ -867,6 +867,113 @@ void main() {
       expect(flares, isEmpty);
     });
 
+    test('THE OPEN-RETIRED SHAPE (Q9 — tg-af76): a retired-round MAP KEY '
+        'served OPEN is EXPLAINED, never a p2 miss', () {
+      // Legacy closed this session by retiring its round and re-keyed it
+      // `#r1`; the fold keeps that head OPEN by design (Q9). Under `primary`
+      // what is served is the OVERLAY, and every overlay projection carries
+      // the fold head's ORIGINAL BARE key — so `workBeadId` here is
+      // `tg-9abc`, `isTerminal` reads false, and the `legacy.workBeadId` skip
+      // earlier in the pass never fires. THE MUTATION IS VISIBLE ONLY ON THE
+      // JOIN'S MAP KEY, which is why the guard reads the key. Read naively
+      // this is "a live session whose every node missed P2" — the whole of
+      // the measured p2_miss_total 93 on a converged boot.
+      final o = observer(mode: DualReadMode.primary);
+      o.observe({
+        // KEY mutated, FIELD bare — the primary/overlay shape.
+        'tg-9abc#r1': _session(
+          sessionId: 'tgdog-retired',
+          steps: [
+            _stepBead(
+              'a',
+              state: StepState.complete,
+              sessionId: 'tgdog-retired',
+            ),
+            _stepBead(
+              'b',
+              state: StepState.running,
+              sessionId: 'tgdog-retired',
+            ),
+            _stepBead(
+              'c',
+              state: StepState.pending,
+              sessionId: 'tgdog-retired',
+            ),
+          ],
+        ),
+      }, _StepSnapshot(const []));
+
+      // Counted BESIDE the miss gauges…
+      expect(o.accounting.stepRetiredRoundSkipped, 1);
+      expect(o.accounting.p2MissRetiredRoundTotal, 3);
+      // …and never INTO them.
+      expect(o.accounting.stepFallbacks, 0);
+      expect(o.accounting.p2Miss, 0);
+      expect(o.accounting.p2MissTotal, 0);
+      expect(o.accounting.stepDivergences, 0);
+      expect(flares, isEmpty);
+    });
+
+    test('a VOID-REKEYED map key is NOT the retired-round shape — its nodes '
+        'still count as p2 misses', () {
+      // tg-nxov HEALS void rekeys: each is a real miss the external-close
+      // obligation owes a terminal for. Explaining them away here would hide
+      // the population that work is measured against — so the predicate is
+      // `#r<digits>` at the END of the key, never a bare `#`.
+      final o = observer(mode: DualReadMode.primary);
+      o.observe({
+        'tg-9abc#void-tgdog-1': _session(
+          sessionId: 'tgdog-1',
+          steps: [
+            _stepBead('a', state: StepState.complete),
+            _stepBead('b', state: StepState.running),
+            _stepBead('c', state: StepState.pending),
+          ],
+        ),
+      }, _StepSnapshot(const []));
+
+      expect(o.accounting.stepFallbacks, 1);
+      expect(o.accounting.p2Miss, 3);
+      expect(o.accounting.p2MissTotal, 3);
+      expect(o.accounting.stepRetiredRoundSkipped, 0);
+      expect(o.accounting.p2MissRetiredRoundTotal, 0);
+      expect(flares, isEmpty);
+    });
+
+    test('THE LEGACY-READ SHAPE still leaves the pass at the workBeadId skip — '
+        'the two arms never double-count', () {
+      // Key AND field both carry `#r1`: nothing overlaid this session, so the
+      // pre-existing `isRetiredWorkBeadKey(legacy.workBeadId)` skip takes it
+      // before either counter is touched. The new key-side arm must not also
+      // claim it.
+      final o = observer(mode: DualReadMode.primary);
+      o.observe({
+        'tg-9abc#r1': _session(
+          sessionId: 'tgdog-retired',
+          workBeadId: 'tg-9abc#r1',
+          steps: [
+            _stepBead(
+              'a',
+              state: StepState.complete,
+              sessionId: 'tgdog-retired',
+            ),
+            _stepBead(
+              'b',
+              state: StepState.running,
+              sessionId: 'tgdog-retired',
+            ),
+          ],
+        ),
+      }, _StepSnapshot(const []));
+
+      expect(o.accounting.stepRetiredRoundSkipped, 0);
+      expect(o.accounting.p2MissRetiredRoundTotal, 0);
+      expect(o.accounting.stepFallbacks, 0);
+      expect(o.accounting.p2Miss, 0);
+      expect(o.accounting.p2MissTotal, 0);
+      expect(flares, isEmpty);
+    });
+
     test('a fold-ahead pair that catches up inside the grace is '
         'fold-ahead-of-legacy, carrying the first-observed values', () {
       var now = DateTime.utc(2026, 9, 1, 12);

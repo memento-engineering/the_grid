@@ -261,6 +261,53 @@ void main() {
     expect(accounting.p2MissTotal, 5);
   });
 
+  test('the retired-round counters are a per-pass GAUGE beside a cumulative '
+      'TOTAL, deduped by session (tg-af76)', () {
+    // The Q9 population is EXPLAINED, so it is counted BESIDE p2_miss/
+    // p2_miss_total and never into them — but on the same window and
+    // first-observation rules, so a certificate can print what it excluded.
+    final accounting = DualReadAccounting(soakWindowEpoch: 10)
+      ..beginPass()
+      ..beginStepPass()
+      ..recordRetiredRoundMisses(
+        sessionId: 'retired-a',
+        count: 4,
+        headEpoch: 10,
+      )
+      // The same session re-observed: the gauge counts the pass, the total
+      // counts the session.
+      ..recordRetiredRoundMisses(
+        sessionId: 'retired-a',
+        count: 4,
+        headEpoch: 10,
+      );
+    expect(accounting.stepRetiredRoundSkipped, 2);
+    expect(accounting.p2MissRetiredRoundTotal, 4);
+    expect(accounting.p2Miss, 0, reason: 'counted beside, never into');
+    expect(accounting.p2MissTotal, 0, reason: 'counted beside, never into');
+
+    // The GAUGE zeroes on the next step pass; the TOTAL is the boot's record
+    // and survives it. A pre-epoch head is out of window: gauge yes, total no.
+    accounting
+      ..beginStepPass()
+      ..recordRetiredRoundMisses(
+        sessionId: 'retired-b',
+        count: 5,
+        headEpoch: 11,
+      )
+      ..recordRetiredRoundMisses(
+        sessionId: 'retired-historical',
+        count: 7,
+        headEpoch: 9,
+      );
+    expect(accounting.stepRetiredRoundSkipped, 2);
+    expect(accounting.p2MissRetiredRoundTotal, 9);
+
+    final json = accounting.toCertificationJson();
+    expect(json['step_retired_round_skipped'], 2);
+    expect(json['p2_miss_retired_round_total'], 9);
+  });
+
   test('lag and cardinality rows partition at the soak epoch', () {
     final accounting = DualReadAccounting(soakWindowEpoch: 10)..beginPass();
     for (final epoch in <int>[9, 10, 11]) {
@@ -378,6 +425,8 @@ void main() {
         'soak_window_epoch',
         'miss_post_epoch_total',
         'p2_miss_total',
+        'step_retired_round_skipped',
+        'p2_miss_retired_round_total',
         'divergences_in_window',
         'divergences_historical',
         'divergences_by_field_in_window',
@@ -409,6 +458,10 @@ void main() {
     );
     final semantics = json['counter_semantics']! as Map<String, String>;
     expect(semantics['divergences_by_field'], 'cumulative');
+    // tg-af76: a per-pass gauge beside a boot-cumulative total, declared as
+    // such — a reader that sums a gauge across passes reads a fiction.
+    expect(semantics['step_retired_round_skipped'], 'gauge');
+    expect(semantics['p2_miss_retired_round_total'], 'cumulative');
     expect(
       semantics,
       isNot(containsPair('divergences_by_field_in_window', anything)),

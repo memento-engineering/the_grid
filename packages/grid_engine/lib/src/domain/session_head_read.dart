@@ -139,6 +139,8 @@ const Map<String, String> kDualReadCounterSemantics = <String, String>{
   'p2_miss_total': 'cumulative',
   'p2_orphan': 'gauge',
   'step_fold_absent': 'gauge',
+  'step_retired_round_skipped': 'gauge',
+  'p2_miss_retired_round_total': 'cumulative',
   'step_divergences': 'cumulative',
   'step_divergences_in_window': 'cumulative',
   'step_divergences_historical': 'cumulative',
@@ -698,6 +700,20 @@ DualReadMiss classifyDualReadMiss(
 /// the immutable base id.
 bool isRetiredWorkBeadKey(String workBeadKey) => workBeadKey.contains('#');
 
+/// The Q9 OPEN-RETIRED shape and nothing else: a legacy work-bead key whose
+/// round was retired by rework (`<bead>#r<N>`). Narrower than
+/// [isRetiredWorkBeadKey], which answers "was this key mutated at all" and so
+/// also matches a void re-key (`<bead>#void-<session>`). The two shapes must
+/// not be conflated by the miss accounting (tg-quwv): a retired round is an
+/// explained miss, a void is a real one that the external-close obligation
+/// heals (tg-nxov). Test the JOIN'S MAP KEY with this, never the served
+/// projection's `workBeadId` — under `primary` the overlay carries the fold
+/// head's ORIGINAL bare key, so the mutation is visible only on the key.
+bool isRetiredRoundKey(String workBeadKey) =>
+    _retiredRoundKey.hasMatch(workBeadKey);
+
+final RegExp _retiredRoundKey = RegExp(r'#r\d+$');
+
 // ── the accounting (§0.4's per-boot counters) ─────────────────────────────
 
 /// The harness's append counters, as the round summary reports them (§0.4's
@@ -896,6 +912,19 @@ class DualReadAccounting {
   /// a lag entry and escalates exactly as before.
   int stepFoldAbsent = 0;
 
+  /// Sessions the step pass SKIPPED this pass because their legacy key is a
+  /// retired-round key (tg-quwv, Q9): under `primary` the overlay serves such a
+  /// head open by design, so the step pass would otherwise read it as a live
+  /// session with no fold rows and count every node of its legacy cursor as a
+  /// p2 miss. Per-pass gauge, like [stepFallbacks].
+  int stepRetiredRoundSkipped = 0;
+
+  /// The nodes those skipped sessions would have counted into [p2MissTotal] —
+  /// the EXPLAINED miss population, kept visible so the certificate can print
+  /// what it excluded. Cumulative, in-window, first observation per session,
+  /// exactly like [p2MissTotal].
+  int p2MissRetiredRoundTotal = 0;
+
   /// The LIVE `stepLag` population — §0.3 gate (b), "all lag classes zero at
   /// round end", now including the step axis (r5).
   int openStepLag = 0;
@@ -956,6 +985,22 @@ class DualReadAccounting {
   /// total admits only P1 heads inside the soak window (or every head under
   /// the zero sentinel) and adds the population only on the session's first
   /// observation this boot.
+  /// The Q9 shape (tg-quwv): the session's legacy key is a retired-round key,
+  /// so its nodes are EXPLAINED misses. Counted beside, never into,
+  /// [p2MissTotal]; same window and first-observation rules.
+  void recordRetiredRoundMisses({
+    required String sessionId,
+    required int count,
+    required int headEpoch,
+  }) {
+    assert(count >= 0);
+    stepRetiredRoundSkipped += 1;
+    if (count == 0) return;
+    if (_isInWindow(headEpoch) && noteEvent('p2MissRetired:$sessionId')) {
+      p2MissRetiredRoundTotal += count;
+    }
+  }
+
   void recordP2Misses({
     required String sessionId,
     required int count,
@@ -999,6 +1044,7 @@ class DualReadAccounting {
     p2Miss = 0;
     p2Orphan = 0;
     stepFoldAbsent = 0;
+    stepRetiredRoundSkipped = 0;
     openStepLag = 0;
   }
 
@@ -1262,6 +1308,8 @@ class DualReadAccounting {
       'p2_miss_total': p2MissTotal,
       'p2_orphan': p2Orphan,
       'step_fold_absent': stepFoldAbsent,
+      'step_retired_round_skipped': stepRetiredRoundSkipped,
+      'p2_miss_retired_round_total': p2MissRetiredRoundTotal,
       'step_divergences': stepDivergences,
       'step_divergences_in_window': stepDivergencesInWindow,
       'step_divergences_historical': stepDivergences - stepDivergencesInWindow,

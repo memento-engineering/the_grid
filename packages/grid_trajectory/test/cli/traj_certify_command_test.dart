@@ -483,6 +483,51 @@ void main() {
       expect(lines.join('\n'), contains('epoch 50: miss_post_epoch_total = 1'));
     });
 
+    test('the EXPLAINED retired-round population is REPORTED, never gating '
+        '(tg-af76)', () async {
+      // The Q9 shape: legacy retired the round, the fold keeps that head open
+      // by design, and its nodes are counted beside the gate so an operator
+      // can see what the window excluded. A boot carrying 37 of them is still
+      // a CLEAN boot.
+      final (code, lines) = await _certify(
+        dirty: const {
+          51: {'p2_miss_total': 0, 'p2_miss_retired_round_total': 37},
+        },
+      );
+      expect(code, 0);
+      expect(_statusOf(lines, 'clean'), 'PASS');
+      // Printed on the boot's REPORTED line — beside the gate, never in it.
+      final carrying = lines
+          .where((line) => line.contains('p2_miss_retired_round_total 37'))
+          .toList();
+      expect(
+        carrying,
+        hasLength(1),
+        reason:
+            'the excluded population must be printed once:\n'
+            '${lines.join('\n')}',
+      );
+      expect(carrying.single.trimLeft(), startsWith('reported'));
+      expect(
+        lines.where((line) => line.trimLeft().startsWith('gating')).join('\n'),
+        isNot(contains('p2_miss_retired_round_total')),
+      );
+    });
+
+    test('an explained population never buys a pass for a REAL p2 miss '
+        '(tg-af76)', () async {
+      // The false green the row exists to refuse: a large explained count
+      // beside a single unexplained miss is still a failed boot.
+      final (code, lines) = await _certify(
+        dirty: const {
+          51: {'p2_miss_total': 1, 'p2_miss_retired_round_total': 37},
+        },
+      );
+      expect(code, 2);
+      expect(_statusOf(lines, 'clean'), 'FAIL');
+      expect(lines.join('\n'), contains('epoch 51: p2_miss_total = 1'));
+    });
+
     test('an ABSENT gating counter is not a zero', () async {
       final rows = seededBoots(epochs: const [50, 51]);
       final preInstrument = summaryBody()..remove('miss_post_epoch_total');

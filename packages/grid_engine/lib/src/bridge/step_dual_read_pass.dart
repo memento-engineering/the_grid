@@ -269,6 +269,26 @@ class DualReadStepObserver {
       final beadCursor = legacyStepCursorOf(
         _winningLegacyRoundOf(legacy, sessionId),
       );
+      if (isRetiredRoundKey(entry.key)) {
+        // THE OPEN-RETIRED SHAPE (Q9; the-soak-clean-row-honours-the-open-
+        // retired-shape). Legacy closed this session by retiring its round and
+        // re-keyed it `#rN`; the fold keeps the head open by design. Under
+        // `primary` the projection served here is the OVERLAY, whose
+        // `workBeadId` is the fold head's ORIGINAL bare key — so the
+        // `isRetiredWorkBeadKey(legacy.workBeadId)` skip above never fires
+        // for it, `isTerminal` reads false, and the session would be counted
+        // as live with no fold step rows: every node of its legacy cursor a
+        // p2 miss (measured p2_miss_total 93 on a converged boot). The
+        // mutation is visible only on the JOIN'S MAP KEY, and only the `#rN`
+        // form is explained: a `#void-` key is a real miss the external-close
+        // obligation owes a terminal for (tg-nxov) and keeps counting below.
+        accounting.recordRetiredRoundMisses(
+          sessionId: sessionId,
+          count: beadCursor.length,
+          headEpoch: headEpoch,
+        );
+        continue;
+      }
       if (rows.isEmpty) {
         // No P2 at all for this session: every node is a miss, which is the
         // per-node rule applied wholesale. Counted, never a divergence, and
