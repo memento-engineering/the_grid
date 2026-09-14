@@ -111,3 +111,11 @@ class StationServices {
 /// The concurrency governor's generous default station cap (tg-42f) — chosen
 /// so ordinary single/few-bead dev and dry-run flows never throttle.
 const int kDefaultMaxConcurrentWork = 4;
+
+/// How many terminal-session gate writes the work axis drains at once at boot
+/// (tg-gxp6). The restart sweep used to fire one unawaited write per closed
+/// session simultaneously; on a store with hundreds of them the tail of that
+/// burst blew `DoltQueryService.queryTimeout`, and the failed gate closes
+/// cancelled the first mint of every ready bead. Bounded, the same sweep still
+/// completes but never saturates the state store.
+const int kTerminalWriteConcurrency = 4;
