@@ -1001,16 +1001,27 @@ class DualReadAccounting {
     }
   }
 
+  ///
+  /// [structurallyAbsent] is the share of [count] whose fold row CANNOT exist
+  /// yet — legacy nodes that have never transitioned (`!expectsFoldStepRow`),
+  /// which the pass gauges as `stepFoldAbsent`. The per-pass gauge keeps the
+  /// whole population (a served-cursor fact: every such node is read from the
+  /// bead), but the GATED cumulative admits only the nodes a fold row was
+  /// owed for — otherwise every fresh mint adds its whole circuit minus one
+  /// (31 step beads per session, 329 on one boot; tg-8nmo) and the clean row
+  /// is unreachable on any boot that mints.
   void recordP2Misses({
     required String sessionId,
     required int count,
     required int headEpoch,
+    int structurallyAbsent = 0,
   }) {
     assert(count >= 0);
+    assert(structurallyAbsent >= 0 && structurallyAbsent <= count);
     if (count == 0) return;
     p2Miss += count;
     if (_isInWindow(headEpoch) && noteEvent('p2Miss:$sessionId')) {
-      p2MissTotal += count;
+      p2MissTotal += count - structurallyAbsent;
     }
   }
 

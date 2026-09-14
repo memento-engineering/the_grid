@@ -261,6 +261,25 @@ void main() {
     expect(accounting.p2MissTotal, 5);
   });
 
+  test('the structurally-absent share rides the gauge but never the GATED '
+      'total (tg-8nmo): a fresh mint with a pending circuit owes no rows', () {
+    final accounting = DualReadAccounting(soakWindowEpoch: 10)
+      ..recordP2Misses(
+        sessionId: 'fresh',
+        count: 31,
+        headEpoch: 10,
+        structurallyAbsent: 30,
+      )
+      ..recordP2Misses(
+        sessionId: 'all-pending',
+        count: 4,
+        headEpoch: 10,
+        structurallyAbsent: 4,
+      );
+    expect(accounting.p2Miss, 35, reason: 'the served-cursor population');
+    expect(accounting.p2MissTotal, 1, reason: 'only the transitioned node');
+  });
+
   test('the retired-round counters are a per-pass GAUGE beside a cumulative '
       'TOTAL, deduped by session (tg-af76)', () {
     // The Q9 population is EXPLAINED, so it is counted BESIDE p2_miss/
