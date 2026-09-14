@@ -12,7 +12,8 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - stage-2-starts-before-the-g1-cut
   bead: tg-yxjq
   legacy-id: null
 ---
