@@ -1,3 +1,10 @@
+## 0.2.1-dev.3
+
+- `traj certify` prints `p2_miss_retired_round_total` on each epoch's reported line (#454) and
+  reports `barrier_would_refuse` instead of gating on it (#455): the §W2.5 table and the engine
+  both rule that counter reported, not gating, and the would-refuse row had drifted to failing on
+  any non-zero value, breaking the consecutive run on a routine operator re-arm.
+
 ## 0.2.1-dev.2
 
 - Adds `traj certify` — the soak certificate as a PASS/FAIL verb over the last N boots — with its
