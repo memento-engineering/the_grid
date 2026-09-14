@@ -462,6 +462,21 @@ final class ExternalCloseTerminalObligation extends ObligationQuery {
   /// the session open again (a reopened bead restarts the wait).
   final Map<String, DateTime> _firstSeenClosed = {};
 
+  /// Heads this boot has already classified as the OPEN-RETIRED shape (Q9):
+  /// closed in bd by a round retire, open in the fold by design, never healed
+  /// here. They are excluded from the NEXT window's query so the window keeps
+  /// advancing (tg-nxov): measured on lunar, 114 retired heads older than every
+  /// heal candidate filled the 64-row window on every tick, and the 41
+  /// void-rekeyed closes behind them were never reached. In-memory and per
+  /// boot on purpose — a fresh boot re-derives it in a couple of ticks, and
+  /// nothing durable is written for a head the schema says stays open.
+  final Set<String> _skippedRetired = <String>{};
+
+  /// Consecutive passes whose whole window was retired-round skips with no
+  /// append — the starvation shape, observable rather than silent.
+  int _skipOnlyWindows = 0;
+  int get skipOnlyWindows => _skipOnlyWindows;
+
   /// Rows this obligation declined on its last pass because the ledger still
   /// read them OPEN, and rows still inside [grace] — telemetry for the
   /// operator's "why is this head still open" question.
@@ -487,10 +502,29 @@ final class ExternalCloseTerminalObligation extends ObligationQuery {
       'LEFT JOIN traj_terminal_guard g ON g.attempt_id = h.attempt_id '
       "WHERE h.status = 'open' AND h.attempt_id IS NOT NULL "
       'AND g.attempt_id IS NULL AND h.rig = :station '
+      '${_skipClause()}'
       'ORDER BY h.last_seq LIMIT $batch';
 
+  /// `AND h.session_id NOT IN (:skip0, ...)` over [_skippedRetired], empty
+  /// until the first retired head is seen. Bound so a pathological store can
+  /// never grow the statement without limit; beyond the bound the starvation
+  /// counter is the signal.
+  static const int _skipBound = 1024;
+  List<String> get _skipIds => (_skippedRetired.toList()..sort())
+      .take(_skipBound)
+      .toList(growable: false);
+  String _skipClause() {
+    final ids = _skipIds;
+    if (ids.isEmpty) return '';
+    final marks = [for (var i = 0; i < ids.length; i++) ':skip$i'].join(', ');
+    return 'AND h.session_id NOT IN ($marks) ';
+  }
+
   @override
-  Map<String, Object?> get parameters => {'station': _station};
+  Map<String, Object?> get parameters => {
+    'station': _station,
+    for (final (i, id) in _skipIds.indexed) 'skip$i': id,
+  };
 
   @override
   Future<List<ObligationAppend>> repair(List<Map<String, String?>> rows) async {
@@ -522,6 +556,7 @@ final class ExternalCloseTerminalObligation extends ObligationQuery {
         // round bumped, not a terminal. Closing it is a schema decision
         // (worksheet E9 / Q9), not a heal — count it and leave it.
         _firstSeenClosed.remove(sessionId);
+        _skippedRetired.add(sessionId);
         lastRetiredRound += 1;
         continue;
       }
@@ -564,8 +599,31 @@ final class ExternalCloseTerminalObligation extends ObligationQuery {
         ),
       );
     }
+    // STARVATION IS A FACT, NOT SILENCE. A window that was nothing but
+    // retired-round skips and produced no append is the shape that hid the 41
+    // unhealed voids behind 114 skips; with the exclusion above it can only
+    // persist past the bound, and then it is said once per streak through the
+    // existing stuck-obligation note rather than swallowed.
+    if (rows.isNotEmpty && appends.isEmpty && lastRetiredRound == rows.length) {
+      _skipOnlyWindows += 1;
+      if (_skipOnlyWindows == _skipOnlyWindowsThreshold) {
+        _recorder.obligationStuckNoted(
+          sessionId: rows.first['session_id']!,
+          body:
+              'external-close-terminal: $_skipOnlyWindows consecutive windows '
+              'of ${rows.length} retired-round skips and no append; '
+              '${_skippedRetired.length} retired heads excluded so far '
+              '(bound $_skipBound). The heal candidates behind them are not '
+              'being reached (tg-nxov).',
+        );
+      }
+    } else {
+      _skipOnlyWindows = 0;
+    }
     return appends;
   }
+
+  static const int _skipOnlyWindowsThreshold = 3;
 }
 
 /// §2.4 obligation 2 — backfill the `worktree.reaped` record the non-atomic
