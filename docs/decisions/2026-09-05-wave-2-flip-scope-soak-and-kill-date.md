@@ -15,6 +15,7 @@ register:
   obsoleted-by: null
   updated-by:
     - terminal-provenance-word-is-reconstructed
+    - the-g1-certificate-is-one-clean-primary-boot
     - wave-2-entry-criteria-rulings
     - wave-2-kept-set-includes-gated-and-ready
   bead: tg-whf6
