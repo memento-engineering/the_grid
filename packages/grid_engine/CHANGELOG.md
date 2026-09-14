@@ -1,3 +1,14 @@
+## 0.4.0-dev.7
+
+- The gated `p2_miss_total` no longer counts never-transitioned step nodes (#461). The state
+  store pours a session's whole circuit as pending step beads at mount, and a pending node has no
+  fold row by construction; the pass already gauged it as `step_fold_absent` but also added it to
+  the certificate's cumulative on the session's first sight, so every fresh mint contributed its
+  circuit minus one (31 per session; 329 on one boot) and the clean row was unreachable on any boot
+  that mints. `recordP2Misses` takes the structurally-absent share: the per-pass `p2_miss` gauge
+  keeps the served-cursor population and only the gated total excludes it, on both the rows-empty
+  and the hit path. A transitioned node with no fold row is still a miss.
+
 ## 0.4.0-dev.6
 
 - Explains the open-retired shape in the step pass (#454). Under `primary` the overlay serves a
