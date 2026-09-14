@@ -1,3 +1,10 @@
+## 0.4.0-dev.4
+
+- The work assembly's ledger-closure probe distinguishes a snapshot that LACKS a session bead
+  (`SessionClosure.absent()`) from an open bead or no snapshot at all (#459), so the
+  external-close obligation can heal reaped heads instead of reading them as live rounds.
+- Floors `grid_runtime` at `^0.2.1-dev.4`.
+
 ## 0.4.0-dev.3
 
 - Breaking: `projectBoard` drops its `linkBlockersByBeadId` named argument (#447). Every blocking

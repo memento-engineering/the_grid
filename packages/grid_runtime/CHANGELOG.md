@@ -1,3 +1,14 @@
+## 0.2.1-dev.4
+
+- The external-close terminal obligation no longer starves behind session beads the ledger no
+  longer holds (#459). The closure probe answered null for a reaped or pruned session bead — read
+  as "open" — so the 64 oldest such heads kept the `ORDER BY last_seq LIMIT 64` window every tick
+  and the closed heads behind them were never healed (measured on lunar: 280 of 439 candidates
+  absent, 151 healable, zero heals in an epoch). `SessionClosure.absent()` is the ledger's lost
+  session: the obligation counts it apart (`lastAbsentInLedger`), gives it the same grace, and
+  appends a reconstructed `lost` terminal whose reason names the absence, so the guard row drops
+  it from the window. A null snapshot still answers null — nothing is healed on no evidence.
+
 ## 0.2.1-dev.3
 
 - The external-close terminal obligation stops starving behind its own retired-round skips
