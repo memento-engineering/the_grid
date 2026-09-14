@@ -56,6 +56,10 @@ const _lateBeadIndex = _sessionCount + 1;
 
 const _gateIdPrefix = 'tgdog-gate-';
 
+/// The gates whose first close throws in the retry test — three, so a single
+/// dropped retry is unmistakable.
+const _flakyGateIndices = [3, 7, 11];
+
 String _workBeadId(int index) => 'tg-$index';
 
 String _sessionId(int index) => 'tgdog-done-$index';
@@ -103,10 +107,20 @@ final class _InFlightMeter {
 /// mode was simultaneity, not slowness, so the write has to stay open to be
 /// counted.
 final class _MeteredGateWriteRunner extends RecordingBdRunner {
-  _MeteredGateWriteRunner(this.meter, {required this.hold});
+  _MeteredGateWriteRunner(
+    this.meter, {
+    required this.hold,
+    this.failFirstGateIds = const <String>{},
+  });
 
   final _InFlightMeter meter;
   final Duration hold;
+
+  /// Gate ids whose FIRST close throws the store-deadline shape, and whose
+  /// second succeeds — the failure the sweep must RETRY rather than memoize.
+  final Set<String> failFirstGateIds;
+
+  final Set<String> _alreadyFailed = <String>{};
 
   @override
   Future<BdResult> run(
@@ -123,6 +137,9 @@ final class _MeteredGateWriteRunner extends RecordingBdRunner {
     meter.enter(gateId);
     try {
       await Future<void>.delayed(hold);
+      if (failFirstGateIds.contains(gateId) && _alreadyFailed.add(gateId)) {
+        throw TimeoutException('Future not completed');
+      }
       return await super.run(args, timeout: timeout, stdin: stdin);
     } finally {
       meter.exit(gateId);
@@ -169,7 +186,13 @@ JoinedSnapshot _joined({int count = _sessionCount}) => JoinedSnapshot(
 /// gate-close eligibility evidence) and the one OPEN gate it still owes. The
 /// recorder never mutates these, so a gate stays sweepable — a second sweep
 /// WOULD write it again, which is what makes the latch's absence visible.
-List<Bead> _stateBeads({int count = _sessionCount}) => [
+///
+/// [gateCount] stages FEWER gates than sessions. A work bead with a session
+/// row but no gate still refuses with clause `done` — so `build` reports it —
+/// and its terminal write still settles, yet it issues no `bd close`. That is
+/// a REBUILD RECEIPT the meter never sees, which is what lets a test assert
+/// "this rebuild happened AND cost zero writes".
+List<Bead> _stateBeads({int count = _sessionCount, int? gateCount}) => [
   for (var i = 1; i <= count; i++) ...[
     sessionBead(
       id: _sessionId(i),
@@ -177,17 +200,31 @@ List<Bead> _stateBeads({int count = _sessionCount}) => [
       closed: true,
       outcomeComplete: true,
     ),
-    Bead(
-      id: _gateId(i),
-      issueType: GridIssueTypes.gate,
-      metadata: {
-        'rig': stateSubstation,
-        'blocks': _sessionId(i),
-        'node': '${_workBeadId(i)}/route',
-      },
-    ),
+    if (i <= (gateCount ?? count))
+      Bead(
+        id: _gateId(i),
+        issueType: GridIssueTypes.gate,
+        metadata: {
+          'rig': stateSubstation,
+          'blocks': _sessionId(i),
+          'node': '${_workBeadId(i)}/route',
+        },
+      ),
   ],
 ];
+
+/// How many times [index]'s gate was written across the whole episode.
+int _writesFor(_InFlightMeter meter, int index) =>
+    meter.entered.where((gateId) => gateId == _gateId(index)).length;
+
+/// The `work.terminalSkip` flares naming the LATE bead — emitted from inside
+/// `WorkList.build`, so their presence proves a rebuild really re-entered it.
+List<({String name, Map<String, String> data})> _lateBuildReceipts(
+  _RecordingTransport transport,
+) => transport
+    .named('work.terminalSkip')
+    .where((flare) => flare.data['beadId'] == _workBeadId(_lateBeadIndex))
+    .toList();
 
 ({TreeOwner owner, Branch root}) _mount({
   required JoinedSnapshotNotifier joined,
@@ -390,6 +427,165 @@ void main() {
             '${meter.maxInFlight} writes in flight',
       );
       expect(transport.named('gate.autoCloseFailed'), isEmpty);
+    });
+
+    test('a COMPLETED sweep is never re-issued — rebuilds after the drain cost '
+        'ZERO gate writes', () async {
+      final meter = _InFlightMeter();
+      final runner =
+          _MeteredGateWriteRunner(meter, hold: const Duration(milliseconds: 5))
+            ..exportBeads = _stateBeads(
+              count: _lateBeadIndex,
+              gateCount: _sessionCount,
+            );
+      final provider = FakeRuntimeProvider();
+      addTearDown(provider.close);
+      final station = _station(runner, provider);
+      addTearDown(station.dispose);
+      final transport = _RecordingTransport();
+      final joined = JoinedSnapshotNotifier(_joined());
+      final mounted = _mount(
+        joined: joined,
+        ctx: station,
+        registry: RecordingCapabilityRegistry(circuits: const {}),
+        transport: transport,
+      );
+      addTearDown(mounted.owner.dispose);
+
+      // Let the drain FINISH. The in-flight latch is open again, so anything
+      // that holds the next sweep back is the settled-session memo alone.
+      await _settleUntil(() => meter.completed.length >= _sessionCount);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(meter.entered, hasLength(_sessionCount));
+
+      // Three rebuilds over the SAME still-terminal sessions — the live shape
+      // that re-issued a terminal write forever: every closed bead with a
+      // linked session re-entered the candidate list on every build, and the
+      // station flared ~46 gate.autoCloseFailed a minute for 48 minutes over a
+      // store holding ZERO open gates.
+      joined.push(_joined(count: _lateBeadIndex));
+      for (var i = 0; i < 3; i++) {
+        mounted.owner.flush();
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+      }
+
+      // The rebuilds really happened — only a build that saw the LATE bead can
+      // name it, and that bead carries no gate, so the receipt costs the meter
+      // nothing.
+      expect(
+        _lateBuildReceipts(transport),
+        hasLength(1),
+        reason:
+            'the post-drain flushes never re-entered WorkList.build — the '
+            'test would be vacuous',
+      );
+      // THE MEMO. A settled session is skipped by id, so three rebuilds over a
+      // fully swept store issue nothing at all.
+      expect(
+        meter.entered,
+        hasLength(_sessionCount),
+        reason:
+            'rebuilds after a completed sweep re-issued '
+            '${meter.entered.length - _sessionCount} terminal writes',
+      );
+      expect(meter.entered.toSet(), {
+        for (var i = 1; i <= _sessionCount; i++) _gateId(i),
+      });
+      expect(transport.named('gate.autoCloseFailed'), isEmpty);
+    });
+
+    test('a FAILED terminal write is RETRIED on the next build, and memoized '
+        'only once it succeeds', () async {
+      final meter = _InFlightMeter();
+      final runner =
+          _MeteredGateWriteRunner(
+              meter,
+              hold: const Duration(milliseconds: 5),
+              failFirstGateIds: {
+                for (final index in _flakyGateIndices) _gateId(index),
+              },
+            )
+            ..exportBeads = _stateBeads(
+              count: _lateBeadIndex,
+              gateCount: _sessionCount,
+            );
+      final provider = FakeRuntimeProvider();
+      addTearDown(provider.close);
+      final station = _station(runner, provider);
+      addTearDown(station.dispose);
+      final transport = _RecordingTransport();
+      final joined = JoinedSnapshotNotifier(_joined());
+      final mounted = _mount(
+        joined: joined,
+        ctx: station,
+        registry: RecordingCapabilityRegistry(circuits: const {}),
+        transport: transport,
+      );
+      addTearDown(mounted.owner.dispose);
+
+      // Drain 1 — all $_sessionCount sessions swept, three of them throwing the
+      // store-deadline shape the live incident was made of.
+      await _settleUntil(() => meter.completed.length >= _sessionCount);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(meter.entered, hasLength(_sessionCount));
+
+      // Drain 2 — the rebuild re-issues ONLY the three that failed. A memo
+      // that latched on dispatch instead of on success would strand them.
+      const retried = _sessionCount + 3;
+      joined.push(_joined());
+      mounted.owner.flush();
+      await _settleUntil(() => meter.completed.length >= retried);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      // One more rebuild, now that every session has succeeded: the total must
+      // stop growing.
+      joined.push(_joined(count: _lateBeadIndex));
+      mounted.owner.flush();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(
+        _lateBuildReceipts(transport),
+        hasLength(1),
+        reason:
+            'the final flush never re-entered WorkList.build — "the total '
+            'stopped growing" would be vacuous',
+      );
+
+      // EXACTLY TWICE for the three that failed, EXACTLY ONCE for every other.
+      for (var i = 1; i <= _sessionCount; i++) {
+        expect(
+          _writesFor(meter, i),
+          _flakyGateIndices.contains(i) ? 2 : 1,
+          reason: '${_gateId(i)} was written ${_writesFor(meter, i)} times',
+        );
+      }
+      expect(
+        meter.entered,
+        hasLength(retried),
+        reason:
+            'the episode issued ${meter.entered.length} gate writes for '
+            '$_sessionCount sessions with ${_flakyGateIndices.length} '
+            'first-attempt failures',
+      );
+      expect(
+        meter.maxInFlight,
+        lessThanOrEqualTo(kTerminalWriteConcurrency),
+        reason: 'the retry drain broke the bound',
+      );
+
+      // The failures were LOUD, once each, and kept their store-deadline
+      // provenance.
+      final failed = transport.named('gate.autoCloseFailed');
+      expect(failed, hasLength(_flakyGateIndices.length));
+      expect(failed.map((flare) => flare.data['sessionId']).toSet(), {
+        for (final index in _flakyGateIndices) _sessionId(index),
+      });
+      expect(
+        failed.every(
+          (flare) =>
+              flare.data['deadlineConstant'] == 'DoltQueryService.queryTimeout',
+        ),
+        isTrue,
+      );
     });
   });
 }

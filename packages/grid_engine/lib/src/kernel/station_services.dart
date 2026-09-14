@@ -117,5 +117,8 @@ const int kDefaultMaxConcurrentWork = 4;
 /// session simultaneously; on a store with hundreds of them the tail of that
 /// burst blew `DoltQueryService.queryTimeout`, and the failed gate closes
 /// cancelled the first mint of every ready bead. Bounded, the same sweep still
-/// completes but never saturates the state store.
-const int kTerminalWriteConcurrency = 4;
+/// completes but never saturates the state store. Two, not four: dolt serialises
+/// commits, and the bound is per WorkList (one per substation), so the effective
+/// station-wide concurrency is this number times the substations holding
+/// terminal sessions.
+const int kTerminalWriteConcurrency = 2;
