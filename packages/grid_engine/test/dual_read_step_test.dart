@@ -801,6 +801,9 @@ void main() {
 
         expect(o.accounting.stepFoldAbsent, 1, reason: mode.name);
         expect(o.accounting.p2Miss, 1, reason: mode.name);
+        // The GATED total owes nothing for a row that cannot exist yet
+        // (tg-8nmo): a fresh mint's pending circuit is not a miss.
+        expect(o.accounting.p2MissTotal, 0, reason: mode.name);
         expect(o.accounting.openStepLag, 0, reason: mode.name);
         expect(o.accounting.stepLagEscalations, 0, reason: mode.name);
         expect(o.accounting.stepDivergences, 0, reason: mode.name);
@@ -863,6 +866,8 @@ void main() {
       expect(o.accounting.stepFallbacks, 1);
       expect(o.accounting.p2Miss, 2);
       expect(o.accounting.stepFoldAbsent, 1);
+      // Only the TRANSITIONED node (`b`, running) was owed a row (tg-8nmo).
+      expect(o.accounting.p2MissTotal, 1);
       expect(o.accounting.stepDivergences, 0);
       expect(flares, isEmpty);
     });
@@ -934,7 +939,10 @@ void main() {
 
       expect(o.accounting.stepFallbacks, 1);
       expect(o.accounting.p2Miss, 3);
-      expect(o.accounting.p2MissTotal, 3);
+      // `c` is pending — never owed a row — so the GATED total holds the two
+      // transitioned nodes (tg-8nmo); the gauge keeps all three.
+      expect(o.accounting.p2MissTotal, 2);
+      expect(o.accounting.stepFoldAbsent, 1);
       expect(o.accounting.stepRetiredRoundSkipped, 0);
       expect(o.accounting.p2MissRetiredRoundTotal, 0);
       expect(flares, isEmpty);

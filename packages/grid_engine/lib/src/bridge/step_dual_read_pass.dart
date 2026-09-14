@@ -294,17 +294,19 @@ class DualReadStepObserver {
         // per-node rule applied wholesale. Counted, never a divergence, and
         // the cursor stays the bead's.
         if (!completeFallbackCounted) accounting.stepFallbacks += 1;
+        // The structurally-absent share, on the SAME per-node rule the
+        // hit path applies below: a step that has never transitioned has no
+        // row to miss — gauged, and kept OUT of the gated total (tg-8nmo).
+        final structurallyAbsent = beadCursor.values
+            .where((node) => !expectsFoldStepRow(node.state))
+            .length;
         accounting.recordP2Misses(
           sessionId: sessionId,
           count: beadCursor.length,
           headEpoch: headEpoch,
+          structurallyAbsent: structurallyAbsent,
         );
-        // The structurally-absent share, on the SAME per-node rule the
-        // hit path applies below: a step that has never transitioned has no
-        // row to miss.
-        accounting.stepFoldAbsent += beadCursor.values
-            .where((node) => !expectsFoldStepRow(node.state))
-            .length;
+        accounting.stepFoldAbsent += structurallyAbsent;
         continue;
       }
       accounting.stepHits += 1;
@@ -315,12 +317,16 @@ class DualReadStepObserver {
         traj: trajCursorOf(rows),
         collapsed: collapsed,
       );
+      final misses = merge.nodes
+          .where((node) => node.classification == StepNodeClass.p2Miss)
+          .toList(growable: false);
       accounting.recordP2Misses(
         sessionId: sessionId,
-        count: merge.nodes
-            .where((node) => node.classification == StepNodeClass.p2Miss)
-            .length,
+        count: misses.length,
         headEpoch: headEpoch,
+        // The same carve-out `_recordNode` applies per node below: a node
+        // that has never transitioned is `stepFoldAbsent`, never owed a row.
+        structurallyAbsent: misses.where(_foldRowCannotExistYet).length,
       );
       for (final node in merge.nodes) {
         _observeCompareWindow(node, collapsed[node.stepPath], comparedNodes);
