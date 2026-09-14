@@ -223,6 +223,7 @@ export 'src/trajectory/stage1_obligations.dart'
         LiveWorktreeReapObligation,
         SessionClosure,
         SessionClosureProbe,
+        kLedgerAbsentReason,
         UnknownTerminalSettlementObligation,
         WorktreeReapedBackfillObligation,
         WorktreeRootSupplier,

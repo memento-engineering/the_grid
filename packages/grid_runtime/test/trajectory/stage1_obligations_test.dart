@@ -569,6 +569,73 @@ void main() {
       expect(query.skipOnlyWindows, 0);
     });
 
+    test(
+      'a head whose session bead the ledger no longer HOLDS is its lost '
+      'session, not an open one: counted apart, healed as lost after the '
+      'same grace, so 64 reaped heads cannot own the window (tg-6uhz)',
+      () async {
+        SessionClosure? probe(String id) =>
+            id.startsWith('gone-') ? const SessionClosure.absent() : closed(id);
+        final query = build(closure: probe);
+        final rows = [
+          for (var i = 0; i < 64; i++) row(sessionId: 'gone-$i'),
+          row(sessionId: 'tranquility-real'),
+        ];
+
+        // First sighting: every row enters the grace; none is read as open.
+        expect(await query.repair(rows), isEmpty);
+        expect(query.lastAbsentInLedger, 64);
+        expect(query.lastOpenInLedger, 0);
+        expect(query.lastWithinGrace, 65);
+        clock.advance(kDefaultExternalCloseGrace + const Duration(seconds: 1));
+
+        final appends = await query.repair(rows);
+
+        expect(appends, hasLength(65));
+        final byId = {
+          for (final append in appends)
+            (append.record as AttemptTerminal).sessionId:
+                append.record as AttemptTerminal,
+        };
+        final gone = byId['gone-0']!;
+        expect(gone.outcome, TerminalOutcome.lost);
+        expect(gone.reason, contains('no longer holds this session bead'));
+        expect(gone.reason, contains('absent from the state snapshot'));
+        expect(gone.healBasis, kTerminalReconcileBasis);
+        expect(
+          appends.every(
+            (append) => append.provenance == TrajectoryProvenance.reconstructed,
+          ),
+          isTrue,
+        );
+        // The closed head behind the 64 heals in the SAME pass, unchanged.
+        expect(byId['tranquility-real']!.outcome, TerminalOutcome.unknown);
+        // Absent heads are not retired skips: the exclusion set stays empty and
+        // the starvation streak does not run.
+        expect(query.parameters, {'station': 'tranquility'});
+        expect(query.skipOnlyWindows, 0);
+      },
+    );
+
+    test('no snapshot to read is OPEN, never absent — the heal says nothing on '
+        'nothing', () async {
+      final query = build(closure: (_) => null);
+      expect(await query.repair([row()]), isEmpty);
+      expect(query.lastOpenInLedger, 1);
+      expect(query.lastAbsentInLedger, 0);
+    });
+
+    test('SessionClosure.absent carries the lost outcome and the absence '
+        'reason, and is never a retired round', () {
+      const closure = SessionClosure.absent();
+      expect(closure.absentFromLedger, isTrue);
+      expect(closure.outcome, TerminalOutcome.lost);
+      expect(closure.reason, kLedgerAbsentReason);
+      expect(closure.retiredRound, isFalse);
+      expect(closure.closedAt, isNull);
+      expect(const SessionClosure().absentFromLedger, isFalse);
+    });
+
     test('STARVATION IS SAID ONCE: three consecutive skip-only windows note '
         'the stuck obligation, and a fourth adds no second note', () async {
       final sink = _CountingSink();
