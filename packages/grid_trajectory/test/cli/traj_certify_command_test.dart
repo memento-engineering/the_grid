@@ -605,15 +605,40 @@ void main() {
       );
     });
 
-    test('a would-refuse count above zero fails its row', () async {
+    test('a would-refuse count above zero is REPORTED, never a failure '
+        '(tg-9foi)', () async {
+      // §W2.5 lists `barrier_would_refuse` as reported-not-gating, and the
+      // engine's own accounting says the same: the barrier's observe form
+      // counts candidates it WOULD have refused, and a routine operator re-arm
+      // onto a surviving worktree is exactly that. Certify had drifted to
+      // failing on non-zero, which broke the consecutive run on a boot the
+      // table never authorised breaking.
       final (code, lines) = await _certify(
         dirty: const {
           51: {'barrier_would_refuse': 2},
         },
       );
-      expect(code, 2);
-      expect(_statusOf(lines, 'would-refuse'), 'FAIL');
-      expect(lines.join('\n'), contains('epoch 51: barrier_would_refuse = 2'));
+      expect(code, 0);
+      expect(_statusOf(lines, 'would-refuse'), 'PASS');
+      final row = lines.firstWhere(
+        (line) => line.trimLeft().startsWith('would-refuse'),
+        orElse: () => '',
+      );
+      // The VALUE is still printed with its epoch — reported means visible.
+      expect(row, contains('epoch 51 2'));
+      expect(row, contains('reported, not gating'));
+      // …and it contributes NO break to the run of three: `_consecutive`
+      // folds every row's failures into its own, so a row that fails silently
+      // restarts the run.
+      expect(_statusOf(lines, 'consecutive'), 'PASS');
+      expect(
+        lines.firstWhere(
+          (line) => line.trimLeft().startsWith('consecutive'),
+          orElse: () => '',
+        ),
+        isNot(contains('would-refuse')),
+      );
+      expect(_statusOf(lines, 'clean'), 'PASS');
     });
 
     test(
@@ -623,6 +648,8 @@ void main() {
         expect(code, 0);
         expect(_statusOf(lines, 'would-refuse'), 'PASS');
         expect(lines.join('\n'), contains('has not landed; informational'));
+        // The ABSENT case keeps its own wording — it is not the reported one.
+        expect(lines.join('\n'), isNot(contains('reported, not gating')));
       },
     );
   });
