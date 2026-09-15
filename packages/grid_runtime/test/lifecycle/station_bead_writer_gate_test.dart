@@ -288,6 +288,168 @@ void main() {
     expect(refusals, hasLength(1));
   });
 
+  test(
+    'node advance closes only matching gates and classifies historical duplicates',
+    () async {
+      runner.exportBeads = [
+        session('tgdog-s'),
+        Bead(
+          id: 'tgdog-gate-old',
+          issueType: GridIssueTypes.gate,
+          assignee: 'operator',
+          createdAt: DateTime.utc(2026),
+          metadata: const {
+            'rig': 'tgdog',
+            'blocks': 'tgdog-s',
+            'node': 'review/route',
+          },
+        ),
+        Bead(
+          id: 'tgdog-gate-new',
+          issueType: GridIssueTypes.gate,
+          createdAt: DateTime.utc(2026, 1, 2),
+          metadata: const {
+            'rig': 'tgdog',
+            'blocks': 'tgdog-s',
+            'node': 'review/route',
+          },
+        ),
+        const Bead(
+          id: 'tgdog-other-node',
+          issueType: GridIssueTypes.gate,
+          metadata: {
+            'rig': 'tgdog',
+            'blocks': 'tgdog-s',
+            'node': 'review/other',
+          },
+        ),
+        const Bead(
+          id: 'tgdog-other-session',
+          issueType: GridIssueTypes.gate,
+          metadata: {
+            'rig': 'tgdog',
+            'blocks': 'tgdog-other',
+            'node': 'review/route',
+          },
+        ),
+      ];
+
+      final receipts = await writer().closeOpenGatesForNodeAdvance(
+        sessionId: 'tgdog-s',
+        nodePath: 'review/route',
+      );
+
+      expect(receipts, [
+        (
+          gateId: 'tgdog-gate-old',
+          sessionId: 'tgdog-s',
+          cause: GateCloseCause.supersededByAdvance,
+        ),
+        (
+          gateId: 'tgdog-gate-new',
+          sessionId: 'tgdog-s',
+          cause: GateCloseCause.duplicateMint,
+        ),
+      ]);
+      expect(runner.callsFor('update').map((call) => call[1]), [
+        'tgdog-gate-old',
+        'tgdog-gate-old',
+        'tgdog-gate-new',
+        'tgdog-gate-new',
+      ]);
+      expect(
+        jsonDecode(runner.metadataOfUpdate(0)!)['grid.gate.close_cause'],
+        'superseded-by-advance',
+      );
+      expect(
+        jsonDecode(runner.metadataOfUpdate(2)!)['grid.gate.close_cause'],
+        'duplicate-mint',
+      );
+      expect(runner.callsFor('close').map((call) => call[1]), [
+        'tgdog-gate-old',
+        'tgdog-gate-new',
+      ]);
+      expect(runner.everyMutationHasActor, isTrue);
+      expect(runner.neverCalledShow, isTrue);
+    },
+  );
+
+  test(
+    'gate mint and node advance share one composite transition lane',
+    () async {
+      final reader = _ControlledGateTransitionReader(
+        runner,
+        mintedGate: const Bead(
+          id: 'tgdog-gate1',
+          issueType: GridIssueTypes.gate,
+          status: BeadStatus.open,
+          metadata: {
+            'rig': 'tgdog',
+            'blocks': 'tgdog-s',
+            'node': 'review/route',
+          },
+        ),
+      );
+      runner.exportBeads = [session('tgdog-s')];
+      final controlledWriter = writerWith(
+        reader: reader,
+        onFlare: (name, data) => flares.add((name: name, data: data)),
+      );
+
+      final mint = controlledWriter.createGate(
+        substation: 'tgdog',
+        sessionId: 'tgdog-s',
+        nodePath: 'review/route',
+        reason: 'transient route read',
+      );
+      await _pumpMicrotasks();
+      expect(reader.nodeQueries, 1);
+
+      final advance = controlledWriter.closeOpenGatesForNodeAdvance(
+        sessionId: 'tgdog-s',
+        nodePath: 'review/route',
+      );
+      await _pumpMicrotasks();
+      expect(
+        reader.nodeQueries,
+        1,
+        reason: 'advance waits behind the mint lane',
+      );
+      expect(runner.callsFor('close'), isEmpty);
+
+      reader.releaseMintQueryEmpty();
+      expect(await mint, 'tgdog-gate1');
+      final receipts = await advance;
+
+      expect(reader.nodeQueries, 2);
+      expect(receipts.single.cause, GateCloseCause.supersededByAdvance);
+      final mutations = runner.calls.where(
+        (call) =>
+            call.isNotEmpty &&
+            {'create', 'update', 'close'}.contains(call.first) &&
+            !(call.length == 2 && call[0] == 'update' && call[1] == '--help'),
+      );
+      expect(mutations.map((call) => call.first), [
+        'create',
+        'update',
+        'update',
+        'update',
+        'close',
+      ]);
+      expect(
+        jsonDecode(runner.metadataOfUpdate(0)!),
+        containsPair('node', 'review/route'),
+      );
+      expect(
+        jsonDecode(runner.metadataOfUpdate(1)!)['grid.gate.close_cause'],
+        'superseded-by-advance',
+      );
+      expect(jsonDecode(runner.metadataOfUpdate(2)!), contains('closed_at'));
+      expect(runner.everyMutationHasActor, isTrue);
+      expect(runner.neverCalledShow, isTrue);
+    },
+  );
+
   test('terminal sweep closes gates and classifies duplicate mints', () async {
     runner.exportBeads = [
       session('tgdog-s', closed: true),
@@ -791,6 +953,52 @@ void main() {
     );
     expect(receipts.single.cause, GateCloseCause.workBeadClosed);
   });
+}
+
+Future<void> _pumpMicrotasks() async {
+  for (var i = 0; i < 8; i++) {
+    await Future<void>.delayed(Duration.zero);
+  }
+}
+
+final class _ControlledGateTransitionReader implements BeadProbeReader {
+  _ControlledGateTransitionReader(this.delegate, {required this.mintedGate});
+
+  final BeadProbeReader delegate;
+  final Bead mintedGate;
+  final Completer<List<Bead>> _mintQuery = Completer<List<Bead>>();
+  var nodeQueries = 0;
+
+  void releaseMintQueryEmpty() => _mintQuery.complete(const <Bead>[]);
+
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) =>
+      delegate.beadById(id, types: types);
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) {
+    if (types.contains(GridIssueTypes.gate) &&
+        metadataAll['blocks'] == 'tgdog-s' &&
+        metadataAll['node'] == 'review/route') {
+      nodeQueries += 1;
+      return nodeQueries == 1
+          ? _mintQuery.future
+          : Future<List<Bead>>.value([mintedGate]);
+    }
+    return delegate.openBeads(
+      types: types,
+      metadataAll: metadataAll,
+      metadataAny: metadataAny,
+    );
+  }
+
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) =>
+      delegate.openSuperseding(priorIds);
 }
 
 final class _SequencedGateReader implements BeadProbeReader {
