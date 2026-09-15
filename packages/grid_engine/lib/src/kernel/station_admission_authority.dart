@@ -1162,6 +1162,22 @@ final class StationAdmissionAuthority {
         workBeadId: candidate.bead.id,
         metadata: metadata,
       );
+      if (!identical(_reservations[candidate.bead.id], reservation)) {
+        const reason =
+            'admission reservation released while the create settled';
+        await _writer.update(
+          id,
+          metadata: voidRetireMetadata(
+            workBeadId: candidate.bead.id,
+            deadSessionId: id,
+            reason: reason,
+          ),
+        );
+        await _writer.close(id, reason: reason);
+        throw StateError(
+          'the admission reservation was released while its write settled',
+        );
+      }
       reservation.sessionId = id;
       reservation.reclaimedSessionId = null;
       _notifyListeners();
@@ -1219,6 +1235,13 @@ final class StationAdmissionAuthority {
   /// Compensates a lifecycle cancellation only when this authority still owns
   /// the supplied attempt. Null and stale identities are harmless no-ops.
   ///
+  /// An identity-matched pre-session abandonment releases its reservation even
+  /// while session creation is in flight because no durable session id is yet
+  /// bound to the reservation. This applies
+  /// `the_grid#pause-is-a-non-terminal-blocking-disposition`: "paused rows
+  /// release their reservation", while their later readmission remains this
+  /// authority's ordinary priority and capacity decision.
+  ///
   /// [blockUntilFreshReady] quarantines only an identity-matched, unconsumed
   /// pre-session reservation. The bead then rejoins ordinary priority and
   /// capacity competition after a fresh snapshot reports it ready.
@@ -1234,8 +1257,7 @@ final class StationAdmissionAuthority {
       if (reservationToken == null ||
           reservation == null ||
           !identical(reservation.reservationToken, reservationToken) ||
-          reservation.sessionId != null ||
-          reservation.minting) {
+          reservation.sessionId != null) {
         return null;
       }
       if (blockUntilFreshReady) {
