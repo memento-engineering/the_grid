@@ -99,6 +99,7 @@ export 'src/domain/linked_sessions.dart';
 export 'src/domain/rework.dart';
 export 'src/domain/session_bead.dart';
 export 'src/domain/session_ledger_metrics_projection.dart';
+export 'src/domain/state_store_prune.dart';
 // The session DISPOSITION (tg-4rw) — the pure done|held|voided reading of a
 // closed session, consumed by BOTH the mount boundary (WorkList) and the
 // adopt-or-mint decision (SessionScope). A closed session is never blanket-
