@@ -54,6 +54,40 @@ final class _GatedMountAttemptRunner extends RecordingBdRunner {
   }
 }
 
+final class _GatedFailingSessionCreateRunner extends RecordingBdRunner {
+  _GatedFailingSessionCreateRunner({required this.expectedCreates});
+
+  final int expectedCreates;
+  final allCreatesEntered = Completer<void>();
+  final releaseCreates = Completer<void>();
+  var sessionCreates = 0;
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    final type = args.indexOf('--type');
+    final isSessionCreate =
+        args.isNotEmpty &&
+        args.first == 'create' &&
+        type >= 0 &&
+        type + 1 < args.length &&
+        args[type + 1] == GridIssueTypes.session.wire;
+    if (!isSessionCreate) {
+      return super.run(args, timeout: timeout, stdin: stdin);
+    }
+    await super.run(args, timeout: timeout, stdin: stdin);
+    sessionCreates += 1;
+    if (sessionCreates == expectedCreates && !allCreatesEntered.isCompleted) {
+      allCreatesEntered.complete();
+    }
+    await releaseCreates.future;
+    throw StateError('controlled session-create failure');
+  }
+}
+
 final class _UnusedTrust implements Trust {
   @override
   Future<TrustLevel> levelOf(ActorIdentity actor) =>
@@ -2188,6 +2222,282 @@ void main() {
     );
     expect(released.admitted.single.candidate.bead.id, 'tg-2');
     expect(released.waiting, isEmpty);
+  });
+
+  test('pre-session abandon releases K minting reservations and admits K '
+      'replacements', () async {
+    const candidateCount = 3;
+    const abandonedCount = 2;
+    final runner = _GatedFailingSessionCreateRunner(
+      expectedCreates: abandonedCount,
+    );
+    final station = _stationOver(runner, maxConcurrentWork: candidateCount);
+    addTearDown(() {
+      if (!runner.releaseCreates.isCompleted) {
+        runner.releaseCreates.complete();
+      }
+    });
+    addTearDown(station.dispose);
+    final initialBeads = [
+      for (var index = 1; index <= candidateCount; index += 1)
+        _bead('tg-$index'),
+    ];
+    final initialCandidates = [
+      for (final bead in initialBeads)
+        StationAdmissionCandidate(bead: bead, session: null),
+    ];
+    final config = _config.copyWith(maxConcurrentWork: candidateCount);
+    final initialSnapshot = _snapshot(initialBeads);
+    final initial = station.admission.admitPending(
+      initialSnapshot,
+      config,
+      const ServiceBundle(),
+      initialCandidates,
+    );
+    expect(initial.admitted, hasLength(candidateCount));
+
+    final creates = [
+      for (var index = 0; index < abandonedCount; index += 1)
+        station.admission.createSessionAttempt(
+          initialSnapshot,
+          initialCandidates[index],
+          title: 'grid session ${initialBeads[index].id}',
+          metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
+        ),
+    ];
+    await runner.allCreatesEntered.future;
+
+    for (var index = 0; index < abandonedCount; index += 1) {
+      final concurrent = await station.admission.createSessionAttempt(
+        initialSnapshot,
+        initialCandidates[index],
+        title: 'duplicate grid session ${initialBeads[index].id}',
+        metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
+      );
+      expect(concurrent.sessionId, isNull);
+      expect(concurrent.refusal?.clause, 'missing-reservation');
+      await station.admission.abandonSessionAttempt(
+        workBeadId: initialBeads[index].id,
+        sessionId: null,
+        reservationToken: initial.admitted[index].reservationToken,
+        services: const ServiceBundle(),
+      );
+    }
+
+    expect(
+      station.admission.admissionStatus.reservations.map(
+        (reservation) => reservation.bead,
+      ),
+      ['tg-3'],
+    );
+    runner.releaseCreates.complete();
+    for (final create in creates) {
+      await expectLater(create, throwsA(isA<StateError>()));
+    }
+
+    final replacements = [_bead('tg-4'), _bead('tg-5')];
+    final replacementCandidates = [
+      initialCandidates.last,
+      for (final bead in replacements)
+        StationAdmissionCandidate(bead: bead, session: null),
+    ];
+    final transport = _RecordingTransport();
+    final replacementSnapshot = _snapshot([initialBeads.last, ...replacements]);
+    final replacementBatch = station.admission.admitPending(
+      replacementSnapshot,
+      config,
+      ServiceBundle(transport: transport),
+      replacementCandidates,
+    );
+
+    expect(
+      replacementBatch.admitted.map(
+        (reservation) => reservation.candidate.bead.id,
+      ),
+      ['tg-3', 'tg-4', 'tg-5'],
+    );
+    expect(replacementBatch.waiting, isEmpty);
+    expect(
+      transport.flares.where((flare) => flare.name == 'work.throttled'),
+      isEmpty,
+    );
+  });
+
+  test('pause during mint releases capacity and leaves readmission to the '
+      'authority', () async {
+    final runner = _GatedFailingSessionCreateRunner(expectedCreates: 1);
+    final station = _stationOver(runner, maxConcurrentWork: 1);
+    addTearDown(() {
+      if (!runner.releaseCreates.isCompleted) {
+        runner.releaseCreates.complete();
+      }
+    });
+    addTearDown(station.dispose);
+    final pausedWork = _bead('tg-paused');
+    final rival = _bead('tg-rival');
+    final config = _config.copyWith(maxConcurrentWork: 1);
+    final initialSnapshot = _snapshot([pausedWork, rival]);
+    final pausedCandidate = StationAdmissionCandidate(
+      bead: pausedWork,
+      session: null,
+    );
+    final initial = station.admission.admitPending(
+      initialSnapshot,
+      config,
+      const ServiceBundle(),
+      [pausedCandidate, StationAdmissionCandidate(bead: rival, session: null)],
+    );
+    final reservation = initial.admitted.single;
+    final create = station.admission.createSessionAttempt(
+      initialSnapshot,
+      pausedCandidate,
+      title: 'grid session ${pausedWork.id}',
+      metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
+    );
+    await runner.allCreatesEntered.future;
+
+    await station.admission.abandonSessionAttempt(
+      workBeadId: pausedWork.id,
+      sessionId: null,
+      reservationToken: reservation.reservationToken,
+      services: const ServiceBundle(),
+    );
+    expect(station.admission.admissionStatus.reservations, isEmpty);
+
+    final paused = SessionProjection(
+      workBeadId: pausedWork.id,
+      sessionId: 'tg-paused-session',
+      pauseState: SessionPauseState.paused,
+    );
+    final whilePaused = station.admission.admitPending(
+      _snapshot([pausedWork, rival], sessions: {pausedWork.id: paused}),
+      config,
+      const ServiceBundle(),
+      [
+        StationAdmissionCandidate(bead: pausedWork, session: paused),
+        StationAdmissionCandidate(bead: rival, session: null),
+      ],
+    );
+    expect(whilePaused.refused.single.clause, 'paused');
+    expect(whilePaused.admitted.single.candidate.bead.id, rival.id);
+
+    runner.releaseCreates.complete();
+    await expectLater(create, throwsA(isA<StateError>()));
+
+    final resumed = paused.copyWith(pauseState: SessionPauseState.resumed);
+    final whileOccupied = station.admission.admitPending(
+      _snapshot([pausedWork, rival], sessions: {pausedWork.id: resumed}),
+      config,
+      const ServiceBundle(),
+      [
+        StationAdmissionCandidate(bead: pausedWork, session: resumed),
+        StationAdmissionCandidate(bead: rival, session: null),
+      ],
+    );
+    expect(whileOccupied.waiting.single.bead.id, pausedWork.id);
+    expect(whileOccupied.admitted.single.candidate.bead.id, rival.id);
+
+    await station.admission.abandonSessionAttempt(
+      workBeadId: rival.id,
+      sessionId: null,
+      reservationToken: whilePaused.admitted.single.reservationToken,
+      services: const ServiceBundle(),
+    );
+    final readmitted = station.admission.admitPending(
+      _snapshot([pausedWork], sessions: {pausedWork.id: resumed}),
+      config,
+      const ServiceBundle(),
+      [StationAdmissionCandidate(bead: pausedWork, session: resumed)],
+    );
+    expect(readmitted.admitted.single.sessionId, resumed.sessionId);
+    expect(readmitted.admitted.single.adopted, isTrue);
+  });
+
+  test('session-carrying abandon waits for durable close before releasing '
+      'capacity', () async {
+    final runner = _GatedCloseRunner(createdId: 'tg-session');
+    final station = _stationOver(runner, maxConcurrentWork: 1);
+    addTearDown(() {
+      if (!runner.releaseClose.isCompleted) runner.releaseClose.complete();
+    });
+    addTearDown(station.dispose);
+    final owner = _bead('tg-owner');
+    final rival = _bead('tg-rival');
+    final config = _config.copyWith(maxConcurrentWork: 1);
+    final ownerCandidate = StationAdmissionCandidate(
+      bead: owner,
+      session: null,
+    );
+    final initialSnapshot = _snapshot([owner, rival]);
+    final initial = station.admission.admitPending(
+      initialSnapshot,
+      config,
+      const ServiceBundle(),
+      [ownerCandidate],
+    );
+    final token = initial.admitted.single.reservationToken;
+    final created = await station.admission.createSessionAttempt(
+      initialSnapshot,
+      ownerCandidate,
+      title: 'grid session ${owner.id}',
+      metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
+    );
+    expect(created.sessionId, 'tg-session');
+
+    await station.admission.abandonSessionAttempt(
+      workBeadId: owner.id,
+      sessionId: null,
+      reservationToken: token,
+      services: const ServiceBundle(),
+    );
+    expect(
+      station.admission.admissionStatus.reservations.single.bead,
+      owner.id,
+    );
+
+    final abandon = station.admission.abandonSessionAttempt(
+      workBeadId: owner.id,
+      sessionId: created.sessionId,
+      reservationToken: token,
+      services: const ServiceBundle(),
+    );
+    await runner.closeEntered.future;
+    final voidUpdateIndex = runner.calls.indexWhere(
+      (call) =>
+          call.isNotEmpty &&
+          call.first == 'update' &&
+          call.contains(
+            '${SessionBeadKeys.workBead}=${owner.id}#void-tg-session',
+          ),
+    );
+    expect(voidUpdateIndex, isNonNegative);
+    expect(runner.callsFor('close'), isEmpty);
+    expect(
+      station.admission.admissionStatus.reservations.single.bead,
+      owner.id,
+    );
+    final beforeClose = station.admission.admitPending(
+      initialSnapshot,
+      config,
+      const ServiceBundle(),
+      [ownerCandidate, StationAdmissionCandidate(bead: rival, session: null)],
+    );
+    expect(beforeClose.waiting.single.bead.id, rival.id);
+
+    runner.releaseClose.complete();
+    expect(await abandon, 'tg-session');
+    final closeIndex = runner.calls.indexWhere(
+      (call) => call.isNotEmpty && call.first == 'close',
+    );
+    expect(closeIndex, greaterThan(voidUpdateIndex));
+    final afterClose = station.admission.admitPending(
+      _snapshot([rival]),
+      config,
+      const ServiceBundle(),
+      [StationAdmissionCandidate(bead: rival, session: null)],
+    );
+    expect(afterClose.admitted.single.candidate.bead.id, rival.id);
+    expect(afterClose.waiting, isEmpty);
   });
 
   test(
