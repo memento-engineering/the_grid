@@ -46,6 +46,50 @@ enum TrajectoryDiscipline {
   cut,
 }
 
+/// The single Stage-2 molecule/step migration posture.
+///
+/// This value is resolved and validated once at station assembly. It is not
+/// split into independent writer and reader toggles and is never read from
+/// ambient reactive state.
+enum G2Posture {
+  /// No Stage-2 emitter, comparator, or projection reader is mounted.
+  off,
+
+  /// Legacy graph writes remain authoritative while Stage 2 shadows them.
+  shadow,
+
+  /// Stage-2 records and projections are authoritative.
+  cut,
+}
+
+/// A non-off G2 posture whose resolved G1 prerequisite is not certified.
+@immutable
+final class G2G1PrerequisiteRefused implements Exception {
+  const G2G1PrerequisiteRefused({
+    required this.posture,
+    required this.field,
+    required this.expected,
+    required this.actual,
+  });
+
+  /// The requested non-off G2 posture.
+  final G2Posture posture;
+
+  /// The first mismatched G1 certificate field.
+  final String field;
+
+  /// The required wire value for [field].
+  final String expected;
+
+  /// The resolved or explicitly contradictory wire value for [field].
+  final String actual;
+
+  @override
+  String toString() =>
+      'G2G1PrerequisiteRefused(posture: ${posture.name}, field: $field, '
+      'expected: $expected, actual: $actual)';
+}
+
 /// A cut boot whose explicitly requested posture contradicts the cut.
 ///
 /// This is a boot refusal rather than a trajectory-harness failure: harness
@@ -127,6 +171,8 @@ final class TrajectoryConfig {
     DualReadMode? dualRead,
     this.soakWindowEpoch = 0,
     this.reconcileLedgerCloses = true,
+    this.g2Posture = G2Posture.off,
+    this.g1CertificatePassed,
   }) : assert(soakWindowEpoch >= 0),
        _stateStorePruneAge = stateStorePruneAge,
        breakGlassReason = null,
@@ -156,7 +202,9 @@ final class TrajectoryConfig {
       dualRead = source.dualRead,
       _requestedDualRead = source._requestedDualRead,
       soakWindowEpoch = source.soakWindowEpoch,
-      reconcileLedgerCloses = source.reconcileLedgerCloses;
+      reconcileLedgerCloses = source.reconcileLedgerCloses,
+      g2Posture = G2Posture.off,
+      g1CertificatePassed = source.g1CertificatePassed;
 
   TrajectoryConfig._breakGlassFrom(
     TrajectoryConfig source,
@@ -176,7 +224,9 @@ final class TrajectoryConfig {
       dualRead = source.dualRead,
       _requestedDualRead = null,
       soakWindowEpoch = source.soakWindowEpoch,
-      reconcileLedgerCloses = source.reconcileLedgerCloses;
+      reconcileLedgerCloses = source.reconcileLedgerCloses,
+      g2Posture = G2Posture.off,
+      g1CertificatePassed = source.g1CertificatePassed;
 
   TrajectoryConfig._withAppendedObligationQueries(
     TrajectoryConfig source,
@@ -199,7 +249,9 @@ final class TrajectoryConfig {
       dualRead = source.dualRead,
       _requestedDualRead = source._requestedDualRead,
       soakWindowEpoch = source.soakWindowEpoch,
-      reconcileLedgerCloses = source.reconcileLedgerCloses;
+      reconcileLedgerCloses = source.reconcileLedgerCloses,
+      g2Posture = source.g2Posture,
+      g1CertificatePassed = source.g1CertificatePassed;
 
   /// The single trajectory cut lever.
   final TrajectoryDiscipline discipline;
@@ -301,6 +353,82 @@ final class TrajectoryConfig {
   final DualReadMode dualRead;
 
   final DualReadMode? _requestedDualRead;
+
+  /// The once-resolved Stage-2 posture. Defaults inert and stays a value.
+  final G2Posture g2Posture;
+
+  /// The runner's already-resolved G1 certificate receipt.
+  ///
+  /// Null means missing, false means present but uncertified, and true means
+  /// certified. Assembly never re-runs soak counters or boot arithmetic.
+  final bool? g1CertificatePassed;
+
+  /// The first named G1 prerequisite mismatch for a non-off [g2Posture].
+  G2G1PrerequisiteRefused? get g2G1PrerequisiteRefusal {
+    if (g2Posture == G2Posture.off) return null;
+    final certificate = g1CertificatePassed;
+    if (certificate == null) {
+      return G2G1PrerequisiteRefused(
+        posture: g2Posture,
+        field: 'g1Certificate',
+        expected: 'certified',
+        actual: 'missing',
+      );
+    }
+    if (!certificate) {
+      return G2G1PrerequisiteRefused(
+        posture: g2Posture,
+        field: 'g1Certificate',
+        expected: 'certified',
+        actual: 'uncertified',
+      );
+    }
+    if (discipline != TrajectoryDiscipline.cut) {
+      return G2G1PrerequisiteRefused(
+        posture: g2Posture,
+        field: 'discipline',
+        expected: TrajectoryDiscipline.cut.name,
+        actual: discipline.name,
+      );
+    }
+    final requestedMode = _requestedMode;
+    if (requestedMode != null &&
+        requestedMode != TrajectoryConfigMode.required) {
+      return G2G1PrerequisiteRefused(
+        posture: g2Posture,
+        field: 'mode',
+        expected: TrajectoryConfigMode.required.name,
+        actual: requestedMode.name,
+      );
+    }
+    if (mode != TrajectoryConfigMode.required) {
+      return G2G1PrerequisiteRefused(
+        posture: g2Posture,
+        field: 'mode',
+        expected: TrajectoryConfigMode.required.name,
+        actual: mode.name,
+      );
+    }
+    final requestedDualRead = _requestedDualRead;
+    if (requestedDualRead != null &&
+        requestedDualRead != DualReadMode.primary) {
+      return G2G1PrerequisiteRefused(
+        posture: g2Posture,
+        field: 'dualRead',
+        expected: DualReadMode.primary.name,
+        actual: requestedDualRead.name,
+      );
+    }
+    if (dualRead != DualReadMode.primary) {
+      return G2G1PrerequisiteRefused(
+        posture: g2Posture,
+        field: 'dualRead',
+        expected: DualReadMode.primary.name,
+        actual: dualRead.name,
+      );
+    }
+    return null;
+  }
 
   /// The named refusal for an explicit request that contradicts [discipline].
   ///

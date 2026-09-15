@@ -209,6 +209,8 @@ export 'src/trajectory/station_trajectory_recorder.dart'
         kUnownedSubstation,
         kUnownedSubstationBasis,
         kWorktreeOutstandingClause;
+export 'src/trajectory/canonical_molecule_graph.dart'
+    show CanonicalMoleculeEdge, CanonicalMoleculeGraph;
 export 'src/trajectory/trajectory_append_result.dart'
     show Acked, Dropped, Suppressed, TrajectoryAppendResult;
 // Stage 1 (tg-zfek, chunk W7) — the tick's shadow-posture obligation set and

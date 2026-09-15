@@ -13,6 +13,7 @@ library;
 import '../append/trajectory_appender.dart' show TrajectoryFoldDelta;
 import '../codec/envelope.dart';
 import '../codec/trajectory_record.dart';
+import 'molecule_edge_delta.dart';
 import 'process_identity_delta.dart';
 import 'session_head_delta.dart';
 import 'step_cursor_delta.dart';
@@ -56,6 +57,17 @@ List<SqlStatement> stepCursorFoldStep(
   return stepCursorSqlFor(delta, lastSeq: seq);
 }
 
+/// `proj_step_edges` — the semantic graph from `molecule.poured`.
+List<SqlStatement> moleculeEdgeFoldStep(
+  TrajectoryEnvelope envelope,
+  TrajectoryRecord record, {
+  required int seq,
+}) {
+  final delta = moleculeEdgeDeltaFor(envelope, decoded: record);
+  if (delta == null) return const [];
+  return moleculeEdgeSqlFor(delta);
+}
+
 /// P6 — `proj_process_identity` (§6 rows 3/10/13/32).
 List<SqlStatement> processIdentityFoldStep(
   TrajectoryEnvelope envelope,
@@ -73,6 +85,7 @@ List<SqlStatement> processIdentityFoldStep(
 const List<TrajectoryFoldDelta> kStage1FoldDeltas = [
   sessionHeadFoldStep,
   stepCursorFoldStep,
+  moleculeEdgeFoldStep,
   processIdentityFoldStep,
 ];
 
@@ -82,5 +95,6 @@ const List<TrajectoryFoldDelta> kStage1FoldDeltas = [
 const List<TrajectoryFoldDelta> kPreCutFoldDeltas = [
   preCutSessionHeadFoldStep,
   stepCursorFoldStep,
+  moleculeEdgeFoldStep,
   processIdentityFoldStep,
 ];
