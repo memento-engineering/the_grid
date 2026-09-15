@@ -1418,7 +1418,12 @@ Future<StationWorkRuntime> _acquireStationWork({
       stateBdOverride ??
       (dryRun
           ? BdCliService(NoOpBdRunner(substation: stateSubstation))
-          : BdCliService(ProcessBdRunner(workspaceRoot: stateWorkspace.root)));
+          : BdCliService(
+              ProcessBdRunner(
+                workspaceRoot: stateWorkspace.root,
+                ownedProxyEndpoint: stateWorkspace.endpoint,
+              ),
+            ));
   final writer = StationBeadWriter(
     bd: bd,
     reader: stateBundle.probeReader,

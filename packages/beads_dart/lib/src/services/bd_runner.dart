@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:meta/meta.dart';
 
 import '../errors/bd_exception.dart';
+import 'dolt_endpoint.dart';
 
 /// The captured result of one `bd` subprocess: exit code plus decoded
 /// stdout/stderr text. Immutable, value-y — the [BdCliService] decodes
@@ -57,7 +58,9 @@ abstract interface class BdRunner {
 /// - Working directory is the [BeadsWorkspace.root] (so `.beads/` is found and
 ///   `bd` writes land in the right store).
 /// - The base process environment is caller-supplied or inherited from
-///   [Platform.environment]; this runner adds only the two bd control flags.
+///   [Platform.environment]. When [ownedProxyEndpoint] is set, the runner
+///   forces bd's external-server variables to that owned proxy; otherwise it
+///   adds only the two bd control flags.
 /// - Default timeout 15s (ADR-0001 D4); on timeout the process tree is killed
 ///   ([ProcessSignal.sigkill]) and [BdTimeoutException] is thrown.
 /// - Concurrency is capped by an internal counting semaphore (default 4,
@@ -69,6 +72,7 @@ class ProcessBdRunner implements BdRunner {
     this.defaultTimeout = const Duration(seconds: 15),
     int maxConcurrency = 4,
     Map<String, String>? environment,
+    this.ownedProxyEndpoint,
   }) : assert(maxConcurrency > 0, 'maxConcurrency must be positive'),
        _semaphore = _Semaphore(maxConcurrency),
        _baseEnvironment = environment ?? Platform.environment;
@@ -82,6 +86,13 @@ class ProcessBdRunner implements BdRunner {
   /// Timeout applied when [run] is called without an explicit one.
   final Duration defaultTimeout;
 
+  /// The already-resolved owned proxy every bd mutation must dial.
+  ///
+  /// This runner consumes coordinates only. Endpoint discovery stays with
+  /// [BeadsWorkspace], and the endpoint's read-only credentials are never
+  /// exported because the owned proxy accepts the root write identity.
+  final DoltEndpoint? ownedProxyEndpoint;
+
   /// Grace given to the post-exit pipe drain before detaching (tg-hceh).
   /// After the child exits, EOF is normally immediate; it is withheld only
   /// when an fd-inheriting descendant outlives the child — the case that
@@ -91,14 +102,30 @@ class ProcessBdRunner implements BdRunner {
   final _Semaphore _semaphore;
   final Map<String, String> _baseEnvironment;
 
-  /// The environment every spawn runs under: the base environment with
-  /// `BD_JSON_ENVELOPE=1` and `BD_NON_INTERACTIVE=1` forced on. Exposed for
+  /// The environment every spawn runs under: the base environment, optional
+  /// owned-proxy binding, then the two forced bd control flags. Exposed for
   /// tests asserting the contract.
-  Map<String, String> get environment => {
-    ..._baseEnvironment,
-    'BD_JSON_ENVELOPE': '1',
-    'BD_NON_INTERACTIVE': '1',
-  };
+  Map<String, String> get environment {
+    final endpoint = ownedProxyEndpoint;
+    return {
+      ..._baseEnvironment,
+      if (endpoint != null) ...{
+        'BEADS_DOLT_SERVER_MODE': '1',
+        'BEADS_DOLT_SERVER_HOST': endpoint.host,
+        'BEADS_DOLT_SERVER_PORT': endpoint.port.toString(),
+        'BEADS_DOLT_SERVER_DATABASE': endpoint.database,
+        'BEADS_DOLT_SERVER_USER': 'root',
+        'BEADS_DOLT_PASSWORD': '',
+        'BEADS_DOLT_SHARED_SERVER': '0',
+        'BEADS_DOLT_PROXIED_SERVER': '0',
+        'BEADS_DOLT_AUTO_START': '0',
+        'BEADS_DOLT_SERVER_SOCKET': '',
+        'BEADS_DOLT_SERVER_TLS': '0',
+      },
+      'BD_JSON_ENVELOPE': '1',
+      'BD_NON_INTERACTIVE': '1',
+    };
+  }
 
   @override
   Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {

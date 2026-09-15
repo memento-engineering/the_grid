@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
@@ -78,6 +79,53 @@ final class _UnavailableStateDelegate extends _EnabledDelegate {
   void dispose() {
     disposed = true;
     super.dispose();
+  }
+}
+
+final class _PostMaintenanceWriterDelegate extends _EnabledDelegate {
+  _PostMaintenanceWriterDelegate({
+    required super.rootPath,
+    required this.workRoot,
+  });
+
+  final String workRoot;
+  Map<String, String>? writerEnvironment;
+  StationWorkRuntime? runtime;
+
+  @override
+  Future<void> boot(GridConfiguration configuration) async {
+    events.add('boot');
+    final stateStore = GridStateStore.forGridRoot(rootPath);
+    final stateWorkspace = BeadsWorkspace.discover(
+      start: stateStore.runtimeDir,
+    );
+    final endpoint = stateWorkspace?.endpoint;
+    if (stateWorkspace == null || endpoint == null) {
+      throw StateError('post-maintenance state endpoint did not resolve');
+    }
+    final runner = ProcessBdRunner(
+      workspaceRoot: stateWorkspace.root,
+      ownedProxyEndpoint: endpoint,
+      environment: const {
+        'PATH': '/usr/bin',
+        'BEADS_DOLT_SERVER_PORT': '53064',
+        'BEADS_DOLT_PROXIED_SERVER': '1',
+        'BEADS_DOLT_AUTO_START': '1',
+      },
+    );
+    writerEnvironment = Map<String, String>.unmodifiable(runner.environment);
+    runtime = await assembleStationWork(
+      stateStore: stateStore,
+      substations: [
+        SubstationWorkSpec(name: 'proj', root: workRoot, head: 'main'),
+      ],
+      resolver: const _NullResolver(),
+      dryRun: false,
+      preferSql: false,
+      providerOverride: DryRunProvider(),
+      gitOverride: DryStationGitService(),
+      stateBdOverride: BdCliService(runner),
+    );
   }
 }
 
@@ -179,6 +227,36 @@ void _seedProxiedStore(String root, {required String database, int? port}) {
       p.join(doltDir.path, 'proxy.pid'),
     ).writeAsStringSync('{"pid":2,"port":$port}');
   }
+}
+
+void _expectOwnedProxyStateWriterBinding() {
+  final root = _repositoryRoot();
+  final source = File(
+    p.join(
+      root.path,
+      'packages',
+      'grid_sdk',
+      'lib',
+      'src',
+      'work',
+      'work_assembly.dart',
+    ),
+  ).readAsStringSync();
+  final start = source.indexOf('final bd =');
+  final end = source.indexOf('final writer = StationBeadWriter(', start);
+  if (start < 0 || end < 0) {
+    fail('could not locate the state-writer composition block');
+  }
+  final stateWriterBlock = source.substring(start, end);
+
+  expect(
+    stateWriterBlock,
+    contains('ownedProxyEndpoint: stateWorkspace.endpoint'),
+  );
+  expect(
+    stateWriterBlock,
+    isNot(contains('ProcessBdRunner(workspaceRoot: stateWorkspace.root)')),
+  );
 }
 
 void main() {
@@ -295,6 +373,63 @@ void main() {
       ]);
     },
   );
+
+  test(
+    'the live state writer binds to the post-maintenance proxy endpoint',
+    () async {
+      final gridHome = Directory.systemTemp.createTempSync(
+        'run-grid-post-maintenance-endpoint-',
+      );
+      addTearDown(() => gridHome.deleteSync(recursive: true));
+      final workRoot = p.join(gridHome.path, 'project');
+      final runtimeDir = p.join(gridHome.path, '.grid');
+      _seedEmbeddedStore(workRoot, database: 'proj');
+      _seedProxiedStore(runtimeDir, database: 'tgstate', port: 53064);
+      final statePid = File(p.join(runtimeDir, '.beads', 'dolt', 'proxy.pid'));
+      final delegate = _PostMaintenanceWriterDelegate(
+        rootPath: gridHome.path,
+        workRoot: workRoot,
+      );
+
+      final handle = await runGrid(
+        delegate,
+        maintainStateStore: ({required gridHome}) async {
+          delegate.events.add('maintenance:$gridHome');
+          statePid.writeAsStringSync(
+            '{"pid":1658,"port":52613,"upstream_port":63412}',
+          );
+        },
+      );
+      addTearDown(() async {
+        await handle.teardown();
+        await delegate.runtime?.shutdown();
+      });
+
+      expect(delegate.events, <String>[
+        'didLaunch',
+        'maintenance:${gridHome.path}',
+        'boot',
+        'build',
+      ]);
+      final environment = delegate.writerEnvironment!;
+      expect(environment['BEADS_DOLT_SERVER_HOST'], '127.0.0.1');
+      expect(environment['BEADS_DOLT_SERVER_PORT'], '52613');
+      expect(environment['BEADS_DOLT_SERVER_DATABASE'], 'tgstate');
+      expect(environment['BEADS_DOLT_SERVER_MODE'], '1');
+      expect(environment['BEADS_DOLT_PROXIED_SERVER'], '0');
+      expect(environment['BEADS_DOLT_AUTO_START'], '0');
+      expect(environment.values, everyElement(isNot(contains('53064'))));
+      expect(
+        environment.values,
+        everyElement(isNot(contains('tgstate-secret'))),
+      );
+      _expectOwnedProxyStateWriterBinding();
+    },
+  );
+
+  test('the workspace-only state runner construction is absent', () {
+    _expectOwnedProxyStateWriterBinding();
+  });
 
   test(
     'unavailable live state endpoint aborts through the boot rail',
