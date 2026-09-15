@@ -23,7 +23,7 @@ RoundContext _$RoundContextFromJson(
           return BeadRoundAbsent.fromJson(
             json
           );
-
+        
           default:
             throw CheckedFromJsonException(
   json,
@@ -32,7 +32,7 @@ RoundContext _$RoundContextFromJson(
   'Invalid union type "${json['kind']}"!'
 );
         }
-
+      
 }
 
 /// @nodoc
