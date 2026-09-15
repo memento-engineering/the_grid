@@ -51,7 +51,7 @@ void main() {
     tg = _FakeStore(
       [_bead('tg-q9k', status: BeadStatus.open)],
       customTypes: const [],
-      externalProjects: 'power_station=../power_station',
+      configuredProjects: {'power_station'},
     );
     pow = _FakeStore([
       _bead('pow-60g', status: BeadStatus.open),
@@ -146,9 +146,50 @@ void main() {
     },
   );
 
-  test('a bd store whose external_projects omits the target project is '
-      'reported LOUDLY, and the row is still wired', () async {
-    tg.externalProjects = '';
+  test(
+    'configured projected external project writes the row with no report',
+    () async {
+      final errors = <String>[];
+      expect(
+        await runLink(
+          arguments: _linkArgs(['tg-q9k', '--blocked-by', 'pow-60g']),
+          endpoints: endpoints,
+          bdFactory: factory,
+          out: (_) {},
+          err: errors.add,
+        ),
+        0,
+      );
+      expect(tg.dependencies, hasLength(1));
+      expect(tg.dependencies.single.issueId, 'tg-q9k');
+      expect(
+        tg.dependencies.single.dependsOnId,
+        'external:power_station:pow-60g',
+      );
+      expect(errors, isEmpty);
+      final depWrites = tg.calls
+          .where(
+            (call) => call.length > 1 && call[0] == 'dep' && call[1] == 'add',
+          )
+          .toList();
+      final configReads = tg.calls
+          .where(
+            (call) =>
+                call.length > 1 && call[0] == 'config' && call[1] == 'show',
+          )
+          .toList();
+      expect(depWrites, hasLength(1));
+      expect(configReads.single, ['config', 'show', '--json']);
+      expect(
+        tg.calls.indexOf(configReads.single),
+        greaterThan(tg.calls.indexOf(depWrites.single)),
+      );
+    },
+  );
+
+  test('unconfigured projected external project reports once after the row is '
+      'written', () async {
+    tg.configuredProjects.clear();
     final errors = <String>[];
     expect(
       await runLink(
@@ -160,9 +201,32 @@ void main() {
       ),
       0,
     );
-    expect(errors.single, contains('external_projects'));
+    expect(tg.dependencies, hasLength(1));
+    expect(tg.dependencies.single.issueId, 'tg-q9k');
+    expect(
+      tg.dependencies.single.dependsOnId,
+      'external:power_station:pow-60g',
+    );
+    expect(errors, hasLength(1));
+    expect(errors.single, contains(endpoints.first.store.root));
     expect(errors.single, contains('power_station'));
-    expect(tg.calls.where((call) => call.first == 'dep'), hasLength(1));
+    expect(errors.single, contains('bd config show --json'));
+    final depWrites = tg.calls
+        .where(
+          (call) => call.length > 1 && call[0] == 'dep' && call[1] == 'add',
+        )
+        .toList();
+    final configReads = tg.calls
+        .where(
+          (call) => call.length > 1 && call[0] == 'config' && call[1] == 'show',
+        )
+        .toList();
+    expect(depWrites, hasLength(1));
+    expect(configReads.single, ['config', 'show', '--json']);
+    expect(
+      tg.calls.indexOf(configReads.single),
+      greaterThan(tg.calls.indexOf(depWrites.single)),
+    );
   });
 
   test('an endpoint outside the configured roster refuses before any store '
@@ -399,7 +463,7 @@ void main() {
     final infer = _FakeStore(
       [_bead('swift-infer-097')],
       customTypes: const [],
-      externalProjects: 'swift_train=../swift_train',
+      configuredProjects: {'swift_train'},
     );
     final train = _FakeStore([_bead('swift-train-042')], customTypes: const []);
     stores[inferRoot.path] = infer;
@@ -819,8 +883,8 @@ class _FakeStore implements BdRunner {
   _FakeStore(
     this.beads, {
     required this.customTypes,
-    this.externalProjects = '',
-  });
+    Set<String> configuredProjects = const {},
+  }) : configuredProjects = {...configuredProjects};
 
   final List<Bead> beads;
   final List<BeadDependency> dependencies = [];
@@ -830,7 +894,7 @@ class _FakeStore implements BdRunner {
   /// blockers".
   bool dropRecordDependencies = false;
   List<Object> customTypes;
-  String externalProjects;
+  Set<String> configuredProjects;
   final List<List<String>> calls = [];
 
   /// Every call that WRITES. `dep list` is a READ that happens to share bd's
@@ -864,10 +928,22 @@ class _FakeStore implements BdRunner {
           if (customTypes.isNotEmpty) 'custom_types': customTypes,
         });
       case 'config':
-        return _envelope({
-          'key': 'external_projects',
-          'value': externalProjects,
-        });
+        if (args case ['config', 'show', '--json']) {
+          return _listEnvelope([
+            {
+              'key': 'storage.backend',
+              'value': 'dolt',
+              'source': 'config.yaml',
+            },
+            for (final project in configuredProjects)
+              {
+                'key': 'external_projects.$project',
+                'value': '../$project',
+                'source': 'config.yaml',
+              },
+          ]);
+        }
+        throw StateError('unexpected bd config call: $args');
       case 'list':
         final type = args[2];
         final status = args[4];

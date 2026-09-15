@@ -689,29 +689,28 @@ class BdCliService {
     await _runEnvelope(shipArgs(capability));
   }
 
-  /// `bd config get external_projects --json` — the project→store map bd
-  /// resolves an `external:<project>:<capability>` row through.
+  /// `bd config show --json` — bd's effective configuration, including the
+  /// projected `external_projects.<name>` entries written to `config.yaml` by
+  /// the beads configure verb.
   ///
-  /// Returns the configured project names. bd stores the value as a
-  /// comma-separated `name=path` list and reports an UNSET key as an empty
-  /// string, which decodes to the empty set (never an error): a store that has
-  /// never been configured is a diagnosable state, not a read failure.
+  /// Returns only the configured project-name suffixes. A non-empty effective
+  /// configuration with no project rows proves the store is unconfigured; an
+  /// entirely empty payload cannot prove absence and is refused.
   Future<Set<String>> externalProjects() async {
     final env = await _runEnvelope(externalProjectsArgs());
-    final raw = env.dataMap['value'];
-    if (raw is! String || raw.trim().isEmpty) return const <String>{};
+    final rows = env.dataList;
+    if (rows.isEmpty) {
+      throw const BdParseException(
+        'bd config show --json returned no configuration rows; project absence is unproven',
+      );
+    }
+    const prefix = 'external_projects.';
     return {
-      for (final entry in raw.split(','))
-        if (_externalProjectName(entry) case final String name) name,
+      for (final row in rows)
+        if (row['key'] case final String key
+            when key.startsWith(prefix) && key.length > prefix.length)
+          key.substring(prefix.length),
     };
-  }
-
-  static String? _externalProjectName(String entry) {
-    final trimmed = entry.trim();
-    if (trimmed.isEmpty) return null;
-    final separator = trimmed.indexOf('=');
-    final name = separator < 0 ? trimmed : trimmed.substring(0, separator);
-    return name.isEmpty ? null : name;
   }
 
   /// `bd batch` — runs a line-oriented mutation [script] as one dolt
@@ -1014,13 +1013,8 @@ class BdCliService {
     ..._actorArgs,
   ];
 
-  /// `bd config get external_projects --json` — a READ, so no `--actor`.
-  List<String> externalProjectsArgs() => const [
-    'config',
-    'get',
-    'external_projects',
-    '--json',
-  ];
+  /// `bd config show --json` — an effective-config READ, so no `--actor`.
+  List<String> externalProjectsArgs() => const ['config', 'show', '--json'];
 
   List<String> batchArgs() => ['batch', '--json', ..._actorArgs];
 

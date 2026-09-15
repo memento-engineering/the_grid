@@ -125,8 +125,9 @@ String? externalProjectConfigRefusal({
   required String store,
 }) {
   if (configured.contains(project)) return null;
-  return 'grid: the store "$store" has no "$project" entry in its bd '
-      '`external_projects` config, so `bd ready` there cannot resolve an '
+  return 'grid: the store "$store" has no '
+      '`external_projects.$project` entry in the effective bd config rendered '
+      'by `bd config show --json`, so `bd ready` there cannot resolve an '
       '"${ExternalDepRef.scheme}$project:…" row on its own (the grid frontier '
       'still blocks on it, by roster name). Configured: '
       '${configured.isEmpty ? '<none>' : (configured.toList()..sort()).join(', ')}. '
