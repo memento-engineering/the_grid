@@ -1509,6 +1509,86 @@ void main() {
     });
   });
 
+  group('BdCliService prune', () {
+    test('runs one actor-stamped bulk prune on the default deadline', () async {
+      final runner = FakeBdRunner()
+        ..stubCommand(
+          'prune',
+          BdReply(
+            stdout: jsonEncode({
+              'schema_version': 1,
+              'data': {'pruned_count': 17, 'dependencies': 41},
+            }),
+          ),
+        );
+
+      final receipt = await BdCliService(runner).prune(olderThanDays: 3);
+
+      expect(receipt, (beadsRemoved: 17, dependencyRowsRemoved: 41));
+      expect(runner.calls, [
+        [
+          'prune',
+          '--older-than',
+          '3d',
+          '--force',
+          '--json',
+          '--actor',
+          'grid-controller',
+        ],
+      ]);
+      expect(runner.calls.single, isNot(contains('--ignore-references')));
+      expect(runner.timeouts, [isNull]);
+      expect(
+        ProcessBdRunner(
+          workspaceRoot: Directory.systemTemp.path,
+        ).defaultTimeout,
+        const Duration(seconds: 15),
+      );
+    });
+
+    for (final age in [0, -1]) {
+      test('refuses age $age before calling the runner', () async {
+        final runner = FakeBdRunner();
+
+        await expectLater(
+          BdCliService(runner).prune(olderThanDays: age),
+          throwsArgumentError,
+        );
+
+        expect(runner.calls, isEmpty);
+      });
+    }
+
+    for (final field in ['pruned_count', 'dependencies']) {
+      for (final malformed in <({String name, Object? value, bool omit})>[
+        (name: 'absent', value: null, omit: true),
+        (name: 'string-valued', value: '7', omit: false),
+        (name: 'non-integer', value: 7.5, omit: false),
+      ]) {
+        test('refuses ${malformed.name} $field', () async {
+          final data = <String, dynamic>{'pruned_count': 4, 'dependencies': 9};
+          if (malformed.omit) {
+            data.remove(field);
+          } else {
+            data[field] = malformed.value;
+          }
+          final runner = FakeBdRunner()
+            ..stubCommand(
+              'prune',
+              BdReply(stdout: jsonEncode({'schema_version': 1, 'data': data})),
+            );
+
+          await expectLater(
+            BdCliService(runner).prune(olderThanDays: 3),
+            throwsFormatException,
+          );
+
+          expect(runner.calls, hasLength(1));
+        });
+      }
+    }
+  });
+
   group('ProcessBdRunner contract (no real bd spawned)', () {
     test('environment forces service-mode variables over the base env', () {
       final runner = ProcessBdRunner(
