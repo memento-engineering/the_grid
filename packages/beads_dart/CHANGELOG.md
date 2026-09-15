@@ -1,3 +1,11 @@
+## 0.3.0-dev.3
+
+- `WorkingSetProbeSource._tick` ignores probe completions that land after `dispose` (#466). The
+  probe is async and could straddle a close, and both of its add sites — the hash change and the
+  probe-dead arm — reached a closed broadcast controller, so every station teardown crashed with
+  `Bad state: Cannot add new events after calling close` and abandoned its lock. Measured on lunar:
+  every `down` on 2026-09-14 needed a SIGKILL; the first delivery under the G1 cut.
+
 ## 0.3.0-dev.2
 
 - Adds bd's NATIVE cross-project edge to the read surface. `BdCliService.queryGraph` reads the broad
