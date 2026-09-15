@@ -1,3 +1,15 @@
+## 0.4.0-dev.9
+
+- Allocation reports are qualified against the host's CURRENT dependency pass, not the pass that
+  created the allocation (#469, tg-adic). `genesis_tree` invalidates a host's dependency scope on
+  every later dependency pass, and the report sink was a closure over the creating pass's scope, so
+  any step whose process outlived one pass — every spawned agent — had its terminal report dropped
+  silently: the agent finished on disk and the step never completed. The sink now reads the
+  re-stamped scope, and a genuine drop (host unmounted or scope superseded) emits
+  `step.reportDropped` with `mounted`/`scopeCurrent` in the payload instead of vanishing.
+- Floors `grid_runtime` at `^0.2.1-dev.5`, which vends the gate-supersession API the advance
+  corridor now uses (#468).
+
 ## 0.4.0-dev.8
 
 - A post-epoch P1 head miss is held for `kHeadMissGrace` (90 s) before it enters the gated
