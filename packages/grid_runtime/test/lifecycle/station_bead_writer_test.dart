@@ -1395,6 +1395,7 @@ void main() {
     for (final invalid in [
       _pruneShield('tgdog-prune-task', type: IssueType.task),
       _pruneShield('tgdog-prune-closed', status: BeadStatus.closed),
+      _pruneShield('tgdog-prune-active', status: BeadStatus.inProgress),
       _pruneShield('tgdog-prune-ephemeral', ephemeral: true),
     ]) {
       test('wrong shield shape ${invalid.id} refuses before prune', () async {
@@ -1417,6 +1418,27 @@ void main() {
     test('verification mismatch refuses with zero prune calls', () async {
       runner.exportBeads = [_pruneShield('tgdog-prune-shield')];
       runner.shieldVerificationDescriptionOverride = 'tampered';
+
+      await expectLater(
+        writer().pruneClosedSessionGraphs(
+          stateSubstation: 'tgdog',
+          protectedIds: const ['tgdog-keep'],
+          olderThanDays: 3,
+        ),
+        throwsStateError,
+      );
+
+      expect(runner.calls.map((call) => call.first), [
+        'list',
+        'update',
+        'list',
+      ]);
+      expect(runner.callsFor('prune'), isEmpty);
+    });
+
+    test('verification refuses a shield that is no longer open', () async {
+      runner.exportBeads = [_pruneShield('tgdog-prune-shield')];
+      runner.shieldVerificationStatusOverride = BeadStatus.blocked;
 
       await expectLater(
         writer().pruneClosedSessionGraphs(

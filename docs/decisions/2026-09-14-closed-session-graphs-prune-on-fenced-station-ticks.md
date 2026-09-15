@@ -62,6 +62,15 @@ when the detached base bead is no longer present. An open or missing direct work
 link, a malformed void key, or any open, young, ephemeral, or missing-close-time
 member protects the whole session graph.
 
+The void exception applies
+`the_grid#a48-a-closed-session-is-dispositioned-done-held-voided-not-b`:
+“A DEAD KEY: never adoptable AND never blocking. The bead MOUNTS;
+`SessionScope` RETIRES the dead key” by re-keying its `work_bead` to
+`<base-work-id>#void-<dead-session-id>`, while a fresh round mounts on the same
+original work-bead id. That retired pointer no longer exposes the live work
+bead, so—unlike direct and rework links—the exact void branch does not require
+the detached base bead to remain present or closed.
+
 Before deletion, the writer creates or reuses one owned, open, non-ephemeral
 state-store protection-shield chore and replaces its description with every
 state bead id outside the eligible graph union. It verifies the shield by a
@@ -100,3 +109,11 @@ an open blocker.
   shield verification writes, and potentially one additional bd process.
 * Bad, because reclaim is delayed by the retention age rather than occurring at
   terminal close.
+
+### Confirmation
+
+The composing station's touched-surface roster returned A48 for the governed
+package paths. `the_grid#the-grid-is-a-beads-controller` was read separately as
+conceptual support for composing bd's existing prune primitive; it was not
+returned for these touched surfaces and is not claimed as a roster-selected
+governing decision.

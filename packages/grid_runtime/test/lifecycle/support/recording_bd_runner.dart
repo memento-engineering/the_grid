@@ -83,6 +83,9 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
 
   /// When set, the verification read of a prune shield returns this body.
   String? shieldVerificationDescriptionOverride;
+
+  /// When set, the verification read of a prune shield returns this status.
+  BeadStatus? shieldVerificationStatusOverride;
   int _shieldListCount = 0;
 
   @override
@@ -199,9 +202,15 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
       if (externalRef?.startsWith('grid:state-store-prune-shield:') ?? false) {
         _shieldListCount++;
         final override = shieldVerificationDescriptionOverride;
-        if (_shieldListCount > 1 && override != null) {
+        final statusOverride = shieldVerificationStatusOverride;
+        if (_shieldListCount > 1 &&
+            (override != null || statusOverride != null)) {
           matches = [
-            for (final bead in matches) bead.copyWith(description: override),
+            for (final bead in matches)
+              bead.copyWith(
+                description: override ?? bead.description,
+                status: statusOverride ?? bead.status,
+              ),
           ];
         }
       }

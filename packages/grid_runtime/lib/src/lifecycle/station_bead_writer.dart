@@ -1556,7 +1556,7 @@ class StationBeadWriter {
   static void _validatePruneShield(Bead shield, {required String expectedId}) {
     if (shield.id != expectedId ||
         shield.issueType != IssueType.chore ||
-        shield.isClosed ||
+        shield.status != BeadStatus.open ||
         shield.ephemeral) {
       throw StateError(
         'state-store prune shield has invalid shape: ${shield.id}',
