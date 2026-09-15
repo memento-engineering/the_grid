@@ -10,8 +10,11 @@ import 'package:path/path.dart' as p;
 import '../command/command_operation.dart';
 import '../command/station_command_handler.dart';
 import '../roster/substation_roster.dart';
+import '../stores/state_store_gc.dart' show MaintenanceSink;
+import '../stores/state_store_pruner.dart';
 import '../stores/stores.dart';
 import '../trajectory/session_closure.dart';
+import '../trajectory/state_store_prune_obligation.dart';
 import '../trajectory/trajectory_config.dart';
 import '../trajectory/trajectory_harness.dart';
 import '../trajectory/work_session_liveness_obligation.dart';
@@ -1103,6 +1106,7 @@ Future<StationWorkRuntime> assembleStationWork({
   void Function(String message)? onRefusal,
   void Function(String message)? onOrphan,
   void Function(String message)? onUnresolvedExternalDep,
+  MaintenanceSink? onStateStorePruneReceipt,
   ExplorationTransport? transport,
   Duration wedgeThreshold = kDefaultWedgeThreshold,
   Duration wedgePollInterval = kDefaultWedgePollInterval,
@@ -1225,6 +1229,8 @@ Future<StationWorkRuntime> assembleStationWork({
   }
 
   final refusalSink = onRefusal ?? (String m) => stdout.writeln(m);
+  final MaintenanceSink stateStorePruneSink =
+      onStateStorePruneReceipt ?? (String message) => stdout.writeln(message);
   final disposers = <({String step, FutureOr<void> Function() dispose})>[];
   try {
     return await _acquireStationWork(
@@ -1244,6 +1250,7 @@ Future<StationWorkRuntime> assembleStationWork({
       groupsOverride: groupsOverride,
       onOrphan: onOrphan,
       onUnresolvedExternalDep: onUnresolvedExternalDep,
+      onStateStorePruneReceipt: stateStorePruneSink,
       transport: transport,
       wedgeThreshold: wedgeThreshold,
       wedgePollInterval: wedgePollInterval,
@@ -1289,6 +1296,7 @@ Future<StationWorkRuntime> _acquireStationWork({
   required ProcessGroupController? groupsOverride,
   required void Function(String message)? onOrphan,
   required void Function(String message)? onUnresolvedExternalDep,
+  required MaintenanceSink onStateStorePruneReceipt,
   required ExplorationTransport? transport,
   required Duration wedgeThreshold,
   required Duration wedgePollInterval,
@@ -1474,6 +1482,28 @@ Future<StationWorkRuntime> _acquireStationWork({
         )
       : null;
 
+  Future<void> freshnessBarrier() async {
+    await Future.wait(<Future<void>>[
+      for (final b in bundles.values) b.runtime.requery(),
+      stateBundle.runtime.requery(),
+    ]);
+  }
+
+  final stateStorePruner = StateStorePruner(
+    age: trajectoryConfig.stateStorePruneAge,
+    freshSnapshots: () async {
+      await freshnessBarrier();
+      return (state: stateSource.current, work: work.current);
+    },
+    execute: ({required protectedIds, required olderThanDays}) =>
+        writer.pruneClosedSessionGraphs(
+          stateSubstation: stateSubstation,
+          protectedIds: protectedIds,
+          olderThanDays: olderThanDays,
+        ),
+    out: onStateStorePruneReceipt,
+  );
+
   // --- the trajectory harness (stage1-wiring §1.1), built beside the state
   // writer — the one place that knows everything the fenced service needs:
   // the grid home, the state partition, the substation allow-set, and the flare
@@ -1482,6 +1512,7 @@ Future<StationWorkRuntime> _acquireStationWork({
   final stationTrajectoryConfig = trajectoryConfig
       .withAppendedObligationQueries([
         WorkSessionLivenessObligation(sessionLiveness),
+        StateStorePruneObligation(stateStorePruner),
       ]);
   trajectory =
       trajectoryOverride ??
@@ -1779,13 +1810,6 @@ Future<StationWorkRuntime> _acquireStationWork({
   );
   final groups = groupsOverride ?? const SystemProcessGroupController();
   final orphanSink = onOrphan ?? (String m) => stdout.writeln(m);
-
-  Future<void> freshnessBarrier() async {
-    await Future.wait(<Future<void>>[
-      for (final b in bundles.values) b.runtime.requery(),
-      stateBundle.runtime.requery(),
-    ]);
-  }
 
   final services = StationServices(
     provider: provider,
