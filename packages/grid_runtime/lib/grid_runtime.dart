@@ -132,6 +132,7 @@ export 'src/lifecycle/station_bead_writer.dart'
         GateCloseCause,
         GateSweepSessionDisposition,
         GateAutoCloseReceipt,
+        StateStorePruneWriteReceipt,
         gateCloseCauseOf,
         sessionDispositionOfMetadata;
 export 'src/lifecycle/runtime_actuator.dart'

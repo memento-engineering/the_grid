@@ -167,6 +167,12 @@ typedef WorkTerminalSettlementReceipt = ({
   String terminalReason,
 });
 
+/// Counts returned after one shielded state-store prune.
+typedef StateStorePruneWriteReceipt = ({
+  int beadsRemoved,
+  int dependencyRowsRemoved,
+});
+
 /// Reads a gate's durable close-cause vocabulary.
 GateCloseCause gateCloseCauseOf(Bead gate) => GateCloseCause.values.firstWhere(
   (value) =>
@@ -1468,6 +1474,94 @@ class StationBeadWriter {
   Future<void> delete(String id) async {
     _assertOwned('delete', id, const {});
     return _serialized(id, () => _bd.delete(id));
+  }
+
+  /// Prunes old closed session graphs after installing a fail-closed shield.
+  ///
+  /// The complete list/create/update/verify/prune sequence shares the store-
+  /// wide graph-pour tail. It therefore cannot interleave its protection view
+  /// with another graph apply on this writer. Ownership of both the state
+  /// partition and the selected shield is checked before the destructive bd
+  /// call. Any ambiguity or mismatch propagates and leaves prune uncalled.
+  Future<StateStorePruneWriteReceipt> pruneClosedSessionGraphs({
+    required String stateSubstation,
+    required Iterable<String> protectedIds,
+    required int olderThanDays,
+  }) async {
+    _assertOwned('prune', stateSubstation, {rigKey: stateSubstation});
+    final canonicalProtectedIds = protectedIds.toSet().toList()..sort();
+    final externalRef = 'grid:state-store-prune-shield:$stateSubstation';
+    final description = [
+      'grid: state-store prune shield',
+      ...canonicalProtectedIds,
+    ].join('\n');
+
+    return _serializedStorePour(() async {
+      final existing = await _bd.listScope(externalRef: externalRef);
+      if (existing.beads.length > 1) {
+        throw StateError(
+          'state-store prune shield is ambiguous for $stateSubstation: '
+          '${existing.beads.length} records',
+        );
+      }
+
+      late final String shieldId;
+      late final Map<String, dynamic> shieldMetadata;
+      if (existing.beads case [final shield]) {
+        _validatePruneShield(shield, expectedId: shield.id);
+        shieldId = shield.id;
+        shieldMetadata = shield.metadata;
+      } else {
+        shieldId = await _bd.create(
+          title: 'grid state-store prune shield: $stateSubstation',
+          type: IssueType.chore,
+          externalRef: externalRef,
+          setMetadata: {rigKey: stateSubstation},
+        );
+        shieldMetadata = {rigKey: stateSubstation};
+      }
+      _assertOwned('prune', shieldId, shieldMetadata);
+
+      await _bd.update(
+        shieldId,
+        description: description,
+        verifyTextRoundTrip: false,
+      );
+
+      final verified = await _bd.listScope(externalRef: externalRef);
+      if (verified.beads.length != 1) {
+        throw StateError(
+          'state-store prune shield verification expected one record for '
+          '$stateSubstation, found ${verified.beads.length}',
+        );
+      }
+      final verifiedShield = verified.beads.single;
+      _validatePruneShield(verifiedShield, expectedId: shieldId);
+      _assertOwned('prune', verifiedShield.id, verifiedShield.metadata);
+      if (verifiedShield.description != description) {
+        throw StateError(
+          'state-store prune shield verification description mismatch for '
+          '$shieldId',
+        );
+      }
+
+      final receipt = await _bd.prune(olderThanDays: olderThanDays);
+      return (
+        beadsRemoved: receipt.beadsRemoved,
+        dependencyRowsRemoved: receipt.dependencyRowsRemoved,
+      );
+    });
+  }
+
+  static void _validatePruneShield(Bead shield, {required String expectedId}) {
+    if (shield.id != expectedId ||
+        shield.issueType != IssueType.chore ||
+        shield.isClosed ||
+        shield.ephemeral) {
+      throw StateError(
+        'state-store prune shield has invalid shape: ${shield.id}',
+      );
+    }
   }
 
   /// `bd batch` for grouped `close`+`dep` mutations (one transaction) — the

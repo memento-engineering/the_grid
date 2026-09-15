@@ -6,6 +6,8 @@ import 'package:test/test.dart';
 
 import 'support/recording_bd_runner.dart';
 
+const _pruneShieldRef = 'grid:state-store-prune-shield:tgdog';
+
 /// Tests for the single bd write chokepoint (Track 4; ADR-0006 Decision 2).
 ///
 /// The heart is the fail-closed safety: a write whose target rig is WRONG or
@@ -61,6 +63,23 @@ Bead _attempt(String id, {String workBeadId = 'tg-1'}) => Bead(
     StationBeadWriter.mountAttemptWorkBeadKey: workBeadId,
     StationBeadWriter.mountAttemptCountKey: '1',
   },
+);
+
+Bead _pruneShield(
+  String id, {
+  IssueType type = IssueType.chore,
+  BeadStatus status = BeadStatus.open,
+  bool ephemeral = false,
+  String description = 'old shield',
+}) => Bead(
+  id: id,
+  title: 'grid state-store prune shield: tgdog',
+  description: description,
+  issueType: type,
+  status: status,
+  ephemeral: ephemeral,
+  externalRef: _pruneShieldRef,
+  metadata: const {StationBeadWriter.rigKey: 'tgdog'},
 );
 
 void main() {
@@ -1061,6 +1080,14 @@ void main() {
           ]),
         );
         expect(runner.callsFor('dep'), hasLength(1));
+        expect(
+          runner.calls.where(
+            (call) =>
+                call.isNotEmpty &&
+                {'close', 'dep', 'update'}.contains(call.first),
+          ),
+          everyElement(isNot(contains('--force'))),
+        );
       },
     );
 
@@ -1136,6 +1163,14 @@ void main() {
           reason:
               'the proxied fallback must preserve the dependency-aware order, '
               'including a molecule-ranked blocker before a step-ranked issue',
+        );
+        expect(
+          proxied.calls.where(
+            (call) =>
+                call.isNotEmpty &&
+                {'close', 'dep', 'update'}.contains(call.first),
+          ),
+          everyElement(isNot(contains('--force'))),
         );
       },
     );
@@ -1237,6 +1272,181 @@ void main() {
         );
       },
     );
+  });
+
+  group('state-store prune shield', () {
+    test('creates, writes, verifies, then prunes in exact order', () async {
+      runner.nextCreatedId = 'tgdog-prune-shield';
+      runner.prunePayload = const {'pruned_count': 17, 'dependencies': 34};
+
+      final receipt = await writer().pruneClosedSessionGraphs(
+        stateSubstation: 'tgdog',
+        protectedIds: const ['tgdog-z', 'tgdog-a', 'tgdog-z'],
+        olderThanDays: 3,
+      );
+
+      expect(receipt, (beadsRemoved: 17, dependencyRowsRemoved: 34));
+      expect(runner.calls.map((call) => call.first), [
+        'list',
+        'create',
+        'update',
+        'update',
+        'list',
+        'prune',
+      ]);
+      expect(runner.calls.first, [
+        'list',
+        '--external-ref',
+        _pruneShieldRef,
+        '--json',
+        '--limit',
+        '0',
+      ]);
+
+      final create = runner.callsFor('create').single;
+      expect(
+        create,
+        containsAllInOrder([
+          '--title',
+          'grid state-store prune shield: tgdog',
+          '--type',
+          'chore',
+          '--priority',
+          '2',
+          '--external-ref',
+          _pruneShieldRef,
+        ]),
+      );
+      expect(create, isNot(contains('--description')));
+      expect(runner.metadataOfUpdate(0), '{"rig":"tgdog"}');
+
+      final descriptionUpdate = runner.callsFor('update')[1];
+      expect(
+        descriptionUpdate,
+        containsAllInOrder([
+          'update',
+          'tgdog-prune-shield',
+          '--body-file',
+          '-',
+        ]),
+      );
+      expect(
+        runner.stdins[runner.calls.indexOf(descriptionUpdate)],
+        'grid: state-store prune shield\ntgdog-a\ntgdog-z',
+      );
+
+      expect(runner.callsFor('prune').single, [
+        'prune',
+        '--older-than',
+        '3d',
+        '--force',
+        '--json',
+        '--actor',
+        'grid-controller',
+      ]);
+      expect(
+        runner.callsFor('prune').single,
+        isNot(contains('--ignore-references')),
+      );
+      expect(runner.everyMutationHasActor, isTrue);
+    });
+
+    test('reuses the one valid open shield', () async {
+      runner.exportBeads = [_pruneShield('tgdog-prune-shield')];
+
+      await writer().pruneClosedSessionGraphs(
+        stateSubstation: 'tgdog',
+        protectedIds: const ['tgdog-keep'],
+        olderThanDays: 3,
+      );
+
+      expect(runner.calls.map((call) => call.first), [
+        'list',
+        'update',
+        'list',
+        'prune',
+      ]);
+      expect(runner.callsFor('create'), isEmpty);
+      expect(
+        runner.exportBeads.single.description,
+        'grid: state-store prune shield\ntgdog-keep',
+      );
+    });
+
+    test('duplicate shields refuse before any mutation or prune', () async {
+      runner.exportBeads = [
+        _pruneShield('tgdog-prune-a'),
+        _pruneShield('tgdog-prune-b'),
+      ];
+
+      await expectLater(
+        writer().pruneClosedSessionGraphs(
+          stateSubstation: 'tgdog',
+          protectedIds: const [],
+          olderThanDays: 3,
+        ),
+        throwsStateError,
+      );
+
+      expect(runner.calls.map((call) => call.first), ['list']);
+      expect(runner.callsFor('prune'), isEmpty);
+    });
+
+    for (final invalid in [
+      _pruneShield('tgdog-prune-task', type: IssueType.task),
+      _pruneShield('tgdog-prune-closed', status: BeadStatus.closed),
+      _pruneShield('tgdog-prune-ephemeral', ephemeral: true),
+    ]) {
+      test('wrong shield shape ${invalid.id} refuses before prune', () async {
+        runner.exportBeads = [invalid];
+
+        await expectLater(
+          writer().pruneClosedSessionGraphs(
+            stateSubstation: 'tgdog',
+            protectedIds: const [],
+            olderThanDays: 3,
+          ),
+          throwsStateError,
+        );
+
+        expect(runner.callsFor('prune'), isEmpty);
+        expect(runner.callsFor('update'), isEmpty);
+      });
+    }
+
+    test('verification mismatch refuses with zero prune calls', () async {
+      runner.exportBeads = [_pruneShield('tgdog-prune-shield')];
+      runner.shieldVerificationDescriptionOverride = 'tampered';
+
+      await expectLater(
+        writer().pruneClosedSessionGraphs(
+          stateSubstation: 'tgdog',
+          protectedIds: const ['tgdog-keep'],
+          olderThanDays: 3,
+        ),
+        throwsStateError,
+      );
+
+      expect(runner.calls.map((call) => call.first), [
+        'list',
+        'update',
+        'list',
+      ]);
+      expect(runner.callsFor('prune'), isEmpty);
+    });
+
+    test('unowned state partition refuses before any I/O', () async {
+      await expectLater(
+        writer().pruneClosedSessionGraphs(
+          stateSubstation: 'foreign',
+          protectedIds: const [],
+          olderThanDays: 3,
+        ),
+        throwsA(isA<OwnershipRefused>()),
+      );
+
+      expect(runner.calls, isEmpty);
+    });
   });
 
   group('metadataOf — the molecule StepMetadataReader (tg-h4u, R3)', () {
