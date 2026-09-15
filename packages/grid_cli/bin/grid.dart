@@ -18,6 +18,7 @@ Future<void> main(List<String> arguments) async {
         ..addCommand(WatchCommand())
         ..addCommand(GateCommand())
         ..addCommand(SessionCommand())
+        ..addCommand(AdmissionCommand())
         ..addCommand(SubstationCommand())
         ..addCommand(ReworkCommand())
         ..addCommand(PauseCommand())

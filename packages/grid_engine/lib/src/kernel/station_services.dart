@@ -81,16 +81,18 @@ class StationServices {
   /// double-run anything.
   final WorkSignalProbe? workSignal;
 
-  /// The concurrency governor's STATION-WIDE default/ceiling (tg-42f,
+  /// The concurrency governor's fresh-authority boot value (tg-42f,
   /// declare-and-check — ADR-0008 D8 defers the general per-leaf
   /// `DartEnvironment` permit governor; this is the narrower, cheaper
-  /// work-bead slot budget the mount boundary checks). Serves two roles: the
+  /// work-bead slot budget the mount boundary checks). At construction it
+  /// serves two roles: the
   /// DEFAULT a substation's own `SubstationConfig.maxConcurrentWork` falls back
   /// to when unset, AND the hard TOTAL ceiling across every substation
   /// `WorkList` mounts under this station — a substation override only narrows
   /// within that ceiling, never raises it. Threaded from `--max-agents`
   /// (`StationArgs.maxAgents`); defaults to [kDefaultMaxConcurrentWork] so a
-  /// single-bead flow is unchanged.
+  /// single-bead flow is unchanged. Live control mutates [admission]'s resolved
+  /// ceiling, not this value; a freshly constructed authority starts here.
   final int maxConcurrentWork;
 
   /// The cut-only admission breaker shared with trajectory call sites.

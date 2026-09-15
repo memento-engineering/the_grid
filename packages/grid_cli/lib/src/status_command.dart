@@ -250,9 +250,13 @@ class StatusCommand extends Command<int> {
     final admission = payload['admission'];
     if (admission is Map<String, Object?>) {
       final maxAgents = admission['maxAgents'];
+      final maxAgentsSource = admission['maxAgentsSource'];
       final reservations = admission['reservations'];
       if (maxAgents is int && reservations is List<Object?>) {
-        stdout.writeln('  budget: ${reservations.length}/$maxAgents');
+        final source = maxAgentsSource is String
+            ? ' (source: $maxAgentsSource)'
+            : '';
+        stdout.writeln('  budget: ${reservations.length}/$maxAgents$source');
       }
       final zeroAdmissionWaiters = admission['zeroAdmissionWaiters'];
       if (zeroAdmissionWaiters is List<Object?> &&

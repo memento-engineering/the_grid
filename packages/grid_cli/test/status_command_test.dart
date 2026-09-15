@@ -118,6 +118,7 @@ void main() {
       ...statusPayload,
       'admission': <String, Object?>{
         'maxAgents': 4,
+        'maxAgentsSource': 'control',
         'reservations': <Object?>[
           <String, Object?>{
             'bead': 'tg-null-session',
@@ -149,7 +150,7 @@ void main() {
 
     final human = await runCaptured(Up(record: record(), payload: payload));
     expect(human.code, 0);
-    expect(human.stdout, contains('  budget: 1/4\n'));
+    expect(human.stdout, contains('  budget: 1/4 (source: control)\n'));
     expect(
       const LineSplitter()
           .convert(human.stdout)
@@ -179,6 +180,15 @@ void main() {
       containsPair('clause', 'approval: not approved - run the approve verb'),
     );
     expect(json.stderr, isEmpty);
+
+    final legacyAdmission = Map<String, Object?>.of(
+      payload['admission']! as Map<String, Object?>,
+    )..remove('maxAgentsSource');
+    final legacy = await runCaptured(
+      Up(record: record(), payload: {...payload, 'admission': legacyAdmission}),
+    );
+    expect(legacy.stdout, contains('  budget: 1/4\n'));
+    expect(legacy.stdout, isNot(contains('(source:')));
 
     final emptyPayload = <String, Object?>{
       ...payload,

@@ -22,6 +22,15 @@ import '../sdk/circuit.dart';
 import 'admission_barrier.dart';
 import 'trajectory_scope.dart';
 
+/// The input that most recently resolved the station admission ceiling.
+enum StationAdmissionCeilingSource {
+  /// The fresh-authority value supplied by station composition.
+  boot,
+
+  /// A live operator command applied to the resident authority.
+  control,
+}
+
 /// A read-only station admission snapshot for operator status surfaces.
 ///
 /// Only bead identities, refusal clauses, reservation/refusal timing, and the
@@ -32,6 +41,7 @@ final class StationAdmissionStatus {
   /// Creates an immutable snapshot of the station admission budget.
   StationAdmissionStatus({
     required this.maxAgents,
+    this.maxAgentsSource = StationAdmissionCeilingSource.boot,
     required List<({String bead, String? sessionId, DateTime since})>
     reservations,
     required List<({String bead, String clause, DateTime since})> refusals,
@@ -46,6 +56,9 @@ final class StationAdmissionStatus {
 
   /// The station-wide concurrency ceiling.
   final int maxAgents;
+
+  /// The input that most recently resolved [maxAgents].
+  final StationAdmissionCeilingSource maxAgentsSource;
 
   /// Every authority-owned reservation, including pre-session reservations.
   final List<({String bead, String? sessionId, DateTime since})> reservations;
@@ -242,7 +255,7 @@ final class StationAdmissionAuthority {
        _admissionBarrier = admissionBarrier,
        _provider = provider,
        _stateSubstation = stateSubstation,
-       _maxConcurrentWork = maxConcurrentWork,
+       _maxAgents = maxConcurrentWork,
        _liveness = liveness ?? neverLive,
        _clock = clock ?? DateTime.now,
        _trajectoryAdmissionHalt = trajectoryAdmissionHalt {
@@ -253,7 +266,9 @@ final class StationAdmissionAuthority {
   final StationBeadWriter _writer;
   final RuntimeProvider _provider;
   final String _stateSubstation;
-  final int _maxConcurrentWork;
+  int _maxAgents;
+  StationAdmissionCeilingSource _maxAgentsSource =
+      StationAdmissionCeilingSource.boot;
   final AllocationLiveness _liveness;
   final DateTime Function() _clock;
   final TrajectoryAdmissionHalt? _trajectoryAdmissionHalt;
@@ -334,12 +349,32 @@ final class StationAdmissionAuthority {
               : left.blockingSessionId.compareTo(right.blockingSessionId);
         });
     return StationAdmissionStatus(
-      maxAgents: _maxConcurrentWork,
+      maxAgents: _maxAgents,
+      maxAgentsSource: _maxAgentsSource,
       reservations: reservations,
       refusals: refusals,
       zeroAdmissionWaiters: zeroAdmissionWaiters,
       stranded: stranded,
     );
+  }
+
+  /// Sets the resident station's admission ceiling without evicting work.
+  ///
+  /// Lower values drain by natural reservation release; higher values become
+  /// available on the next admission pass. This uses the same invalidation
+  /// channel as pause/resume release, so resumed and fresh rows re-compete in
+  /// one authority-owned priority and capacity pass. Non-positive values and
+  /// calls after [dispose] are refused without changing authority state.
+  StationAdmissionStatus? setMaxAgents(int maxAgents) {
+    if (maxAgents <= 0 || _disposed) return null;
+    final changed =
+        _maxAgents != maxAgents ||
+        _maxAgentsSource != StationAdmissionCeilingSource.control;
+    _maxAgents = maxAgents;
+    _maxAgentsSource = StationAdmissionCeilingSource.control;
+    final status = admissionStatus;
+    if (changed) _notifyListeners();
+    return status;
   }
 
   /// Adds a station-lifetime invalidation callback and returns an idempotent
@@ -944,10 +979,10 @@ final class StationAdmissionAuthority {
               !durableLiveIds.contains(reclaimedSessionId));
     }).length;
     final stationUsed = durableLiveIds.length + unsnapshotted;
-    if (!candidateAlreadyCounted && stationUsed >= _maxConcurrentWork) {
+    if (!candidateAlreadyCounted && stationUsed >= _maxAgents) {
       return false;
     }
-    final substationCap = config.maxConcurrentWork ?? _maxConcurrentWork;
+    final substationCap = config.maxConcurrentWork ?? _maxAgents;
     if (!candidateAlreadyCounted && scope._mountedIds.length >= substationCap) {
       return false;
     }

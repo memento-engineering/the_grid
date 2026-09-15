@@ -141,6 +141,7 @@ void main() {
       });
       expect(body['admission'], {
         'maxAgents': 4,
+        'maxAgentsSource': 'boot',
         'reservations': [
           {
             'bead': 'tg-null-session',
@@ -492,6 +493,48 @@ void main() {
           );
         }
 
+        final admission = await _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '13',
+          idempotencyKey: 'admission-1',
+          body: const {
+            'id': 'admission-1',
+            'method': 'grid/admission/set',
+            'params': {'maxAgents': 6},
+          },
+        );
+        expect(admission.statusCode, HttpStatus.ok);
+        expect(jsonDecode(admission.body), {
+          'id': 'admission-1',
+          'result': {'ok': true},
+        });
+        expect(
+          handler.calls.last,
+          const GridCommandRequest.setAdmissionCeiling(maxAgents: 6),
+        );
+        for (final maxAgents in const [0, -1]) {
+          final id = 'admission-$maxAgents';
+          final forwarded = await _post(
+            control.url,
+            '/command',
+            token: 't',
+            fence: '13',
+            idempotencyKey: id,
+            body: {
+              'id': id,
+              'method': 'grid/admission/set',
+              'params': {'maxAgents': maxAgents},
+            },
+          );
+          expect(forwarded.statusCode, HttpStatus.ok);
+          expect(
+            handler.calls.last,
+            GridCommandRequest.setAdmissionCeiling(maxAgents: maxAgents),
+          );
+        }
+
         final refused = _FakeCommandHandler(
           result: const GridCommandResult.refused(
             code: 'gate_closed',
@@ -618,6 +661,46 @@ void main() {
         expect(handler.calls, isEmpty);
       },
     );
+
+    test('POST /command rejects malformed admission ceiling params', () async {
+      final handler = _FakeCommandHandler();
+      final control = await StationControl.start(
+        port: 0,
+        token: 't',
+        view: _sampleStatus,
+        commandHandler: handler,
+      );
+      addTearDown(control.dispose);
+
+      for (final entry in <Map<String, Object?>>[
+        const {},
+        const {'maxAgents': '6'},
+        const {'maxAgents': 6, 'extra': true},
+      ]) {
+        final response = await _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '1',
+          idempotencyKey: 'bad-admission-${entry.length}-${entry.hashCode}',
+          body: {
+            'id': 'bad-admission',
+            'method': 'grid/admission/set',
+            'params': entry,
+          },
+        );
+        expect(response.statusCode, HttpStatus.badRequest);
+        expect(
+          (jsonDecode(response.body) as Map<String, Object?>)['error'],
+          isA<Map<String, Object?>>().having(
+            (value) => value['code'],
+            'code',
+            'invalid_request',
+          ),
+        );
+      }
+      expect(handler.calls, isEmpty);
+    });
 
     test('decodes held-session list and collect commands', () async {
       final handler = _FakeCommandHandler();
@@ -1046,6 +1129,7 @@ void main() {
         );
         final replacementAdmission = StationAdmissionStatus(
           maxAgents: 2,
+          maxAgentsSource: StationAdmissionCeilingSource.control,
           reservations: const [],
           refusals: [
             (
@@ -1055,23 +1139,37 @@ void main() {
             ),
           ],
         );
+        var currentAdmission = initialAdmission;
+        final handler = _FakeCommandHandler(
+          onCall: (request) async {
+            expect(
+              request,
+              const GridCommandRequest.setAdmissionCeiling(maxAgents: 2),
+            );
+            currentAdmission = replacementAdmission;
+            return const GridCommandResult.completed(
+              message: 'changed',
+              value: {'maxAgents': 2, 'maxAgentsSource': 'control'},
+            );
+          },
+        );
         final control = await StationControl.start(
           port: 0,
           token: 't',
           view: () async {
             calls++;
             if (calls == 1) {
-              return _sampleStatus(ready: 1, admission: initialAdmission);
+              return _sampleStatus(ready: 1, admission: currentAdmission);
             }
             if (calls == 2) {
               refreshStarted.complete();
               await releaseRefresh.future;
-              return _sampleStatus(ready: 2, admission: replacementAdmission);
+              return _sampleStatus(ready: 2, admission: currentAdmission);
             }
             if (!failedRefresh.isCompleted) failedRefresh.complete();
             throw StateError('refresh failed');
           },
-          commandHandler: _FakeCommandHandler(),
+          commandHandler: handler,
           statusSnapshotInterval: const Duration(milliseconds: 20),
         );
         addTearDown(control.dispose);
@@ -1090,6 +1188,7 @@ void main() {
         );
         expect((jsonDecode(cached.body) as Map<String, Object?>)['admission'], {
           'maxAgents': 4,
+          'maxAgentsSource': 'boot',
           'reservations': [
             {
               'bead': 'tg-initial',
@@ -1098,6 +1197,24 @@ void main() {
             },
           ],
           'refusals': <Object?>[],
+        });
+
+        final changed = await _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '1',
+          idempotencyKey: 'live-admission-change',
+          body: const {
+            'id': 'live-admission-change',
+            'method': 'grid/admission/set',
+            'params': {'maxAgents': 2},
+          },
+        );
+        expect(changed.statusCode, HttpStatus.ok);
+        expect(jsonDecode(changed.body), {
+          'id': 'live-admission-change',
+          'result': {'maxAgents': 2, 'maxAgentsSource': 'control'},
         });
 
         releaseRefresh.complete();
@@ -1112,6 +1229,7 @@ void main() {
           (jsonDecode(refreshed.body) as Map<String, Object?>)['admission'],
           {
             'maxAgents': 2,
+            'maxAgentsSource': 'control',
             'reservations': <Object?>[],
             'refusals': [
               {
@@ -1430,11 +1548,13 @@ final class _FakeCommandHandler implements GridCommandHandler {
     ),
     this.block,
     this.throwOnCall = false,
+    this.onCall,
   });
 
   final GridCommandResult result;
   final Completer<void>? block;
   final bool throwOnCall;
+  final Future<GridCommandResult> Function(GridCommandRequest request)? onCall;
   final List<GridCommandRequest> calls = [];
 
   @override
@@ -1442,6 +1562,7 @@ final class _FakeCommandHandler implements GridCommandHandler {
     calls.add(request);
     await block?.future;
     if (throwOnCall) throw StateError('fake failure');
+    if (onCall case final callback?) return callback(request);
     return result;
   }
 }

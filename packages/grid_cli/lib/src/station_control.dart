@@ -282,6 +282,7 @@ class StationStatus {
     if (admission case final admission?)
       'admission': <String, Object?>{
         'maxAgents': admission.maxAgents,
+        'maxAgentsSource': admission.maxAgentsSource.name,
         'reservations': <Object?>[
           for (final row in admission.reservations)
             <String, Object?>{
@@ -846,6 +847,11 @@ class StationControl implements ExplorationTransport {
         command = method == 'grid/session/pause'
             ? GridCommandRequest.pauseSession(beadId: beadId)
             : GridCommandRequest.resumeSession(beadId: beadId);
+      }
+    } else if (method == 'grid/admission/set') {
+      final maxAgents = params['maxAgents'];
+      if (params.length == 1 && maxAgents is int) {
+        command = GridCommandRequest.setAdmissionCeiling(maxAgents: maxAgents);
       }
     } else if (method == 'grid/bead/board') {
       final stores = params['stores'] ?? const <Object?>[];

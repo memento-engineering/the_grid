@@ -11,6 +11,10 @@ import '../roster/roster_outcome.dart';
 import '../roster/substation_roster.dart';
 import '../work/work_assembly.dart' show SubstationWorkSpec;
 
+/// Sets a resident authority's ceiling and returns its resolved snapshot.
+typedef StationAdmissionCeilingSetter =
+    StationAdmissionStatus? Function(int maxAgents);
+
 /// The resident read/write rails for one substation work store.
 final class WorkCommandStore {
   /// Creates one resident work-store command binding.
@@ -53,6 +57,7 @@ final class StationCommandHandler implements GridCommandHandler {
     StationTrajectoryRecorder? recorder,
     TrajectoryStepSnapshot Function()? stepSnapshot,
     int Function(String sessionId)? headEpochForSession,
+    StationAdmissionCeilingSetter? setAdmissionCeiling,
     DualReadMode dualReadMode = DualReadMode.off,
     DualReadAccounting? dualReadAccounting,
   }) : _stateSource = stateSource,
@@ -62,6 +67,7 @@ final class StationCommandHandler implements GridCommandHandler {
        _recorder = recorder ?? StationTrajectoryRecorder.disabled(),
        _stepSnapshot = stepSnapshot,
        _headEpochForSession = headEpochForSession,
+       _setAdmissionCeiling = setAdmissionCeiling,
        _dualReadMode = dualReadMode,
        _dualReadAccounting = dualReadAccounting,
        _listBeadWorktrees = listBeadWorktrees,
@@ -93,6 +99,7 @@ final class StationCommandHandler implements GridCommandHandler {
   /// and a boot that has not disengaged.
   final TrajectoryStepSnapshot Function()? _stepSnapshot;
   final int Function(String sessionId)? _headEpochForSession;
+  final StationAdmissionCeilingSetter? _setAdmissionCeiling;
   final DualReadMode _dualReadMode;
 
   /// The boot's SHARED accounting — the same object the bridge's passes use,
@@ -299,6 +306,9 @@ final class StationCommandHandler implements GridCommandHandler {
       beadId: beadId,
       pause: false,
     ),
+    GridSetAdmissionCeiling(:final maxAgents) => _setAdmissionCeilingCommand(
+      maxAgents,
+    ),
     GridBeadBoard(
       :final stores,
       :final statuses,
@@ -321,6 +331,29 @@ final class StationCommandHandler implements GridCommandHandler {
       force: force,
     ),
   };
+
+  Future<GridCommandResult> _setAdmissionCeilingCommand(int maxAgents) async {
+    if (maxAgents <= 0) {
+      return _refused(
+        'invalid_max_agents',
+        'The admission ceiling must be greater than zero.',
+      );
+    }
+    final status = _setAdmissionCeiling?.call(maxAgents);
+    if (status == null) {
+      return _refused(
+        'admission_unavailable',
+        'This station cannot change its admission ceiling.',
+      );
+    }
+    return GridCommandResult.completed(
+      message: 'Admission ceiling set to ${status.maxAgents}.',
+      value: {
+        'maxAgents': status.maxAgents,
+        'maxAgentsSource': status.maxAgentsSource.name,
+      },
+    );
+  }
 
   Future<GridCommandResult> _listHeldSessions() async {
     final listBeadWorktrees = _listBeadWorktrees;

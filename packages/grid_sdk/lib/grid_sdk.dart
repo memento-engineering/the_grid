@@ -252,6 +252,7 @@ export 'package:grid_engine/grid_engine.dart'
         RelayVerdict,
         ResultMetricFields,
         ResultTransport,
+        StationAdmissionCeilingSource,
         StationAdmissionStatus,
         StrandedWork,
         TreeProjector,
