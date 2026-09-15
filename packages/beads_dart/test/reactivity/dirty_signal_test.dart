@@ -2,10 +2,24 @@ import 'dart:async';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:beads_dart/src/reactivity/dirty_signal.dart';
+import 'package:beads_dart/src/reactivity/snapshot_reader.dart';
 import 'package:test/test.dart';
 import 'package:watcher/watcher.dart';
 
 import '../support/reactivity_fakes.dart';
+
+class _ScriptedChangeProbe implements ChangeProbe {
+  _ScriptedChangeProbe(this._call);
+
+  final Future<String> Function(int call) _call;
+  int calls = 0;
+
+  @override
+  Future<String> probe() {
+    calls++;
+    return _call(calls);
+  }
+}
 
 void main() {
   group('WorkspaceBeadsWatcher', () {
@@ -138,6 +152,98 @@ void main() {
         source.dispose();
       });
     });
+
+    test(
+      'disposal during an in-flight changed probe emits nothing and does not throw',
+      () {
+        fakeAsync((async) {
+          final signals = <DirtySignal>[];
+          final uncaught = <Object>[];
+          late Completer<String> heldChange;
+          late _ScriptedChangeProbe probe;
+          late WorkingSetProbeSource source;
+          runZonedGuarded(() {
+            heldChange = Completer<String>();
+            probe = _ScriptedChangeProbe((call) {
+              return switch (call) {
+                1 => Future.value('h1'),
+                2 => heldChange.future,
+                _ => Future.error(StateError('unexpected probe call $call')),
+              };
+            });
+            source = WorkingSetProbeSource(
+              probe,
+              interval: const Duration(seconds: 1),
+            );
+            source.signals.listen(signals.add);
+          }, (error, _) => uncaught.add(error));
+
+          async.elapse(const Duration(seconds: 1));
+          async.flushMicrotasks();
+          expect(probe.calls, 1);
+          expect(signals, isEmpty, reason: 'first probe is the baseline');
+
+          async.elapse(const Duration(seconds: 1));
+          expect(probe.calls, 2);
+          source.dispose();
+          heldChange.complete('h2');
+          async.flushMicrotasks();
+
+          expect(signals, isEmpty);
+          expect(uncaught, isEmpty);
+          async.elapse(const Duration(seconds: 5));
+          async.flushMicrotasks();
+          expect(probe.calls, 2, reason: 'dispose cancels later timer calls');
+          expect(uncaught, isEmpty);
+        });
+      },
+    );
+
+    test(
+      'disposal during an in-flight fifth failure emits nothing and does not throw',
+      () {
+        fakeAsync((async) {
+          final signals = <DirtySignal>[];
+          final uncaught = <Object>[];
+          late Completer<String> heldFailure;
+          late _ScriptedChangeProbe probe;
+          late WorkingSetProbeSource source;
+          runZonedGuarded(() {
+            heldFailure = Completer<String>();
+            probe = _ScriptedChangeProbe((call) {
+              if (call < 5) {
+                return Future.error(StateError('probe failure $call'));
+              }
+              if (call == 5) return heldFailure.future;
+              return Future.error(StateError('unexpected probe call $call'));
+            });
+            source = WorkingSetProbeSource(
+              probe,
+              interval: const Duration(seconds: 1),
+            );
+            source.signals.listen(signals.add);
+          }, (error, _) => uncaught.add(error));
+
+          async.elapse(const Duration(seconds: 4));
+          async.flushMicrotasks();
+          expect(probe.calls, 4);
+          expect(signals, isEmpty);
+
+          async.elapse(const Duration(seconds: 1));
+          expect(probe.calls, 5);
+          source.dispose();
+          heldFailure.completeError(StateError('probe failure 5'));
+          async.flushMicrotasks();
+
+          expect(signals, isEmpty);
+          expect(uncaught, isEmpty);
+          async.elapse(const Duration(seconds: 5));
+          async.flushMicrotasks();
+          expect(probe.calls, 5, reason: 'dispose cancels later timer calls');
+          expect(uncaught, isEmpty);
+        });
+      },
+    );
   });
 
   group('PollingTickerSource', () {

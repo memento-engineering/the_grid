@@ -107,13 +107,14 @@ class WorkingSetProbeSource implements DirtySignalSource {
     try {
       final hash = await probe.probe();
       _consecutiveFailures = 0;
-      if (_lastHash != null && hash != _lastHash) {
+      if (!_controller.isClosed && _lastHash != null && hash != _lastHash) {
         _controller.add(DirtySignal(DirtyOrigin.workingSetProbe, detail: hash));
       }
       _lastHash = hash;
     } on Object catch (error) {
       _consecutiveFailures++;
-      if (_consecutiveFailures % _probeDeadThreshold == 0) {
+      if (!_controller.isClosed &&
+          _consecutiveFailures % _probeDeadThreshold == 0) {
         _controller.add(
           DirtySignal(
             DirtyOrigin.workingSetProbe,
