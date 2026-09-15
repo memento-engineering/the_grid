@@ -75,6 +75,19 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
   /// `instantiateMolecule`'s plan-local keys to receive.
   Map<String, String> graphApplyIds = const <String, String>{};
 
+  /// The object payload returned by `bd prune --json`.
+  Map<String, dynamic> prunePayload = const {
+    'pruned_count': 0,
+    'dependencies': 0,
+  };
+
+  /// When set, the verification read of a prune shield returns this body.
+  String? shieldVerificationDescriptionOverride;
+
+  /// When set, the verification read of a prune shield returns this status.
+  BeadStatus? shieldVerificationStatusOverride;
+  int _shieldListCount = 0;
+
   @override
   Future<Bead?> beadById(String id, {required Set<IssueType> types}) async {
     final matches = exportBeads.where(
@@ -178,6 +191,40 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
         ),
       );
     }
+    if (sub == 'list') {
+      final externalRefIndex = args.indexOf('--external-ref');
+      final externalRef = externalRefIndex >= 0
+          ? args[externalRefIndex + 1]
+          : null;
+      var matches = exportBeads
+          .where((bead) => bead.externalRef == externalRef)
+          .toList(growable: false);
+      if (externalRef?.startsWith('grid:state-store-prune-shield:') ?? false) {
+        _shieldListCount++;
+        final override = shieldVerificationDescriptionOverride;
+        final statusOverride = shieldVerificationStatusOverride;
+        if (_shieldListCount > 1 &&
+            (override != null || statusOverride != null)) {
+          matches = [
+            for (final bead in matches)
+              bead.copyWith(
+                description: override ?? bead.description,
+                status: statusOverride ?? bead.status,
+              ),
+          ];
+        }
+      }
+      return Future<BdResult>.value(
+        BdResult(
+          exitCode: 0,
+          stdout: jsonEncode({
+            'schema_version': 1,
+            'data': [for (final bead in matches) bead.toJson()],
+          }),
+          stderr: '',
+        ),
+      );
+    }
     if (sub == 'export') {
       return Future<BdResult>.value(
         const BdResult(
@@ -210,25 +257,73 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
         ),
       );
     }
-    if (sub == 'update' && args.length > 1) {
-      final notesIndex = args.indexOf('--notes');
-      final appendIndex = args.indexOf('--append-notes');
-      if (notesIndex >= 0 || appendIndex >= 0) {
-        final id = args[1];
+    if (sub == 'create') {
+      final externalRefIndex = args.indexOf('--external-ref');
+      final externalRef = externalRefIndex >= 0
+          ? args[externalRefIndex + 1]
+          : null;
+      if (externalRef?.startsWith('grid:state-store-prune-shield:') ?? false) {
+        final titleIndex = args.indexOf('--title');
+        final typeIndex = args.indexOf('--type');
+        final priorityIndex = args.indexOf('--priority');
         exportBeads = [
-          for (final bead in exportBeads)
-            if (bead.id != id)
-              bead
-            else if (notesIndex >= 0)
-              bead.copyWith(notes: args[notesIndex + 1])
-            else
-              bead.copyWith(
-                notes: bead.notes.isEmpty
-                    ? args[appendIndex + 1]
-                    : '${bead.notes}\n${args[appendIndex + 1]}',
-              ),
+          ...exportBeads,
+          Bead(
+            id: _createdId,
+            title: args[titleIndex + 1],
+            issueType: IssueType(args[typeIndex + 1]),
+            priority: int.parse(args[priorityIndex + 1]),
+            externalRef: externalRef,
+          ),
         ];
       }
+    }
+    if (sub == 'update' && args.length > 1) {
+      final id = args[1];
+      final notesIndex = args.indexOf('--notes');
+      final appendIndex = args.indexOf('--append-notes');
+      final bodyFileIndex = args.indexOf('--body-file');
+      final metadata = <String, String>{};
+      for (var i = 0; i < args.length - 1; i++) {
+        if (args[i] != '--set-metadata') continue;
+        final assignment = args[i + 1];
+        final separator = assignment.indexOf('=');
+        if (separator < 0) continue;
+        metadata[assignment.substring(0, separator)] = assignment.substring(
+          separator + 1,
+        );
+      }
+      exportBeads = [
+        for (final bead in exportBeads)
+          if (bead.id != id)
+            bead
+          else
+            bead.copyWith(
+              description:
+                  bodyFileIndex >= 0 &&
+                      args[bodyFileIndex + 1] == '-' &&
+                      stdin != null
+                  ? stdin
+                  : bead.description,
+              notes: notesIndex >= 0
+                  ? args[notesIndex + 1]
+                  : appendIndex >= 0
+                  ? bead.notes.isEmpty
+                        ? args[appendIndex + 1]
+                        : '${bead.notes}\n${args[appendIndex + 1]}'
+                  : bead.notes,
+              metadata: {...bead.metadata, ...metadata},
+            ),
+      ];
+    }
+    if (sub == 'prune') {
+      return Future<BdResult>.value(
+        BdResult(
+          exitCode: 0,
+          stdout: jsonEncode({'schema_version': 1, 'data': prunePayload}),
+          stderr: '',
+        ),
+      );
     }
     final data = switch (sub) {
       'create' => '{"id":"$_createdId"}',
@@ -272,7 +367,7 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
 
   /// True if EVERY mutation carried `--actor grid-controller`.
   bool get everyMutationHasActor {
-    const mutations = {'create', 'update', 'close', 'delete', 'batch'};
+    const mutations = {'create', 'update', 'close', 'delete', 'batch', 'prune'};
     for (final c in calls) {
       if (c.isEmpty || !mutations.contains(c.first)) continue;
       if (c.length == 2 && c[0] == 'update' && c[1] == '--help') continue;

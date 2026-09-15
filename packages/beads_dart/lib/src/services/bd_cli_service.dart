@@ -20,6 +20,9 @@ import 'beads_workspace.dart';
 
 enum _GuardedWriteSupport { supported, unsupported, indeterminate }
 
+/// Counts returned by bd after pruning old closed records in one bulk call.
+typedef BdPruneReceipt = ({int beadsRemoved, int dependencyRowsRemoved});
+
 DoltMode _discoverDoltMode(BdRunner runner) {
   if (runner is! ProcessBdRunner) return DoltMode.unknown;
   return BeadsWorkspace.discover(start: runner.workspaceRoot)?.mode ??
@@ -764,6 +767,41 @@ class BdCliService {
     await _runEnvelope(deleteArgs(id));
   }
 
+  /// `bd prune --older-than <N>d --force --json --actor grid-controller` —
+  /// deletes old closed records and their dependency rows in one bulk call.
+  ///
+  /// `--force` is bd prune's non-interactive confirmation switch. This method
+  /// never selects records itself and never adds `--ignore-references`; its
+  /// caller must establish the fail-closed protection scope first.
+  ///
+  /// The call supplies no timeout override, so it keeps
+  /// [ProcessBdRunner.defaultTimeout]. [pourTimeout] remains exclusive to
+  /// [applyGraph].
+  Future<BdPruneReceipt> prune({required int olderThanDays}) async {
+    if (olderThanDays < 1) {
+      throw ArgumentError.value(
+        olderThanDays,
+        'olderThanDays',
+        'must be at least one day',
+      );
+    }
+    final env = await _runEnvelope(pruneArgs(olderThanDays));
+    final data = env.dataMap;
+    final prunedCount = data['pruned_count'];
+    if (prunedCount is! int) {
+      throw const FormatException(
+        'bd prune payload field pruned_count must be an integer',
+      );
+    }
+    final dependencies = data['dependencies'];
+    if (dependencies is! int) {
+      throw const FormatException(
+        'bd prune payload field dependencies must be an integer',
+      );
+    }
+    return (beadsRemoved: prunedCount, dependencyRowsRemoved: dependencies);
+  }
+
   /// `bd create --graph <plan-file> [--ephemeral] --json` — the atomic
   /// graph-apply pour (ADR-0000 A15 step 2): one transaction / one
   /// `DOLT_COMMIT`. Returns the `key → bead-id` map (the envelope's
@@ -1048,6 +1086,16 @@ class BdCliService {
     'delete',
     id,
     '--cascade',
+    '--force',
+    '--json',
+    ..._actorArgs,
+  ];
+
+  /// `bd prune --older-than <N>d --force --json --actor grid-controller`.
+  List<String> pruneArgs(int olderThanDays) => [
+    'prune',
+    '--older-than',
+    '${olderThanDays}d',
     '--force',
     '--json',
     ..._actorArgs,

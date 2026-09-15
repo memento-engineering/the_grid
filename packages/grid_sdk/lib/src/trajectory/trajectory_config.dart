@@ -90,6 +90,10 @@ final class CutPostureRefused implements Exception {
 /// caps the working set; online, no quiesced window, never bd's proxy.
 const Duration kDefaultTrajectoryGcInterval = Duration(minutes: 5);
 
+/// Closed session graphs strictly older than this are eligible for the
+/// station-owned state-store prune on a fenced trajectory tick.
+const Duration kDefaultStateStorePruneAge = Duration(days: 3);
+
 /// §2.5's append-queue bound: past it an incoming append is dropped and
 /// counted, never blocked on.
 const int kDefaultTrajectoryQueueBound = 4096;
@@ -114,6 +118,7 @@ final class TrajectoryConfig {
     this.tickInterval = kDefaultTickInterval,
     this.obligationQueryExtensions = const <ObligationQuery>[],
     this.gcInterval = kDefaultTrajectoryGcInterval,
+    Duration stateStorePruneAge = kDefaultStateStorePruneAge,
     this.commitCadence = const Duration(seconds: 30),
     this.queueBound = kDefaultTrajectoryQueueBound,
     this.livenessThreshold = kDefaultLivenessThreshold,
@@ -123,6 +128,7 @@ final class TrajectoryConfig {
     this.soakWindowEpoch = 0,
     this.reconcileLedgerCloses = true,
   }) : assert(soakWindowEpoch >= 0),
+       _stateStorePruneAge = stateStorePruneAge,
        breakGlassReason = null,
        _requestedMode = mode,
        _requestedDualRead = dualRead,
@@ -141,6 +147,7 @@ final class TrajectoryConfig {
       tickInterval = source.tickInterval,
       obligationQueryExtensions = source.obligationQueryExtensions,
       gcInterval = source.gcInterval,
+      _stateStorePruneAge = source.stateStorePruneAge,
       commitCadence = source.commitCadence,
       queueBound = source.queueBound,
       livenessThreshold = source.livenessThreshold,
@@ -160,6 +167,7 @@ final class TrajectoryConfig {
       tickInterval = source.tickInterval,
       obligationQueryExtensions = source.obligationQueryExtensions,
       gcInterval = source.gcInterval,
+      _stateStorePruneAge = source.stateStorePruneAge,
       commitCadence = source.commitCadence,
       queueBound = source.queueBound,
       livenessThreshold = source.livenessThreshold,
@@ -182,6 +190,7 @@ final class TrajectoryConfig {
         <ObligationQuery>[...source.obligationQueryExtensions, ...extensions],
       ),
       gcInterval = source.gcInterval,
+      _stateStorePruneAge = source.stateStorePruneAge,
       commitCadence = source.commitCadence,
       queueBound = source.queueBound,
       livenessThreshold = source.livenessThreshold,
@@ -345,6 +354,20 @@ final class TrajectoryConfig {
 
   /// The `CALL DOLT_GC()` cadence the harness owns (§1.2 / M2).
   final Duration gcInterval;
+
+  final Duration _stateStorePruneAge;
+
+  /// Age beyond which exposure-cleared closed session graphs are pruned.
+  ///
+  /// This station value is positive and expressed in whole days because the
+  /// composed `bd prune --older-than <N>d` primitive has that granularity.
+  Duration get stateStorePruneAge {
+    assert(_stateStorePruneAge > Duration.zero);
+    assert(
+      _stateStorePruneAge.inMicroseconds % Duration.microsecondsPerDay == 0,
+    );
+    return _stateStorePruneAge;
+  }
 
   /// The appender's dolt-commit cadence (Stage-0 default; the hard 10 s
   /// minimum interval and the 512-row threshold stay appender-owned).

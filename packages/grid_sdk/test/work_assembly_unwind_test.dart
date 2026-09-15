@@ -1620,6 +1620,7 @@ void main() {
         'onRefusal',
         'onOrphan',
         'onUnresolvedExternalDep',
+        'onStateStorePruneReceipt',
         'transport',
         'wedgeThreshold',
         'wedgePollInterval',

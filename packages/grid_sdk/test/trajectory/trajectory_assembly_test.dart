@@ -3,6 +3,7 @@
 // forces `disabled` (§1.3), and `StationWorkRuntime` lifecycles it — up
 // inside `start()` after the sources, down inside `shutdown()` before them,
 // never blocking either.
+import 'dart:async';
 import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart';
@@ -17,6 +18,8 @@ import 'package:grid_engine/grid_engine.dart'
         StationDriver,
         WorkSessionLiveness;
 import 'package:grid_sdk/grid_sdk.dart';
+import 'package:grid_sdk/src/stores/state_store_pruner.dart';
+import 'package:grid_sdk/src/trajectory/state_store_prune_obligation.dart';
 import 'package:grid_sdk/src/trajectory/work_session_liveness_obligation.dart';
 import 'package:grid_trajectory/grid_trajectory.dart'
     show SqlResult, TrajectoryDb;
@@ -148,6 +151,7 @@ void main() {
     TrajectoryConfig trajectoryConfig = const TrajectoryConfig(),
     TrajectoryHarness? trajectoryOverride,
     StationWorkDriverBuilder? driverBuilder,
+    MaintenanceSink? onStateStorePruneReceipt,
   }) => assembleStationWork(
     stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
     substations: [SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj')],
@@ -156,6 +160,7 @@ void main() {
     trajectoryConfig: trajectoryConfig,
     trajectoryOverride: trajectoryOverride,
     driverBuilder: driverBuilder,
+    onStateStorePruneReceipt: onStateStorePruneReceipt,
   );
 
   test("the assembly vends the harness's sockets", () async {
@@ -232,7 +237,7 @@ void main() {
   );
 
   test(
-    'station assembly appends one liveness obligation after authored extensions',
+    'station assembly appends liveness then prune after authored extensions',
     () async {
       const first = _NoOpQuery('first-extension');
       const second = _NoOpQuery('second-extension');
@@ -250,9 +255,15 @@ void main() {
         same(first),
         same(second),
         isA<WorkSessionLivenessObligation>(),
+        isA<StateStorePruneObligation>(),
       ]);
       expect(
-        work.trajectory.config.obligationQueryExtensions.last,
+        work.trajectory.config.obligationQueryExtensions[work
+                .trajectory
+                .config
+                .obligationQueryExtensions
+                .length -
+            2],
         isA<WorkSessionLivenessObligation>().having(
           (obligation) => obligation.liveness,
           'liveness',
@@ -261,7 +272,12 @@ void main() {
       );
       expect(defaultWork.trajectory.config.obligationQueryExtensions, [
         isA<WorkSessionLivenessObligation>(),
+        isA<StateStorePruneObligation>(),
       ]);
+      expect(
+        work.trajectory.config.obligationQueryExtensions.last,
+        isA<StateStorePruneObligation>(),
+      );
       expect(const TrajectoryConfig().obligationQueryExtensions, isEmpty);
     },
   );
@@ -340,6 +356,7 @@ void main() {
       tickInterval: Duration(seconds: 7),
       obligationQueryExtensions: [first, second],
       gcInterval: Duration(minutes: 7),
+      stateStorePruneAge: Duration(days: 5),
       commitCadence: Duration(seconds: 31),
       queueBound: 123,
       livenessThreshold: Duration(minutes: 8),
@@ -354,6 +371,7 @@ void main() {
     expect(cloned.dualRead, source.dualRead);
     expect(cloned.tickInterval, source.tickInterval);
     expect(cloned.gcInterval, source.gcInterval);
+    expect(cloned.stateStorePruneAge, source.stateStorePruneAge);
     expect(cloned.commitCadence, source.commitCadence);
     expect(cloned.queueBound, source.queueBound);
     expect(cloned.livenessThreshold, source.livenessThreshold);
@@ -374,6 +392,13 @@ void main() {
     expect(
       cloned.cutPostureRefusal.toString(),
       source.cutPostureRefusal.toString(),
+    );
+    expect(source.asDisabled.stateStorePruneAge, const Duration(days: 5));
+    expect(
+      source
+          .resolveForAssembly(dryRun: false, breakGlassReason: 'operator')
+          .stateStorePruneAge,
+      const Duration(days: 5),
     );
 
     final now = DateTime.utc(2026, 9, 12, 12);
@@ -419,6 +444,100 @@ void main() {
     expect(adapterSource, isNot(contains('Stream.periodic')));
     expect(adapterSource, isNot(contains('TrajectoryTick(')));
   });
+
+  test(
+    'state-store prune config defaults, validation, and fenced repair',
+    () async {
+      expect(
+        const TrajectoryConfig().stateStorePruneAge,
+        kDefaultStateStorePruneAge,
+      );
+      expect(kDefaultStateStorePruneAge, const Duration(days: 3));
+      for (final invalid in [
+        Duration.zero,
+        const Duration(days: -1),
+        const Duration(hours: 36),
+      ]) {
+        expect(
+          () =>
+              TrajectoryConfig(stateStorePruneAge: invalid).stateStorePruneAge,
+          throwsA(isA<AssertionError>()),
+        );
+      }
+
+      final receipts = <String>[];
+      final work = await assemble(onStateStorePruneReceipt: receipts.add);
+      addTearDown(work.shutdown);
+      final obligation = work.trajectory.config.obligationQueryExtensions
+          .whereType<StateStorePruneObligation>()
+          .single;
+      expect(obligation.name, 'state-store-prune');
+      expect(obligation.sql, 'SELECT 1 AS fenced_tick');
+      expect(obligation.parameters, isEmpty);
+
+      expect(await obligation.repair(const []), isEmpty);
+      expect(receipts, hasLength(1));
+      expect(
+        receipts.single,
+        startsWith('grid: state-store prune skipped '),
+        reason: 'the unstarted dry-run sources remain inert and unavailable',
+      );
+
+      final executeGate = Completer<void>();
+      var executeCalls = 0;
+      final awaited = StateStorePruneObligation(
+        StateStorePruner(
+          age: const Duration(days: 3),
+          freshSnapshots: () async => (
+            state: GraphSnapshot.fromParts(
+              beads: [
+                Bead(
+                  id: 'session',
+                  issueType: GridIssueTypes.session,
+                  status: BeadStatus.closed,
+                  closedAt: DateTime.utc(2026, 9, 1),
+                  metadata: const {SessionBeadKeys.workBead: 'work'},
+                ),
+              ],
+              dependencies: const [],
+              readyIds: const [],
+              capturedAt: DateTime.utc(2026, 9, 14),
+            ),
+            work: GraphSnapshot.fromParts(
+              beads: [
+                Bead(
+                  id: 'work',
+                  status: BeadStatus.closed,
+                  closedAt: DateTime.utc(2026, 9, 1),
+                ),
+              ],
+              dependencies: const [],
+              readyIds: const [],
+              capturedAt: DateTime.utc(2026, 9, 14),
+            ),
+          ),
+          execute: ({required protectedIds, required olderThanDays}) async {
+            executeCalls++;
+            await executeGate.future;
+            return (beadsRemoved: 1, dependencyRowsRemoved: 0);
+          },
+          now: () => DateTime.utc(2026, 9, 14),
+          out: (_) {},
+        ),
+      );
+      var returned = false;
+      final repair = awaited.repair(const []).then((value) {
+        returned = true;
+        return value;
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(executeCalls, 1);
+      expect(returned, isFalse);
+      executeGate.complete();
+      expect(await repair, isEmpty);
+      expect(returned, isTrue);
+    },
+  );
 
   test('the runtime lifecycles the harness: start() brings it up, shutdown() '
       'settles it before the sources (§1.2)', () async {
