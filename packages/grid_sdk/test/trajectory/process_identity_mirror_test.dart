@@ -133,7 +133,7 @@ void main() {
     expect(mirror.snapshot.lastTickAt, tickAt);
   });
 
-  test('health compromise latches downward', () {
+  test('a supervised resumed heartbeat atomically restores live health', () {
     final mirror = ProcessIdentityMirror();
     mirror.seed(
       rows: const [],
@@ -141,8 +141,27 @@ void main() {
       stale: false,
       foldHeadSeq: 0,
     );
+    final changed = <TrajectoryProcessIdentitySnapshot>[];
+    mirror.addListener(changed.add, fireImmediately: false);
+
     expect(mirror.latchCompromised(), isTrue);
     expect(mirror.latchCompromised(), isFalse);
     expect(mirror.snapshot.health, TrajectorySnapshotHealth.compromised);
+
+    final ordinaryAt = DateTime.utc(2026, 9, 13, 1);
+    mirror.noteTickAt(ordinaryAt);
+    expect(mirror.snapshot.lastTickAt, ordinaryAt);
+    expect(mirror.snapshot.health, TrajectorySnapshotHealth.compromised);
+
+    final resumedAt = DateTime.utc(2026, 9, 13, 2);
+    expect(mirror.noteResumedTickAt(resumedAt), isTrue);
+    expect(mirror.snapshot.lastTickAt, resumedAt);
+    expect(mirror.snapshot.health, TrajectorySnapshotHealth.live);
+
+    final secondResumedAt = DateTime.utc(2026, 9, 13, 3);
+    expect(mirror.noteResumedTickAt(secondResumedAt), isFalse);
+    expect(mirror.snapshot.lastTickAt, secondResumedAt);
+    expect(mirror.snapshot.health, TrajectorySnapshotHealth.live);
+    expect(changed, hasLength(4));
   });
 }

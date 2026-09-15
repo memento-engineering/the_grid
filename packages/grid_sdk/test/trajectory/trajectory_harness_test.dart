@@ -20,7 +20,8 @@ import 'package:grid_engine/grid_engine.dart'
         SessionHeadWon,
         TerminalReconcileOutcome,
         TerminalReconcileRequest,
-        TrajectorySnapshotHealth;
+        TrajectorySnapshotHealth,
+        kWorktreeOutstandingStaleAfter;
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:grid_trajectory/grid_trajectory.dart';
@@ -223,6 +224,7 @@ final class _FakeAppender extends TrajectoryAppender {
   Object? appendError;
   ReconnectOutcome reconnectResult = const ReconnectResumed(epoch: 1);
   Object? commitError;
+  Completer<void>? commitCompleter;
   bool fakeInert = false;
   bool fakeHalted = false;
 
@@ -303,6 +305,7 @@ final class _FakeAppender extends TrajectoryAppender {
     calls.add('commit');
     final error = commitError;
     if (error != null) throw error;
+    await commitCompleter?.future;
   }
 
   @override
@@ -314,15 +317,24 @@ final class _FakeAppender extends TrajectoryAppender {
 
 final class _FakeTimer implements Timer {
   bool cancelled = false;
+  bool fired = false;
 
   @override
   void cancel() => cancelled = true;
 
   @override
-  bool get isActive => !cancelled;
+  bool get isActive => !cancelled && !fired;
 
   @override
   int get tick => 0;
+}
+
+typedef _ScheduledTimer = (Duration, void Function(), _FakeTimer);
+
+void _fireFakeTimer(_ScheduledTimer scheduled) {
+  if (!scheduled.$3.isActive) return;
+  scheduled.$3.fired = true;
+  scheduled.$2();
 }
 
 final class _FakeStopwatch implements Stopwatch {
@@ -443,7 +455,7 @@ _decisionBearingRecorderCalls() => [
 void main() {
   late Directory tmp;
   late List<(String, Map<String, String>)> flares;
-  late List<(Duration, void Function(), _FakeTimer)> timers;
+  late List<_ScheduledTimer> timers;
   late List<_FakeDb> connected;
   late _FakeAppender appender;
   DateTime now = DateTime.utc(2026, 8, 31, 12);
@@ -1718,6 +1730,13 @@ void main() {
         expect(h.status.appended, 1, reason: 'the queue drained first');
         expect(appender.calls.last, 'commit', reason: 'the boundary flush');
         expect(h.tick!.isArmed, isFalse, reason: 'tick disposed');
+        expect(
+          timers.where(
+            (timer) => timer.$1 == h.config.tickInterval && timer.$3.isActive,
+          ),
+          isEmpty,
+          reason: 'the watchdog and attempt deadline are cancelled too',
+        );
         expect(connected.single.closed, isTrue);
         final (name, data) = flares.single;
         expect(name, 'trajectory.shutdown');
@@ -2495,7 +2514,10 @@ void main() {
         expect(order, ['first-extension', 'second-extension']);
         expect([first.runs, second.runs], [1, 1]);
 
-        final (_, intervalCallback, _) = timers.singleWhere(
+        // The boot pass arms the harness watchdog before TrajectoryTick.start
+        // arms the tick's own equal-duration interval; the latter is the last
+        // matching timer and remains the pass-driving timer this probe wants.
+        final (_, intervalCallback, _) = timers.lastWhere(
           (timer) => timer.$1 == config.tickInterval,
         );
         intervalCallback();
@@ -3303,6 +3325,205 @@ void main() {
       await h.start();
 
       expect(h.processIdentities.lastTickAt, isNull);
+    });
+
+    group('trajectory tick supervision', () {
+      Future<TrajectoryHarness> startLiveHarness() async {
+        dbScript = seedScript();
+        final h = await harness(tickQueries: [_ProbeQuery()]);
+        await h.start();
+        expect(h.processIdentities.lastTickAt, isNotNull);
+        return h;
+      }
+
+      void makeHeartbeatStale(TrajectoryHarness h) {
+        final lastBeat = h.processIdentities.lastTickAt!;
+        now = lastBeat.add(
+          kWorktreeOutstandingStaleAfter + const Duration(seconds: 1),
+        );
+        // The boot pass arms the watchdog before TrajectoryTick.start arms its
+        // own equal-duration interval. Firing the first active match simulates
+        // the independent watchdog while the pass timer remains wedged.
+        final watchdog = timers.firstWhere(
+          (timer) => timer.$1 == h.config.tickInterval && timer.$3.isActive,
+        );
+        _fireFakeTimer(watchdog);
+      }
+
+      _ScheduledTimer activeTimer(Duration duration) => timers.lastWhere(
+        (timer) => timer.$1 == duration && timer.$3.isActive,
+      );
+
+      test(
+        'stale P6 heartbeat restarts once and resumes on observed beat',
+        () async {
+          final h = await startLiveHarness();
+          final originalTick = h.tick;
+          final lastBeat = h.processIdentities.lastTickAt!;
+          final p1Health = h.sessionHeads.health;
+          final p2Health = h.stepCursors.health;
+
+          makeHeartbeatStale(h);
+
+          expect(
+            h.processIdentities.health,
+            TrajectorySnapshotHealth.compromised,
+          );
+          expect(h.sessionHeads.health, p1Health, reason: 'only P6 is stale');
+          expect(h.stepCursors.health, p2Health, reason: 'only P6 is stale');
+          final stale = flares.singleWhere(
+            (flare) => flare.$1 == 'trajectory.tickStale',
+          );
+          expect(stale.$2, {
+            'pass': 'P6',
+            'kind': 'tickStale',
+            'lastBeat': lastBeat.toIso8601String(),
+            'staleFor': '91',
+          });
+
+          _fireFakeTimer(activeTimer(const Duration(seconds: 1)));
+          await pumpEventQueue();
+
+          expect(h.tick, isNot(same(originalTick)));
+          expect(h.processIdentities.health, TrajectorySnapshotHealth.live);
+          expect(h.processIdentities.lastTickAt, now);
+          final resumed = flares.singleWhere(
+            (flare) => flare.$1 == 'trajectory.tickResumed',
+          );
+          expect(resumed.$2['pass'], 'P6');
+          expect(resumed.$2['kind'], 'tickStale');
+          expect(resumed.$2['lastBeat'], lastBeat.toIso8601String());
+          expect(resumed.$2['resumedAt'], now.toIso8601String());
+          expect(resumed.$2['staleFor'], '91');
+          expect(resumed.$2['attempts'], '1');
+          expect(
+            flares.where((flare) => flare.$1 == 'trajectory.tickStale'),
+            hasLength(1),
+          );
+          expect(
+            flares.where((flare) => flare.$1 == 'trajectory.tickResumed'),
+            hasLength(1),
+          );
+        },
+      );
+
+      test(
+        'three failed restarts emit one terminal tickDead and stop retrying',
+        () async {
+          final h = await startLiveHarness();
+          appender.commitError = StateError('replacement commit failed');
+          makeHeartbeatStale(h);
+
+          for (final delay in const [
+            Duration(seconds: 1),
+            Duration(seconds: 2),
+            Duration(seconds: 4),
+          ]) {
+            _fireFakeTimer(activeTimer(delay));
+            await pumpEventQueue();
+          }
+
+          final dead = flares.singleWhere(
+            (flare) => flare.$1 == 'trajectory.tickDead',
+          );
+          expect(dead.$2['pass'], 'P6');
+          expect(dead.$2['kind'], 'tickStale');
+          expect(dead.$2['attempts'], '3');
+          expect(dead.$2['reason'], contains('threw:'));
+          expect(dead.$2['reason'], contains('replacement commit failed'));
+          expect(h.mode, TrajectoryHarnessMode.live);
+          expect(
+            h.processIdentities.health,
+            TrajectorySnapshotHealth.compromised,
+          );
+          expect(
+            appender.calls.where((call) => call == 'commit'),
+            hasLength(4),
+            reason: 'the boot pass plus exactly three replacements',
+          );
+          expect(
+            timers.where(
+              (timer) =>
+                  timer.$3.isActive &&
+                  (timer.$1 == h.config.tickInterval ||
+                      timer.$1 == const Duration(seconds: 1) ||
+                      timer.$1 == const Duration(seconds: 2) ||
+                      timer.$1 == const Duration(seconds: 4)),
+            ),
+            isEmpty,
+            reason: 'no watchdog, attempt deadline, or fourth backoff remains',
+          );
+        },
+      );
+
+      test(
+        'wedged restart attempts time out and name the live-mode outage',
+        () async {
+          final h = await startLiveHarness();
+          final lastBeat = h.processIdentities.lastTickAt;
+          final blockedCommit = Completer<void>();
+          appender.commitCompleter = blockedCommit;
+          makeHeartbeatStale(h);
+          final generations = <TrajectoryTick>[];
+
+          for (final delay in const [
+            Duration(seconds: 1),
+            Duration(seconds: 2),
+            Duration(seconds: 4),
+          ]) {
+            _fireFakeTimer(activeTimer(delay));
+            await pumpEventQueue();
+            generations.add(h.tick!);
+            _fireFakeTimer(activeTimer(h.config.tickInterval));
+            await pumpEventQueue();
+          }
+
+          final dead = flares.singleWhere(
+            (flare) => flare.$1 == 'trajectory.tickDead',
+          );
+          expect(dead.$2['attempts'], '3');
+          expect(
+            dead.$2['reason'],
+            'timeout after ${h.config.tickInterval.inMilliseconds}ms',
+          );
+          expect(generations.toSet(), hasLength(3));
+          expect(h.mode, TrajectoryHarnessMode.live);
+          expect(
+            h.processIdentities.health,
+            TrajectorySnapshotHealth.compromised,
+          );
+          expect(
+            timers.where(
+              (timer) =>
+                  timer.$3.isActive &&
+                  (timer.$1 == h.config.tickInterval ||
+                      timer.$1 == const Duration(seconds: 1) ||
+                      timer.$1 == const Duration(seconds: 2) ||
+                      timer.$1 == const Duration(seconds: 4)),
+            ),
+            isEmpty,
+          );
+
+          // All three disposed generations are still queued behind the first
+          // wedged commit. Once it finally returns, their late passes must be
+          // rejected before heartbeat, post-pass work, or recovery flares.
+          blockedCommit.complete();
+          await pumpEventQueue();
+          expect(h.processIdentities.lastTickAt, lastBeat);
+          expect(
+            h.processIdentities.health,
+            TrajectorySnapshotHealth.compromised,
+          );
+          expect(
+            flares.where((flare) => flare.$1 == 'trajectory.tickResumed'),
+            isEmpty,
+          );
+          expect(
+            flares.where((flare) => flare.$1 == 'trajectory.tickDead'),
+            hasLength(1),
+          );
+        },
+      );
     });
   });
 

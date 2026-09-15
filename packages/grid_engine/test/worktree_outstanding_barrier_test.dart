@@ -421,6 +421,37 @@ void main() {
       }
     });
 
+    test(
+      'wedged detail reports compromised health without changing the predicate',
+      () {
+        final staleAt = _now.subtract(
+          kWorktreeOutstandingStaleAfter + const Duration(seconds: 1),
+        );
+        final live = evaluateWorktreeOutstanding(
+          read: _read(lastTickAt: staleAt),
+          workBeadId: _workBead,
+          linkedSessions: const <SessionProjection>[],
+          now: _now,
+        );
+        final compromised = evaluateWorktreeOutstanding(
+          read: _read(
+            lastTickAt: staleAt,
+            health: TrajectorySnapshotHealth.compromised,
+          ),
+          workBeadId: _workBead,
+          linkedSessions: const <SessionProjection>[],
+          now: _now,
+        );
+
+        expect(live.refuse, isTrue);
+        expect(live.wedged, isTrue);
+        expect(compromised.refuse, isTrue);
+        expect(compromised.wedged, isTrue);
+        expect(live.detail, contains('mirror health live'));
+        expect(compromised.detail, contains('mirror health compromised'));
+      },
+    );
+
     test('a freshly compromised mirror still admits inside the grace', () {
       // Health alone refuses NOTHING: within three tick intervals the rows are
       // as fresh as any live mirror's, so the grace holds exactly as it does
