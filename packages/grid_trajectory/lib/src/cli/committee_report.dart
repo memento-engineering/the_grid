@@ -742,8 +742,8 @@ enum GateDisposition {
   /// verdict on the same step.
   overridden,
 
-  /// No override, and a later round on the same lane followed — the committee
-  /// was believed and the work was reworked.
+  /// No override, and a nearest later attempt on the same bead and lane
+  /// followed — the committee was believed and the work was reworked.
   upheld,
 
   /// Still open, or nothing followed it yet.
@@ -752,7 +752,7 @@ enum GateDisposition {
   String get wire => name;
 }
 
-/// Whether the respec round after an adverse verdict landed.
+/// Whether the nearest later respec attempt after an adverse verdict landed.
 enum RespecOutcome {
   converged,
   unconverged,
@@ -1109,6 +1109,9 @@ void _adaptStepTransition(
           case final String grade) {
         into.verdicts.add(
           _Verdict(
+            beadId:
+                beadBySession[record.sessionId] ??
+                record.stepPath.split('/').first,
             sessionId: record.sessionId,
             lane: lane,
             grade: grade.toUpperCase(),
@@ -1851,6 +1854,7 @@ Object? _shadowJsonValue(Object? value) => switch (value) {
 
 class _Verdict {
   _Verdict({
+    required this.beadId,
     required this.sessionId,
     required this.lane,
     required this.grade,
@@ -1861,6 +1865,7 @@ class _Verdict {
     required this.seq,
   });
 
+  final String beadId;
   final String sessionId;
   final String lane;
   final String grade;
@@ -1905,9 +1910,9 @@ CommitteeReport foldCommitteeReport(
   bool truncated = false,
 }) {
   // Pass 1 — the identity joins, built over ALL rows before anything is
-  // interpreted: a verdict does not carry its bead and a usage row does not
-  // carry its step, so both are resolved through envelope columns other
-  // records promote. Order-independent by construction.
+  // interpreted: a graded verdict row does not carry its bead and a usage row
+  // does not carry its step, so both are resolved through envelope columns
+  // other records promote. Order-independent by construction.
   final beadBySession = <String, String>{};
   final stepByAttempt = <String, String>{};
   final roundsBySession = <String, Set<int>>{};
@@ -1940,6 +1945,9 @@ CommitteeReport foldCommitteeReport(
       case VerifyVerdictRecorded record:
         verdicts.add(
           _Verdict(
+            beadId:
+                beadBySession[record.sessionId] ??
+                record.stepPath.split('/').first,
             sessionId: record.sessionId,
             lane: record.lane,
             grade: record.grade.toUpperCase(),
@@ -2200,15 +2208,17 @@ CommitteeReport foldCommitteeReport(
   );
 }
 
-/// The respec round that followed [verdict]: the LATEST verdict on the same
-/// session and lane at `round + 1`.
+/// The nearest later attempt after [verdict] on the same bead and lane.
 RespecOutcome _respecOutcomeFor(_Verdict verdict, List<_Verdict> all) {
   _Verdict? follow;
   for (final other in all) {
-    if (other.sessionId != verdict.sessionId) continue;
+    if (other.beadId != verdict.beadId) continue;
     if (other.lane != verdict.lane) continue;
-    if (other.round != verdict.round + 1) continue;
-    if (follow == null || other.seq > follow.seq) follow = other;
+    if (other.seq <= verdict.seq) continue;
+    if (other.sessionId == verdict.sessionId && other.round == verdict.round) {
+      continue;
+    }
+    if (follow == null || other.seq < follow.seq) follow = other;
   }
   if (follow == null) return RespecOutcome.noFollowUp;
   return kConvergedGrades.contains(follow.grade)
