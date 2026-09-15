@@ -34,6 +34,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
@@ -58,6 +59,14 @@ import '../sdk/route.dart';
 import 'capability_registry.dart';
 import 'failure_policy.dart';
 import 'harness_throttle.dart';
+
+String _canonicalAdvanceBasis(Map<String, String> basis) {
+  final entries = basis.entries.toList()
+    ..sort((left, right) => left.key.compareTo(right.key));
+  return jsonEncode(<String, String>{
+    for (final entry in entries) entry.key: entry.value,
+  });
+}
 
 /// The carrier for one mounted [CapabilityStep]. Built by the registry's `host`;
 /// keyed `ValueKey('$nodePath#$restartCount')` so a supervised restart re-keys.
@@ -1036,6 +1045,27 @@ class CapabilityHostState extends State<CapabilityHost>
     attemptId: _attemptId,
   );
 
+  /// Supersedes this route node's obsolete human gate before completing it.
+  Future<void> _persistAdvancedCompletion(
+    TreeDependencyScope scope, {
+    required Map<String, String> completionPayload,
+    required Map<String, String> advanceBasis,
+  }) async {
+    final receipts = await _ctx!.writer.closeOpenGatesForNodeAdvance(
+      sessionId: _sessionId,
+      nodePath: _nodePath,
+    );
+    await _persistComplete(scope, completionPayload);
+    for (final receipt in receipts) {
+      if (receipt.cause != GateCloseCause.supersededByAdvance) continue;
+      _emitFlare('gate.supersededByAdvance', {
+        'gateId': receipt.gateId,
+        'cause': receipt.cause.wireValue,
+        'advanceBasis': _canonicalAdvanceBasis(advanceBasis),
+      });
+    }
+  }
+
   /// ADVANCE (M5 D-4a): move the cursor forward. At the ROOT circuit's TERMINAL
   /// step this ACTUATES the substation's bound [DeliveryMethod] and merges its
   /// receipt into the SAME `state=complete` chokepoint write (one atomic update).
@@ -1069,7 +1099,11 @@ class CapabilityHostState extends State<CapabilityHost>
     final method = _services.delivery;
     if (!terminal || method == null) {
       if (terminal) _emitFlare('deliver.unarmed', const {});
-      await _persistComplete(scope, routePayload);
+      await _persistAdvancedCompletion(
+        scope,
+        completionPayload: routePayload,
+        advanceBasis: routePayload,
+      );
       return;
     }
     if (!context.mounted) return;
@@ -1109,11 +1143,15 @@ class CapabilityHostState extends State<CapabilityHost>
     if (!scope.isCurrent || !context.mounted) return;
     switch (outcome) {
       case Ok(payload: final receipt):
-        await _persistComplete(scope, {
-          ...routePayload,
-          ...?receipt,
-          ResultKeys.delivery: method.id,
-        });
+        await _persistAdvancedCompletion(
+          scope,
+          completionPayload: {
+            ...routePayload,
+            ...?receipt,
+            ResultKeys.delivery: method.id,
+          },
+          advanceBasis: routePayload,
+        );
         _emitFlare('step.delivered', {'method': method.id});
       case Failed(:final reason):
         await _persistFailure(scope, 'delivery "${method.id}" failed: $reason');

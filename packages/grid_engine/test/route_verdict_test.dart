@@ -97,8 +97,9 @@ extension on Allocation {
   int circuitRound = 0,
   Map<String, String> params = const {},
   bool ambient = true,
+  Fakes? fakes,
 }) {
-  final fakes = buildFakes();
+  final resolvedFakes = fakes ?? buildFakes();
   final owner = TreeOwner();
   final nodePath = '$circuitPath/route';
   Seed child = CapabilityHost(
@@ -140,7 +141,7 @@ extension on Allocation {
   }
   owner.mountRoot(
     InheritedSeed<StationServices>(
-      value: fakes.ctx,
+      value: resolvedFakes.ctx,
       child: InheritedSeed<CapabilityRegistry>(
         value: RecordingCapabilityRegistry(clock: DateTime(2026)),
         child: InheritedSeed<ServiceBundle>(
@@ -153,7 +154,7 @@ extension on Allocation {
       ),
     ),
   );
-  return (owner: owner, fakes: fakes);
+  return (owner: owner, fakes: resolvedFakes);
 }
 
 /// Mounts, pumps the effect to its terminal, and tears the tree down.
@@ -166,7 +167,9 @@ Future<Fakes> _drive(
   int circuitRound = 0,
   Map<String, String> params = const {},
   bool ambient = true,
+  Fakes? fakes,
 }) async {
+  final ownsFakes = fakes == null;
   final h = _mountRoute(
     capability,
     circuit: circuit,
@@ -176,10 +179,11 @@ Future<Fakes> _drive(
     circuitRound: circuitRound,
     params: params,
     ambient: ambient,
+    fakes: fakes,
   );
   addTearDown(() {
     h.owner.dispose();
-    unawaited(h.fakes.provider.close());
+    if (ownsFakes) unawaited(h.fakes.provider.close());
   });
   await _pump();
   return h.fakes;
@@ -370,6 +374,103 @@ void main() {
   });
 
   group('tg-6gn — ADVANCE: delivery is the actuation of a TERMINAL advance', () {
+    test(
+      'a retry that advances supersedes its prior route gate before completing',
+      () async {
+        final fakes = buildFakes(createdId: 'tgdog-gate');
+        final transport = RecordingExplorationTransport();
+        addTearDown(fakes.provider.close);
+        final services = ServiceBundle(transport: transport);
+
+        final escalated = _mountRoute(
+          const FixedRouteCapability(Escalate('grade E: no verdict')),
+          services: services,
+          fakes: fakes,
+        );
+        await _pump();
+        escalated.owner.dispose();
+
+        fakes.runner.exportBeads = const [
+          Bead(
+            id: 'tgdog-s',
+            issueType: GridIssueTypes.session,
+            status: BeadStatus.open,
+            metadata: {'rig': 'tgdog'},
+          ),
+          Bead(
+            id: 'tgdog-gate',
+            issueType: GridIssueTypes.gate,
+            status: BeadStatus.open,
+            metadata: {
+              'rig': 'tgdog',
+              'blocks': 'tgdog-s',
+              'node': 'tg-1/route',
+              'reason': 'grade E: no verdict',
+            },
+          ),
+        ];
+
+        await _drive(
+          const FixedRouteCapability(
+            Advance({'transport': 'reported', 'grade': 'B'}),
+          ),
+          services: services,
+          fakes: fakes,
+        );
+
+        expect(fakes.runner.callsFor('create'), hasLength(1));
+        final calls = fakes.runner.calls;
+        final causeUpdate = calls.indexWhere(
+          (call) =>
+              call.length > 1 &&
+              call[0] == 'update' &&
+              call[1] == 'tgdog-gate' &&
+              call
+                  .join(' ')
+                  .contains('grid.gate.close_cause=superseded-by-advance'),
+        );
+        final gateClose = calls.indexWhere(
+          (call) =>
+              call.length > 1 && call[0] == 'close' && call[1] == 'tgdog-gate',
+        );
+        final completionUpdate = calls.indexWhere(
+          (call) =>
+              call.length > 1 &&
+              call[0] == 'update' &&
+              call[1] == _stepBeadId &&
+              call.join(' ').contains('grid.step.state=complete'),
+        );
+        expect(causeUpdate, isNonNegative);
+        expect(gateClose, greaterThan(causeUpdate));
+        expect(completionUpdate, greaterThan(gateClose));
+
+        final completion = List.generate(
+          fakes.runner.workUpdates.length,
+          fakes.runner.metadataOfUpdate,
+        ).singleWhere((metadata) => metadata['grid.step.state'] == 'complete');
+        expect(completion['grid.result.tg_h1_sroute.grade'], 'B');
+        expect(completion['grid.result.tg_h1_sroute.transport'], 'reported');
+        expect(
+          completion['grid.result.tg_h1_sroute.route_verdict'],
+          kRouteVerdictAdvance,
+        );
+        final supersessions = transport
+            .named('gate.supersededByAdvance')
+            .toList();
+        expect(supersessions, hasLength(1));
+        expect(supersessions.single.name, 'gate.supersededByAdvance');
+        expect(supersessions.single.data, {
+          'sessionId': 'tgdog-s',
+          'nodePath': 'tg-1/route',
+          'gateId': 'tgdog-gate',
+          'cause': 'superseded-by-advance',
+          'advanceBasis':
+              '{"grade":"B","route_verdict":"advance",'
+              '"transport":"reported"}',
+        });
+      },
+    );
+
     test('a TERMINAL advance actuates the bound method; the receipt + the '
         'delivery id land in the SAME state=complete write', () async {
       final method = RecordingDeliveryMethod();
@@ -495,27 +596,35 @@ void main() {
   });
 
   group('tg-6gn — ESCALATE: the engine RAISES, the bound handler DECIDES', () {
-    test('NO handler bound reproduces M5 D-7 EXACTLY: state=gated + one real '
-        'type=gate bead, and no rewind write', () async {
-      final fakes = await _drive(const FixedRouteCapability(Escalate('x')));
+    test(
+      'a present failing grade remains gated with no supersession flare',
+      () async {
+        final transport = RecordingExplorationTransport();
+        final fakes = await _drive(
+          const FixedRouteCapability(Escalate('grade E: failed readiness')),
+          services: ServiceBundle(transport: transport),
+        );
 
-      final meta = fakes.runner.metadataOfUpdate(0);
-      expect(meta['grid.step.state'], 'gated');
-      final resultMetadata = {
-        for (final entry in meta.entries)
-          if (entry.key.startsWith(ResultKeys.prefix)) entry.key: entry.value,
-      };
-      expect(resultMetadata, {
-        ResultKeys.keyFor('tg-1/route', ResultKeys.routeVerdict):
-            kRouteVerdictEscalate,
-      });
-      final creates = fakes.runner.callsFor('create');
-      expect(creates, hasLength(1));
-      expect(creates.single, containsAllInOrder(['--type', 'gate']));
-      for (final write in _allWrites(fakes.runner)) {
-        expect(write.contains('rewindCount'), isFalse);
-      }
-    });
+        final meta = fakes.runner.metadataOfUpdate(0);
+        expect(meta['grid.step.state'], 'gated');
+        final resultMetadata = {
+          for (final entry in meta.entries)
+            if (entry.key.startsWith(ResultKeys.prefix)) entry.key: entry.value,
+        };
+        expect(resultMetadata, {
+          ResultKeys.keyFor('tg-1/route', ResultKeys.routeVerdict):
+              kRouteVerdictEscalate,
+        });
+        final creates = fakes.runner.callsFor('create');
+        expect(creates, hasLength(1));
+        expect(creates.single, containsAllInOrder(['--type', 'gate']));
+        expect(fakes.runner.callsFor('close'), isEmpty);
+        expect(transport.named('gate.supersededByAdvance'), isEmpty);
+        for (final write in _allWrites(fakes.runner)) {
+          expect(write.contains('rewindCount'), isFalse);
+        }
+      },
+    );
 
     test(
       'a BOUND handler receives plain VALUES and parks with ITS OWN reason',

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:beads_dart/beads_dart.dart';
 
@@ -110,6 +111,7 @@ enum GateCloseCause {
   sessionTerminal('session-terminal'),
   workBeadClosed('work-bead-closed'),
   supersededRound('superseded-round'),
+  supersededByAdvance('superseded-by-advance'),
   duplicateMint('duplicate-mint'),
   stragglerRoute('straggler-route'),
   adjudicated('adjudicated'),
@@ -420,6 +422,25 @@ class StationBeadWriter {
     terminalWorkBead: terminalWorkBead,
   );
 
+  /// Closes the OPEN route gate for the advancing ([sessionId], [nodePath]).
+  ///
+  /// Unlike the terminal sweep, this transition is valid while the session is
+  /// live: a later positive route verdict supersedes only the checkpoint that
+  /// the same node minted. It shares [createGate]'s composite transition lane,
+  /// so an advance cannot miss a gate whose mint is still in flight. Historical
+  /// duplicate mints are closed on the same pass and classified separately.
+  Future<List<GateAutoCloseReceipt>> closeOpenGatesForNodeAdvance({
+    required String sessionId,
+    required String nodePath,
+  }) => _serialized(
+    _gateTransitionKey(sessionId, nodePath),
+    () => _closeEligibleOpenGates(
+      sessionId: sessionId,
+      trigger: GateCloseCause.supersededByAdvance,
+      nodePath: nodePath,
+    ),
+  );
+
   Future<List<GateAutoCloseReceipt>> _closeOpenGatesForTerminal({
     required String sessionId,
     required GateCloseCause trigger,
@@ -466,8 +487,12 @@ class StationBeadWriter {
   Future<List<GateAutoCloseReceipt>> _closeEligibleOpenGates({
     required String sessionId,
     required GateCloseCause trigger,
+    String? nodePath,
   }) async {
-    final gates = await _findOpenGates(sessionId: sessionId);
+    final gates = await _findOpenGates(
+      sessionId: sessionId,
+      nodePath: nodePath,
+    );
     final oldestByNode = <String, Bead>{};
     final epoch = DateTime.fromMillisecondsSinceEpoch(0);
     for (final gate in gates) {
@@ -707,60 +732,62 @@ class StationBeadWriter {
     )) {
       _refuse('create', substation, substation);
     }
-    await _assertGateSessionOpen(sessionId);
-    // Mint-dedup: reuse+refresh an existing OPEN gate for this (session, node).
-    final existing = await _findOpenGate(
-      sessionId: sessionId,
-      nodePath: nodePath,
-    );
-    if (existing != null) {
-      final priorCount =
-          int.tryParse('${existing.metadata[gateRegateCountKey] ?? ''}') ?? 0;
-      await update(
-        existing.id,
-        metadata: {
+    return _serialized(_gateTransitionKey(sessionId, nodePath), () async {
+      await _assertGateSessionOpen(sessionId);
+      // Mint-dedup: reuse+refresh an existing OPEN gate for this (session, node).
+      final existing = await _findOpenGate(
+        sessionId: sessionId,
+        nodePath: nodePath,
+      );
+      if (existing != null) {
+        final priorCount =
+            int.tryParse('${existing.metadata[gateRegateCountKey] ?? ''}') ?? 0;
+        await update(
+          existing.id,
+          metadata: {
+            'reason': reason,
+            gateRegateCountKey: (priorCount + 1).toString(),
+            gateRegatedAtKey: _clock().toUtc().toIso8601String(),
+          },
+          ifAssignee: existing.assignee,
+          ifStatus: existing.status,
+        );
+        _flare('gate.opened', {
+          'gateId': existing.id,
+          'sessionId': sessionId,
+          'nodePath': nodePath,
           'reason': reason,
-          gateRegateCountKey: (priorCount + 1).toString(),
-          gateRegatedAtKey: _clock().toUtc().toIso8601String(),
+          'reused': 'true',
+        });
+        await _sweepStragglerGateIfSessionTerminal(sessionId);
+        return existing.id;
+      }
+      final id = await _bd.create(
+        title: 'grid gate $sessionId@$nodePath',
+        type: GridIssueTypes.gate,
+      );
+      // Stamp the owned substation marker + the block linkage FROM BIRTH (merge
+      // update; the `blocks`/`node` keys are how the join re-arms the parked node).
+      await _updateBead(
+        'createGate',
+        id,
+        mergeMetadata: {
+          rigKey: substation,
+          'blocks': sessionId,
+          'node': nodePath,
+          'reason': reason,
         },
-        ifAssignee: existing.assignee,
-        ifStatus: existing.status,
       );
       _flare('gate.opened', {
-        'gateId': existing.id,
+        'gateId': id,
         'sessionId': sessionId,
         'nodePath': nodePath,
         'reason': reason,
-        'reused': 'true',
+        'reused': 'false',
       });
       await _sweepStragglerGateIfSessionTerminal(sessionId);
-      return existing.id;
-    }
-    final id = await _bd.create(
-      title: 'grid gate $sessionId@$nodePath',
-      type: GridIssueTypes.gate,
-    );
-    // Stamp the owned substation marker + the block linkage FROM BIRTH (merge
-    // update; the `blocks`/`node` keys are how the join re-arms the parked node).
-    await _updateBead(
-      'createGate',
-      id,
-      mergeMetadata: {
-        rigKey: substation,
-        'blocks': sessionId,
-        'node': nodePath,
-        'reason': reason,
-      },
-    );
-    _flare('gate.opened', {
-      'gateId': id,
-      'sessionId': sessionId,
-      'nodePath': nodePath,
-      'reason': reason,
-      'reused': 'false',
+      return id;
     });
-    await _sweepStragglerGateIfSessionTerminal(sessionId);
-    return id;
   }
 
   Future<void> _sweepStragglerGateIfSessionTerminal(String sessionId) async {
@@ -1475,6 +1502,13 @@ class StationBeadWriter {
     );
     return run;
   }
+
+  /// A collision-proof lane for one route-gate identity.
+  ///
+  /// JSON encoding preserves the tuple boundary even when ids or paths contain
+  /// punctuation that would collide under delimiter concatenation.
+  String _gateTransitionKey(String sessionId, String nodePath) =>
+      'gate-transition:${jsonEncode([sessionId, nodePath])}';
 
   /// Chains [op] after the prior write on [id] (D-1). Returns [op]'s future
   /// (its error propagates to the caller); the chain itself never rejects, so a
