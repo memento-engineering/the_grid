@@ -18,6 +18,7 @@ TrajectoryEnvelope _verdict({
   required String lane,
   required String grade,
   required int round,
+  String? stepPath,
   VerdictTransport transport = VerdictTransport.artifact,
 }) => envelope(
   recordType: 'verify.verdict.recorded',
@@ -25,7 +26,7 @@ TrajectoryEnvelope _verdict({
   seq: ++_seq,
   sessionId: session,
   round: round,
-  stepPath: '$session/review/$lane',
+  stepPath: stepPath ?? '$session/review/$lane',
   stepRound: round,
   incarnation: 1,
   commitSha: 'a' * 40,
@@ -579,6 +580,170 @@ void main() {
       expect(lane('coherence').runsFromFallback, 0);
       expect(lane('coherence').meanCostUsd, 9.0);
       expect(lane('coherence').meanDurationMs, 500000);
+    });
+  });
+
+  group('respec follow-up', () {
+    LaneReport lane(CommitteeReport report, String name) =>
+        report.lanes.firstWhere((row) => row.lane == name);
+
+    test(
+      'a verdict whose work_bead_id is null takes its bead from the step path',
+      () {
+        _seq = 0;
+        final report = foldCommitteeReport([
+          _verdict(
+            session: 'dedicated-fallback',
+            lane: 'coherence',
+            grade: 'D',
+            round: 0,
+            stepPath: 'bead-fallback/spec_review/coherence',
+          ),
+          _step(
+            session: 'step-fallback',
+            node: 'bead-fallback/spec_review/coherence',
+            state: StepState.complete,
+            result: {'grade': 'A', 'round': '0'},
+          ),
+          _verdict(
+            session: 'dedicated-lookup',
+            lane: 'adr-alignment',
+            grade: 'D',
+            round: 0,
+            stepPath: 'wrong-prefix-a/spec_review/adr-alignment',
+          ),
+          _step(
+            session: 'step-lookup',
+            node: 'wrong-prefix-b/spec_review/adr-alignment',
+            state: StepState.complete,
+            result: {'grade': 'A', 'round': '0'},
+          ),
+          // These arrive after the verdict rows; Pass 1 still makes their
+          // session identity authoritative over the deliberately wrong paths.
+          _processStarted(
+            session: 'dedicated-lookup',
+            bead: 'bead-from-lookup',
+            attempt: 'lookup-a',
+            lane: 'adr-alignment',
+            round: 0,
+          ),
+          _processStarted(
+            session: 'step-lookup',
+            bead: 'bead-from-lookup',
+            attempt: 'lookup-b',
+            lane: 'adr-alignment',
+            round: 0,
+          ),
+        ]);
+
+        expect(report.sources.verdictsFromRecord, 2);
+        expect(report.sources.verdictsFromStep, 2);
+        expect(lane(report, 'coherence').respecConverged, 1);
+        expect(lane(report, 'coherence').respecNoFollowUp, 0);
+        expect(lane(report, 'adr-alignment').respecConverged, 1);
+        expect(lane(report, 'adr-alignment').respecNoFollowUp, 0);
+      },
+    );
+
+    test(
+      'respec resolves a follow-up in a later session for the same bead',
+      () {
+        _seq = 0;
+        final report = foldCommitteeReport([
+          _step(
+            session: 'session-a',
+            node: 'bead-a/spec_review/coherence',
+            state: StepState.complete,
+            result: {'grade': 'D', 'round': '0'},
+          ),
+          _step(
+            session: 'session-b',
+            node: 'bead-a/spec_review/coherence',
+            state: StepState.complete,
+            result: {'grade': 'A', 'round': '0'},
+          ),
+        ]);
+
+        final coherence = lane(report, 'coherence');
+        expect(coherence.respecConverged, 1);
+        expect(coherence.respecNoFollowUp, 0);
+      },
+    );
+
+    test('respec still resolves a same-session round+1 follow-up', () {
+      _seq = 0;
+      final report = foldCommitteeReport([
+        _step(
+          session: 'session-a',
+          node: 'bead-a/spec_review/coherence',
+          state: StepState.complete,
+          result: {'grade': 'D', 'round': '0'},
+        ),
+        _step(
+          session: 'session-a',
+          node: 'bead-a/spec_review/coherence',
+          state: StepState.complete,
+          result: {'grade': 'A', 'round': '1'},
+        ),
+      ]);
+
+      expect(lane(report, 'coherence').respecConverged, 1);
+    });
+
+    test('respec takes the nearest later attempt, not the last', () {
+      _seq = 0;
+      final report = foldCommitteeReport([
+        _step(
+          session: 'session-a',
+          node: 'bead-a/spec_review/coherence',
+          state: StepState.complete,
+          result: {'grade': 'D', 'round': '0'},
+        ),
+        _step(
+          session: 'session-b',
+          node: 'bead-a/spec_review/coherence',
+          state: StepState.complete,
+          result: {'grade': 'C', 'round': '0'},
+        ),
+        _step(
+          session: 'session-c',
+          node: 'bead-a/spec_review/coherence',
+          state: StepState.complete,
+          result: {'grade': 'A', 'round': '0'},
+        ),
+      ]);
+
+      final coherence = lane(report, 'coherence');
+      expect(coherence.respecConverged, 0);
+      expect(coherence.respecUnconverged, 1);
+    });
+
+    test('respec reports noFollowUp when no later attempt exists', () {
+      _seq = 0;
+      final report = foldCommitteeReport([
+        _step(
+          session: 'session-a',
+          node: 'bead-a/spec_review/coherence',
+          state: StepState.complete,
+          result: {'grade': 'D', 'round': '0'},
+        ),
+        _step(
+          session: 'session-a',
+          node: 'bead-a/spec_review/coherence',
+          state: StepState.complete,
+          result: {'grade': 'A', 'round': '0'},
+        ),
+        _step(
+          session: 'session-b',
+          node: 'bead-b/spec_review/coherence',
+          state: StepState.complete,
+          result: {'grade': 'A', 'round': '0'},
+        ),
+      ]);
+
+      final coherence = lane(report, 'coherence');
+      expect(coherence.respecConverged, 0);
+      expect(coherence.respecNoFollowUp, 1);
     });
   });
 
