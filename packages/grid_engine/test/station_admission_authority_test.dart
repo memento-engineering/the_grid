@@ -1638,6 +1638,194 @@ void main() {
     expect(batch.waiting.single.bead.id, 'tg-2');
   });
 
+  test('lowered live ceiling drains by attrition without eviction', () async {
+    final runner = RecordingBdRunner();
+    final provider = FakeRuntimeProvider();
+    addTearDown(provider.close);
+    final station = _stationOver(
+      runner,
+      provider: provider,
+      maxConcurrentWork: 3,
+    );
+    addTearDown(station.dispose);
+    final liveBeads = [_bead('tg-1'), _bead('tg-2'), _bead('tg-3')];
+    final fresh = _bead('tg-4');
+    final sessions = {
+      for (final bead in liveBeads)
+        bead.id: SessionProjection(
+          workBeadId: bead.id,
+          sessionId: '${bead.id}-session',
+        ),
+    };
+    final candidates = [
+      for (final bead in liveBeads)
+        StationAdmissionCandidate(bead: bead, session: sessions[bead.id]),
+      StationAdmissionCandidate(bead: fresh, session: null),
+    ];
+    final capThree = _config.copyWith(maxConcurrentWork: 3);
+
+    final before = station.admission.admitPending(
+      _snapshot([...liveBeads, fresh], sessions: sessions),
+      capThree,
+      const ServiceBundle(),
+      candidates,
+    );
+    expect(before.admitted, hasLength(3));
+    expect(before.waiting.single.bead.id, fresh.id);
+
+    var notifications = 0;
+    station.admission.addInvalidationListener(() => notifications += 1);
+    final lowered = station.admission.setMaxAgents(1);
+    expect(lowered?.maxAgents, 1);
+    expect(lowered?.maxAgentsSource, StationAdmissionCeilingSource.control);
+    expect(notifications, 1);
+    expect(runner.calls, isEmpty, reason: 'the setter performs no bead write');
+
+    StationAdmissionBatch passWithTerminalCount(int terminalCount) {
+      final projected = <String, SessionProjection>{};
+      for (var index = 0; index < liveBeads.length; index += 1) {
+        final bead = liveBeads[index];
+        final session = sessions[bead.id]!;
+        projected[bead.id] = index < terminalCount
+            ? session.copyWith(isTerminal: true, completed: true)
+            : session;
+      }
+      return station.admission.admitPending(
+        _snapshot([...liveBeads, fresh], sessions: projected),
+        capThree,
+        const ServiceBundle(),
+        [
+          for (final bead in liveBeads)
+            StationAdmissionCandidate(bead: bead, session: projected[bead.id]),
+          StationAdmissionCandidate(bead: fresh, session: null),
+        ],
+      );
+    }
+
+    expect(passWithTerminalCount(0).waiting.single.bead.id, fresh.id);
+    expect(passWithTerminalCount(1).waiting.single.bead.id, fresh.id);
+    expect(passWithTerminalCount(2).waiting.single.bead.id, fresh.id);
+    final afterDrain = passWithTerminalCount(3);
+    expect(afterDrain.admitted.single.candidate.bead.id, fresh.id);
+    await _pump();
+    expect(provider.stopped, isEmpty, reason: 'a lower cap never evicts');
+    expect(runner.callsFor('close'), isEmpty);
+    expect(
+      runner
+          .callsFor('update')
+          .where(
+            (call) => sessions.values.any(
+              (session) => call.length > 1 && call[1] == session.sessionId,
+            ),
+          ),
+      isEmpty,
+      reason: 'attrition never mutates a live session',
+    );
+  });
+
+  test('raising shares the pause readmission pass and admits by priority', () {
+    final station = _stationOver(RecordingBdRunner(), maxConcurrentWork: 1);
+    addTearDown(station.dispose);
+    final occupyingBead = _bead('tg-1', priority: 0);
+    final resumedBead = _bead('tg-2', priority: 1);
+    final freshBead = _bead('tg-3', priority: 2);
+    const occupying = SessionProjection(
+      workBeadId: 'tg-1',
+      sessionId: 'tg-1-session',
+    );
+    const resumed = SessionProjection(
+      workBeadId: 'tg-2',
+      sessionId: 'tg-2-session',
+      pauseState: SessionPauseState.resumed,
+    );
+    final snapshot = _snapshot(
+      [occupyingBead, resumedBead, freshBead],
+      sessions: const {'tg-1': occupying, 'tg-2': resumed},
+    );
+    final capThree = _config.copyWith(maxConcurrentWork: 3);
+    final candidates = [
+      StationAdmissionCandidate(bead: occupyingBead, session: occupying),
+      StationAdmissionCandidate(bead: resumedBead, session: resumed),
+      StationAdmissionCandidate(bead: freshBead, session: null),
+    ];
+
+    final before = station.admission.admitPending(
+      snapshot,
+      capThree,
+      const ServiceBundle(),
+      candidates,
+    );
+    expect(before.admitted.single.candidate.bead.id, occupyingBead.id);
+    expect(before.waiting.map((candidate) => candidate.bead.id), [
+      resumedBead.id,
+      freshBead.id,
+    ]);
+
+    var notifications = 0;
+    station.admission.addInvalidationListener(() => notifications += 1);
+    final raised = station.admission.setMaxAgents(2);
+    expect(raised?.maxAgents, 2);
+    expect(notifications, 1);
+
+    final after = station.admission.admitPending(
+      snapshot,
+      capThree,
+      const ServiceBundle(),
+      candidates,
+    );
+    expect(after.admitted.map((entry) => entry.candidate.bead.id), [
+      occupyingBead.id,
+      resumedBead.id,
+    ]);
+    expect(after.waiting.single.bead.id, freshBead.id);
+    expect(after.admitted.last.adopted, isTrue);
+  });
+
+  test('live ceiling validation, notifications, and boot reset are exact', () {
+    final station = _stationOver(RecordingBdRunner(), maxConcurrentWork: 8);
+    addTearDown(station.dispose);
+    expect(station.maxConcurrentWork, 8);
+    expect(station.admission.admissionStatus.maxAgents, 8);
+    expect(
+      station.admission.admissionStatus.maxAgentsSource,
+      StationAdmissionCeilingSource.boot,
+    );
+
+    var notifications = 0;
+    station.admission.addInvalidationListener(() => notifications += 1);
+    expect(station.admission.setMaxAgents(0), isNull);
+    expect(station.admission.setMaxAgents(-1), isNull);
+    expect(notifications, 0);
+    expect(station.admission.admissionStatus.maxAgents, 8);
+    expect(
+      station.admission.admissionStatus.maxAgentsSource,
+      StationAdmissionCeilingSource.boot,
+    );
+
+    final firstSame = station.admission.setMaxAgents(8);
+    expect(firstSame?.maxAgentsSource, StationAdmissionCeilingSource.control);
+    expect(notifications, 1, reason: 'the first control source is observable');
+    final repeatedSame = station.admission.setMaxAgents(8);
+    expect(
+      repeatedSame?.maxAgentsSource,
+      StationAdmissionCeilingSource.control,
+    );
+    expect(notifications, 1, reason: 'an identical control value is a no-op');
+    expect(station.maxConcurrentWork, 8, reason: 'boot input stays immutable');
+
+    final bounced = _stationOver(RecordingBdRunner(), maxConcurrentWork: 6);
+    addTearDown(bounced.dispose);
+    expect(bounced.admission.admissionStatus.maxAgents, 6);
+    expect(
+      bounced.admission.admissionStatus.maxAgentsSource,
+      StationAdmissionCeilingSource.boot,
+    );
+
+    station.dispose();
+    expect(station.admission.setMaxAgents(7), isNull);
+    expect(notifications, 1);
+  });
+
   test(
     'invalidation removal and disposal are idempotent and fail closed',
     () async {

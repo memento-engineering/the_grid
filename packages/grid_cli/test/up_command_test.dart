@@ -735,6 +735,7 @@ void main() {
     expect(status.admission, same(admission));
     expect(status.toJson()['admission'], {
       'maxAgents': 4,
+      'maxAgentsSource': 'boot',
       'reservations': [
         {
           'bead': 'earth-1',

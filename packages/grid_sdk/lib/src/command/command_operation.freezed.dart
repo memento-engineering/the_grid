@@ -55,7 +55,7 @@ extension GridCommandRequestPatterns on GridCommandRequest {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( GridRework value)?  rework,TResult Function( GridGateLs value)?  listGates,TResult Function( GridGateResolve value)?  resolveGate,TResult Function( GridSessionLs value)?  listHeldSessions,TResult Function( GridSessionCollect value)?  collectHeldSessions,TResult Function( GridSetBeadText value)?  setBeadText,TResult Function( GridMountAttemptRearm value)?  rearmMountAttempt,TResult Function( GridPauseSession value)?  pauseSession,TResult Function( GridResumeSession value)?  resumeSession,TResult Function( GridBeadBoard value)?  board,TResult Function( GridBeadRound value)?  beadRound,TResult Function( GridAttachSubstation value)?  attachSubstation,TResult Function( GridDetachSubstation value)?  detachSubstation,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( GridRework value)?  rework,TResult Function( GridGateLs value)?  listGates,TResult Function( GridGateResolve value)?  resolveGate,TResult Function( GridSessionLs value)?  listHeldSessions,TResult Function( GridSessionCollect value)?  collectHeldSessions,TResult Function( GridSetBeadText value)?  setBeadText,TResult Function( GridMountAttemptRearm value)?  rearmMountAttempt,TResult Function( GridPauseSession value)?  pauseSession,TResult Function( GridResumeSession value)?  resumeSession,TResult Function( GridSetAdmissionCeiling value)?  setAdmissionCeiling,TResult Function( GridBeadBoard value)?  board,TResult Function( GridBeadRound value)?  beadRound,TResult Function( GridAttachSubstation value)?  attachSubstation,TResult Function( GridDetachSubstation value)?  detachSubstation,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
@@ -67,7 +67,8 @@ return collectHeldSessions(_that);case GridSetBeadText() when setBeadText != nul
 return setBeadText(_that);case GridMountAttemptRearm() when rearmMountAttempt != null:
 return rearmMountAttempt(_that);case GridPauseSession() when pauseSession != null:
 return pauseSession(_that);case GridResumeSession() when resumeSession != null:
-return resumeSession(_that);case GridBeadBoard() when board != null:
+return resumeSession(_that);case GridSetAdmissionCeiling() when setAdmissionCeiling != null:
+return setAdmissionCeiling(_that);case GridBeadBoard() when board != null:
 return board(_that);case GridBeadRound() when beadRound != null:
 return beadRound(_that);case GridAttachSubstation() when attachSubstation != null:
 return attachSubstation(_that);case GridDetachSubstation() when detachSubstation != null:
@@ -89,7 +90,7 @@ return detachSubstation(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( GridRework value)  rework,required TResult Function( GridGateLs value)  listGates,required TResult Function( GridGateResolve value)  resolveGate,required TResult Function( GridSessionLs value)  listHeldSessions,required TResult Function( GridSessionCollect value)  collectHeldSessions,required TResult Function( GridSetBeadText value)  setBeadText,required TResult Function( GridMountAttemptRearm value)  rearmMountAttempt,required TResult Function( GridPauseSession value)  pauseSession,required TResult Function( GridResumeSession value)  resumeSession,required TResult Function( GridBeadBoard value)  board,required TResult Function( GridBeadRound value)  beadRound,required TResult Function( GridAttachSubstation value)  attachSubstation,required TResult Function( GridDetachSubstation value)  detachSubstation,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( GridRework value)  rework,required TResult Function( GridGateLs value)  listGates,required TResult Function( GridGateResolve value)  resolveGate,required TResult Function( GridSessionLs value)  listHeldSessions,required TResult Function( GridSessionCollect value)  collectHeldSessions,required TResult Function( GridSetBeadText value)  setBeadText,required TResult Function( GridMountAttemptRearm value)  rearmMountAttempt,required TResult Function( GridPauseSession value)  pauseSession,required TResult Function( GridResumeSession value)  resumeSession,required TResult Function( GridSetAdmissionCeiling value)  setAdmissionCeiling,required TResult Function( GridBeadBoard value)  board,required TResult Function( GridBeadRound value)  beadRound,required TResult Function( GridAttachSubstation value)  attachSubstation,required TResult Function( GridDetachSubstation value)  detachSubstation,}){
 final _that = this;
 switch (_that) {
 case GridRework():
@@ -101,7 +102,8 @@ return collectHeldSessions(_that);case GridSetBeadText():
 return setBeadText(_that);case GridMountAttemptRearm():
 return rearmMountAttempt(_that);case GridPauseSession():
 return pauseSession(_that);case GridResumeSession():
-return resumeSession(_that);case GridBeadBoard():
+return resumeSession(_that);case GridSetAdmissionCeiling():
+return setAdmissionCeiling(_that);case GridBeadBoard():
 return board(_that);case GridBeadRound():
 return beadRound(_that);case GridAttachSubstation():
 return attachSubstation(_that);case GridDetachSubstation():
@@ -119,7 +121,7 @@ return detachSubstation(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( GridRework value)?  rework,TResult? Function( GridGateLs value)?  listGates,TResult? Function( GridGateResolve value)?  resolveGate,TResult? Function( GridSessionLs value)?  listHeldSessions,TResult? Function( GridSessionCollect value)?  collectHeldSessions,TResult? Function( GridSetBeadText value)?  setBeadText,TResult? Function( GridMountAttemptRearm value)?  rearmMountAttempt,TResult? Function( GridPauseSession value)?  pauseSession,TResult? Function( GridResumeSession value)?  resumeSession,TResult? Function( GridBeadBoard value)?  board,TResult? Function( GridBeadRound value)?  beadRound,TResult? Function( GridAttachSubstation value)?  attachSubstation,TResult? Function( GridDetachSubstation value)?  detachSubstation,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( GridRework value)?  rework,TResult? Function( GridGateLs value)?  listGates,TResult? Function( GridGateResolve value)?  resolveGate,TResult? Function( GridSessionLs value)?  listHeldSessions,TResult? Function( GridSessionCollect value)?  collectHeldSessions,TResult? Function( GridSetBeadText value)?  setBeadText,TResult? Function( GridMountAttemptRearm value)?  rearmMountAttempt,TResult? Function( GridPauseSession value)?  pauseSession,TResult? Function( GridResumeSession value)?  resumeSession,TResult? Function( GridSetAdmissionCeiling value)?  setAdmissionCeiling,TResult? Function( GridBeadBoard value)?  board,TResult? Function( GridBeadRound value)?  beadRound,TResult? Function( GridAttachSubstation value)?  attachSubstation,TResult? Function( GridDetachSubstation value)?  detachSubstation,}){
 final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
@@ -131,7 +133,8 @@ return collectHeldSessions(_that);case GridSetBeadText() when setBeadText != nul
 return setBeadText(_that);case GridMountAttemptRearm() when rearmMountAttempt != null:
 return rearmMountAttempt(_that);case GridPauseSession() when pauseSession != null:
 return pauseSession(_that);case GridResumeSession() when resumeSession != null:
-return resumeSession(_that);case GridBeadBoard() when board != null:
+return resumeSession(_that);case GridSetAdmissionCeiling() when setAdmissionCeiling != null:
+return setAdmissionCeiling(_that);case GridBeadBoard() when board != null:
 return board(_that);case GridBeadRound() when beadRound != null:
 return beadRound(_that);case GridAttachSubstation() when attachSubstation != null:
 return attachSubstation(_that);case GridDetachSubstation() when detachSubstation != null:
@@ -152,7 +155,7 @@ return detachSubstation(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult Function()?  listGates,TResult Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,TResult Function()?  listHeldSessions,TResult Function( List<String> sessionIds,  bool act,  bool bulk,  bool overrideUnsafe)?  collectHeldSessions,TResult Function( String beadId,  OperatorBeadTextField field,  String content,  bool append,  bool allowNotesReplacement)?  setBeadText,TResult Function( String beadId,  String actor,  String reason)?  rearmMountAttempt,TResult Function( String beadId)?  pauseSession,TResult Function( String beadId)?  resumeSession,TResult Function( Set<String> stores,  Set<String> statuses,  bool blockedOnly,  bool? approved)?  board,TResult Function( String beadId)?  beadRound,TResult Function( String name,  String root,  String? prefix)?  attachSubstation,TResult Function( String name,  bool force)?  detachSubstation,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult Function()?  listGates,TResult Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,TResult Function()?  listHeldSessions,TResult Function( List<String> sessionIds,  bool act,  bool bulk,  bool overrideUnsafe)?  collectHeldSessions,TResult Function( String beadId,  OperatorBeadTextField field,  String content,  bool append,  bool allowNotesReplacement)?  setBeadText,TResult Function( String beadId,  String actor,  String reason)?  rearmMountAttempt,TResult Function( String beadId)?  pauseSession,TResult Function( String beadId)?  resumeSession,TResult Function( int maxAgents)?  setAdmissionCeiling,TResult Function( Set<String> stores,  Set<String> statuses,  bool blockedOnly,  bool? approved)?  board,TResult Function( String beadId)?  beadRound,TResult Function( String name,  String root,  String? prefix)?  attachSubstation,TResult Function( String name,  bool force)?  detachSubstation,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
 return rework(_that.beadId,_that.note,_that.beyondCap,_that.actor);case GridGateLs() when listGates != null:
@@ -163,7 +166,8 @@ return collectHeldSessions(_that.sessionIds,_that.act,_that.bulk,_that.overrideU
 return setBeadText(_that.beadId,_that.field,_that.content,_that.append,_that.allowNotesReplacement);case GridMountAttemptRearm() when rearmMountAttempt != null:
 return rearmMountAttempt(_that.beadId,_that.actor,_that.reason);case GridPauseSession() when pauseSession != null:
 return pauseSession(_that.beadId);case GridResumeSession() when resumeSession != null:
-return resumeSession(_that.beadId);case GridBeadBoard() when board != null:
+return resumeSession(_that.beadId);case GridSetAdmissionCeiling() when setAdmissionCeiling != null:
+return setAdmissionCeiling(_that.maxAgents);case GridBeadBoard() when board != null:
 return board(_that.stores,_that.statuses,_that.blockedOnly,_that.approved);case GridBeadRound() when beadRound != null:
 return beadRound(_that.beadId);case GridAttachSubstation() when attachSubstation != null:
 return attachSubstation(_that.name,_that.root,_that.prefix);case GridDetachSubstation() when detachSubstation != null:
@@ -185,7 +189,7 @@ return detachSubstation(_that.name,_that.force);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)  rework,required TResult Function()  listGates,required TResult Function( String gateId,  Map<String, String> grades,  String? rationale)  resolveGate,required TResult Function()  listHeldSessions,required TResult Function( List<String> sessionIds,  bool act,  bool bulk,  bool overrideUnsafe)  collectHeldSessions,required TResult Function( String beadId,  OperatorBeadTextField field,  String content,  bool append,  bool allowNotesReplacement)  setBeadText,required TResult Function( String beadId,  String actor,  String reason)  rearmMountAttempt,required TResult Function( String beadId)  pauseSession,required TResult Function( String beadId)  resumeSession,required TResult Function( Set<String> stores,  Set<String> statuses,  bool blockedOnly,  bool? approved)  board,required TResult Function( String beadId)  beadRound,required TResult Function( String name,  String root,  String? prefix)  attachSubstation,required TResult Function( String name,  bool force)  detachSubstation,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)  rework,required TResult Function()  listGates,required TResult Function( String gateId,  Map<String, String> grades,  String? rationale)  resolveGate,required TResult Function()  listHeldSessions,required TResult Function( List<String> sessionIds,  bool act,  bool bulk,  bool overrideUnsafe)  collectHeldSessions,required TResult Function( String beadId,  OperatorBeadTextField field,  String content,  bool append,  bool allowNotesReplacement)  setBeadText,required TResult Function( String beadId,  String actor,  String reason)  rearmMountAttempt,required TResult Function( String beadId)  pauseSession,required TResult Function( String beadId)  resumeSession,required TResult Function( int maxAgents)  setAdmissionCeiling,required TResult Function( Set<String> stores,  Set<String> statuses,  bool blockedOnly,  bool? approved)  board,required TResult Function( String beadId)  beadRound,required TResult Function( String name,  String root,  String? prefix)  attachSubstation,required TResult Function( String name,  bool force)  detachSubstation,}) {final _that = this;
 switch (_that) {
 case GridRework():
 return rework(_that.beadId,_that.note,_that.beyondCap,_that.actor);case GridGateLs():
@@ -196,7 +200,8 @@ return collectHeldSessions(_that.sessionIds,_that.act,_that.bulk,_that.overrideU
 return setBeadText(_that.beadId,_that.field,_that.content,_that.append,_that.allowNotesReplacement);case GridMountAttemptRearm():
 return rearmMountAttempt(_that.beadId,_that.actor,_that.reason);case GridPauseSession():
 return pauseSession(_that.beadId);case GridResumeSession():
-return resumeSession(_that.beadId);case GridBeadBoard():
+return resumeSession(_that.beadId);case GridSetAdmissionCeiling():
+return setAdmissionCeiling(_that.maxAgents);case GridBeadBoard():
 return board(_that.stores,_that.statuses,_that.blockedOnly,_that.approved);case GridBeadRound():
 return beadRound(_that.beadId);case GridAttachSubstation():
 return attachSubstation(_that.name,_that.root,_that.prefix);case GridDetachSubstation():
@@ -214,7 +219,7 @@ return detachSubstation(_that.name,_that.force);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult? Function()?  listGates,TResult? Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,TResult? Function()?  listHeldSessions,TResult? Function( List<String> sessionIds,  bool act,  bool bulk,  bool overrideUnsafe)?  collectHeldSessions,TResult? Function( String beadId,  OperatorBeadTextField field,  String content,  bool append,  bool allowNotesReplacement)?  setBeadText,TResult? Function( String beadId,  String actor,  String reason)?  rearmMountAttempt,TResult? Function( String beadId)?  pauseSession,TResult? Function( String beadId)?  resumeSession,TResult? Function( Set<String> stores,  Set<String> statuses,  bool blockedOnly,  bool? approved)?  board,TResult? Function( String beadId)?  beadRound,TResult? Function( String name,  String root,  String? prefix)?  attachSubstation,TResult? Function( String name,  bool force)?  detachSubstation,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult? Function()?  listGates,TResult? Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,TResult? Function()?  listHeldSessions,TResult? Function( List<String> sessionIds,  bool act,  bool bulk,  bool overrideUnsafe)?  collectHeldSessions,TResult? Function( String beadId,  OperatorBeadTextField field,  String content,  bool append,  bool allowNotesReplacement)?  setBeadText,TResult? Function( String beadId,  String actor,  String reason)?  rearmMountAttempt,TResult? Function( String beadId)?  pauseSession,TResult? Function( String beadId)?  resumeSession,TResult? Function( int maxAgents)?  setAdmissionCeiling,TResult? Function( Set<String> stores,  Set<String> statuses,  bool blockedOnly,  bool? approved)?  board,TResult? Function( String beadId)?  beadRound,TResult? Function( String name,  String root,  String? prefix)?  attachSubstation,TResult? Function( String name,  bool force)?  detachSubstation,}) {final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
 return rework(_that.beadId,_that.note,_that.beyondCap,_that.actor);case GridGateLs() when listGates != null:
@@ -225,7 +230,8 @@ return collectHeldSessions(_that.sessionIds,_that.act,_that.bulk,_that.overrideU
 return setBeadText(_that.beadId,_that.field,_that.content,_that.append,_that.allowNotesReplacement);case GridMountAttemptRearm() when rearmMountAttempt != null:
 return rearmMountAttempt(_that.beadId,_that.actor,_that.reason);case GridPauseSession() when pauseSession != null:
 return pauseSession(_that.beadId);case GridResumeSession() when resumeSession != null:
-return resumeSession(_that.beadId);case GridBeadBoard() when board != null:
+return resumeSession(_that.beadId);case GridSetAdmissionCeiling() when setAdmissionCeiling != null:
+return setAdmissionCeiling(_that.maxAgents);case GridBeadBoard() when board != null:
 return board(_that.stores,_that.statuses,_that.blockedOnly,_that.approved);case GridBeadRound() when beadRound != null:
 return beadRound(_that.beadId);case GridAttachSubstation() when attachSubstation != null:
 return attachSubstation(_that.name,_that.root,_that.prefix);case GridDetachSubstation() when detachSubstation != null:
@@ -797,6 +803,72 @@ class _$GridResumeSessionCopyWithImpl<$Res>
   return _then(GridResumeSession(
 beadId: null == beadId ? _self.beadId : beadId // ignore: cast_nullable_to_non_nullable
 as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class GridSetAdmissionCeiling implements GridCommandRequest {
+  const GridSetAdmissionCeiling({required this.maxAgents});
+
+
+ final  int maxAgents;
+
+/// Create a copy of GridCommandRequest
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$GridSetAdmissionCeilingCopyWith<GridSetAdmissionCeiling> get copyWith => _$GridSetAdmissionCeilingCopyWithImpl<GridSetAdmissionCeiling>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is GridSetAdmissionCeiling&&(identical(other.maxAgents, maxAgents) || other.maxAgents == maxAgents));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,maxAgents);
+
+@override
+String toString() {
+  return 'GridCommandRequest.setAdmissionCeiling(maxAgents: $maxAgents)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $GridSetAdmissionCeilingCopyWith<$Res> implements $GridCommandRequestCopyWith<$Res> {
+  factory $GridSetAdmissionCeilingCopyWith(GridSetAdmissionCeiling value, $Res Function(GridSetAdmissionCeiling) _then) = _$GridSetAdmissionCeilingCopyWithImpl;
+@useResult
+$Res call({
+ int maxAgents
+});
+
+
+
+
+}
+/// @nodoc
+class _$GridSetAdmissionCeilingCopyWithImpl<$Res>
+    implements $GridSetAdmissionCeilingCopyWith<$Res> {
+  _$GridSetAdmissionCeilingCopyWithImpl(this._self, this._then);
+
+  final GridSetAdmissionCeiling _self;
+  final $Res Function(GridSetAdmissionCeiling) _then;
+
+/// Create a copy of GridCommandRequest
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? maxAgents = null,}) {
+  return _then(GridSetAdmissionCeiling(
+maxAgents: null == maxAgents ? _self.maxAgents : maxAgents // ignore: cast_nullable_to_non_nullable
+as int,
   ));
 }
 

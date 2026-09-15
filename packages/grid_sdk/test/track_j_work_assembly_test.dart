@@ -690,6 +690,7 @@ void main() {
       expect(admitted.admitted.single.candidate.bead.id, 'proj-1');
       final status = runtime.admission;
       expect(status.maxAgents, 4);
+      expect(status.maxAgentsSource, StationAdmissionCeilingSource.boot);
       expect(status.reservations.single.bead, 'proj-1');
       expect(status.reservations.single.sessionId, isNull);
       expect(status.reservations.single.since.isUtc, isTrue);
@@ -698,6 +699,24 @@ void main() {
       final nextStatus = runtime.admission;
       expect(nextStatus, isNot(same(status)));
       expect(nextStatus.reservations, status.reservations);
+
+      final changed = await runtime.commands(
+        const GridCommandRequest.setAdmissionCeiling(maxAgents: 2),
+      );
+      expect(
+        changed,
+        isA<GridCommandCompleted>().having(
+          (result) => result.value,
+          'value',
+          const {'maxAgents': 2, 'maxAgentsSource': 'control'},
+        ),
+      );
+      expect(runtime.admission.maxAgents, 2);
+      expect(
+        runtime.admission.maxAgentsSource,
+        StationAdmissionCeilingSource.control,
+      );
+      expect(runtime.admission.reservations, status.reservations);
 
       await runtime.shutdown();
       await runtime.shutdown();
@@ -713,7 +732,11 @@ void main() {
       expect(result.waiting, isEmpty);
       expect(result.refused.single.clause, 'disposed');
       expect(stateRunner.calls, hasLength(callsAfterShutdown));
-      expect(notifications, 0);
+      expect(
+        notifications,
+        1,
+        reason: 'shutdown and disposed requests add no command invalidation',
+      );
     },
   );
 }

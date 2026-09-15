@@ -59,6 +59,11 @@ sealed class GridCommandRequest with _$GridCommandRequest {
   const factory GridCommandRequest.resumeSession({required String beadId}) =
       GridResumeSession;
 
+  /// Sets the resident station's live admission ceiling.
+  const factory GridCommandRequest.setAdmissionCeiling({
+    required int maxAgents,
+  }) = GridSetAdmissionCeiling;
+
   /// Projects every resident work store's open beads into board rows.
   const factory GridCommandRequest.board({
     @Default(<String>{}) Set<String> stores,

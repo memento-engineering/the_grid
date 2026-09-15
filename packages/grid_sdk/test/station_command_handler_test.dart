@@ -12,6 +12,97 @@ void main() {
   group('resident command dispatch', () {
     setUp(BdCliService.resetGuardedWriteCapabilityForTesting);
 
+    test(
+      'grid/admission/set validates and maps the optional capability',
+      () async {
+        final stateRunner = _RecordingRunner();
+        final workRunner = _RecordingRunner();
+        var setterCalls = 0;
+        final handler = _handler(
+          state: _Source(_snapshot(const [])),
+          work: _Source(_snapshot(const [])),
+          stateRunner: stateRunner,
+          workRunner: workRunner,
+          setAdmissionCeiling: (maxAgents) {
+            setterCalls += 1;
+            return StationAdmissionStatus(
+              maxAgents: maxAgents,
+              maxAgentsSource: StationAdmissionCeilingSource.control,
+              reservations: const [],
+              refusals: const [],
+            );
+          },
+        );
+
+        for (final maxAgents in const [0, -1]) {
+          final invalid = await handler(
+            GridCommandRequest.setAdmissionCeiling(maxAgents: maxAgents),
+          );
+          expect(
+            invalid,
+            isA<GridCommandRefused>().having(
+              (result) => result.code,
+              'code',
+              'invalid_max_agents',
+            ),
+          );
+        }
+        expect(setterCalls, 0);
+
+        final completed = await handler(
+          const GridCommandRequest.setAdmissionCeiling(maxAgents: 6),
+        );
+        expect(
+          completed,
+          isA<GridCommandCompleted>().having(
+            (result) => result.value,
+            'value',
+            const {'maxAgents': 6, 'maxAgentsSource': 'control'},
+          ),
+        );
+        expect(setterCalls, 1);
+        expect(stateRunner.calls, isEmpty);
+        expect(workRunner.calls, isEmpty);
+
+        final unavailable = await _handler(
+          state: _Source(_snapshot(const [])),
+          work: _Source(_snapshot(const [])),
+          stateRunner: stateRunner,
+          workRunner: workRunner,
+        )(const GridCommandRequest.setAdmissionCeiling(maxAgents: 6));
+        expect(
+          unavailable,
+          isA<GridCommandRefused>().having(
+            (result) => result.code,
+            'code',
+            'admission_unavailable',
+          ),
+        );
+
+        final rejected = await _handler(
+          state: _Source(_snapshot(const [])),
+          work: _Source(_snapshot(const [])),
+          stateRunner: stateRunner,
+          workRunner: workRunner,
+          setAdmissionCeiling: (_) {
+            setterCalls += 1;
+            return null;
+          },
+        )(const GridCommandRequest.setAdmissionCeiling(maxAgents: 7));
+        expect(
+          rejected,
+          isA<GridCommandRefused>().having(
+            (result) => result.code,
+            'code',
+            'admission_unavailable',
+          ),
+        );
+        expect(setterCalls, 2);
+        expect(stateRunner.calls, isEmpty);
+        expect(workRunner.calls, isEmpty);
+      },
+    );
+
     test('grid/bead/set routes an owned description through writer', () async {
       final stateRunner = _RecordingRunner();
       final workRunner = _RecordingRunner();
@@ -2363,6 +2454,7 @@ StationCommandHandler _handler({
   StationTrajectoryRecorder? recorder,
   TrajectoryStepSnapshot Function()? stepSnapshot,
   int Function(String sessionId)? headEpochForSession,
+  StationAdmissionCeilingSetter? setAdmissionCeiling,
   DualReadMode dualReadMode = DualReadMode.observe,
   DualReadAccounting? dualReadAccounting,
 }) => StationCommandHandler(
@@ -2371,6 +2463,7 @@ StationCommandHandler _handler({
   // CONSUMER 3 of the step dual read (cut-wiring C4) — the park check.
   stepSnapshot: stepSnapshot,
   headEpochForSession: headEpochForSession,
+  setAdmissionCeiling: setAdmissionCeiling,
   dualReadMode: dualReadMode,
   dualReadAccounting: dualReadAccounting,
   stateWriter: StationBeadWriter(

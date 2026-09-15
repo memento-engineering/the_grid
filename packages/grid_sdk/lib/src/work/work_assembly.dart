@@ -1784,30 +1784,6 @@ Future<StationWorkRuntime> _acquireStationWork({
       spec.prefix: rootsByName[spec.name]!,
     },
   };
-  final commands = StationCommandHandler(
-    stateSource: stateSource,
-    refreshState: stateBundle.runtime.requery,
-    stateWriter: writer,
-    stateOwnership: stateOwnership,
-    workStoresByIdentity: workCommandStores,
-    listBeadWorktrees: git.listBeadWorktrees,
-    reapWorktree: git.reap,
-    workRootsByIdentity: workRootsByIdentity,
-    // `grid rework`'s re-key is one of `attempt.round.retired`'s two
-    // observation sites (stage1-wiring §2.3).
-    recorder: recorder,
-    // CONSUMER 3 of the step dual read (C4): the park check has no
-    // SessionProjection to carry a `trajCursor`, so its posture arrives by
-    // constructor — the same three inputs the bridge derives engagement from.
-    // UNWIRED at `off` (r13): the handler never reaches the mirror at all.
-    stepSnapshot: dualReadArmed ? () => trajectory.stepCursors : null,
-    headEpochForSession: dualReadArmed
-        ? (sessionId) =>
-              sessionHeadEpochOf(trajectory.sessionHeads.bySessionId(sessionId))
-        : null,
-    dualReadMode: trajectoryConfig.dualRead,
-    dualReadAccounting: dualReadAccounting,
-  );
   final groups = groupsOverride ?? const SystemProcessGroupController();
   final orphanSink = onOrphan ?? (String m) => stdout.writeln(m);
 
@@ -1830,6 +1806,31 @@ Future<StationWorkRuntime> _acquireStationWork({
     // the inert git service (its no-op runner returns empty output ⇒ every probe
     // `clear`), so a dry run is unchanged.
     workSignal: stationWorkSignal(git),
+  );
+  final commands = StationCommandHandler(
+    stateSource: stateSource,
+    refreshState: stateBundle.runtime.requery,
+    stateWriter: writer,
+    stateOwnership: stateOwnership,
+    workStoresByIdentity: workCommandStores,
+    listBeadWorktrees: git.listBeadWorktrees,
+    reapWorktree: git.reap,
+    workRootsByIdentity: workRootsByIdentity,
+    setAdmissionCeiling: services.admission.setMaxAgents,
+    // `grid rework`'s re-key is one of `attempt.round.retired`'s two
+    // observation sites (stage1-wiring §2.3).
+    recorder: recorder,
+    // CONSUMER 3 of the step dual read (C4): the park check has no
+    // SessionProjection to carry a `trajCursor`, so its posture arrives by
+    // constructor — the same three inputs the bridge derives engagement from.
+    // UNWIRED at `off` (r13): the handler never reaches the mirror at all.
+    stepSnapshot: dualReadArmed ? () => trajectory.stepCursors : null,
+    headEpochForSession: dualReadArmed
+        ? (sessionId) =>
+              sessionHeadEpochOf(trajectory.sessionHeads.bySessionId(sessionId))
+        : null,
+    dualReadMode: trajectoryConfig.dualRead,
+    dualReadAccounting: dualReadAccounting,
   );
   disposers.add((
     step: 'station admission dispose',
