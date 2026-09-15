@@ -213,6 +213,16 @@ class CapabilityHostState extends State<CapabilityHost>
   StationServices? _ctx;
   ServiceBundle _services = const ServiceBundle();
 
+  /// The CURRENT dependency pass — re-stamped on EVERY `_refreshDependencies`
+  /// call (tg-adic), never captured once at allocation-creation time. Reading
+  /// this field at report time (in [_onReportNow]) instead of a closed-over
+  /// pass means a report delivered after a LATER pass superseded the one that
+  /// created the allocation still finds a current scope, because the field
+  /// was re-stamped when that later pass ran. Only a real teardown (no
+  /// further `_refreshDependencies` call) leaves this pointing at an
+  /// invalidated scope forever — exactly the guard's intended meaning.
+  TreeDependencyScope? _scope;
+
   /// The Stage-1 derivation layer (stage1-wiring §2), re-resolved on every
   /// `didChangeDependencies` and held for the persist paths — which all run
   /// off `build`, which is exactly where the records belong. Absent it is a
@@ -328,6 +338,11 @@ class CapabilityHostState extends State<CapabilityHost>
     TreeWatchingReader reader,
     TreeDependencyScope scope,
   ) {
+    // The pass now in force (tg-adic) — stamped FIRST, on every call, so a
+    // report reaching _onReportNow after this point reads a scope this same
+    // pass just minted, not the scope of whichever pass happened to create
+    // the allocation.
+    _scope = scope;
     // ALWAYS re-read every dependency (D-H rule 1: assume a reference can
     // change; dependencyChanged re-runs this). The fields are captured for
     // async-gap use — never a read-once cache.
@@ -462,7 +477,7 @@ class CapabilityHostState extends State<CapabilityHost>
         // Stage 1 dual-exports, and retiring the token is a cut change.
         'GRID_ATTEMPT_ID': _attemptId,
       },
-      sink: (report) => _onReport(scope, report),
+      sink: _onReportNow,
       // The prior incarnation's identity for an adopt-freshness proof (D4);
       // empty for a fresh node. A job never adopts; a daemon adopts only when the
       // liveness seam proves the group live — offline (P1) that seam is the
@@ -480,6 +495,29 @@ class CapabilityHostState extends State<CapabilityHost>
       // The COMPLETION FENCE's probe; null → noWorkSignal → inert.
       workSignal: _ctx!.workSignal ?? noWorkSignal,
     );
+  }
+
+  /// The [Allocation]'s report sink (ADR-0009 D5) — a TEAR-OFF, never a
+  /// closure over the pass that created the allocation (tg-adic). The
+  /// allocation is minted once and never re-keyed on a later dependency pass
+  /// (`_refreshDependencies`'s update-in-place branch), so a closure over
+  /// that ONE pass's scope would permanently deafen the sink the moment a
+  /// LATER pass superseded it — even though the host stayed mounted the
+  /// whole time. Reading [_scope] here instead reads whatever pass is
+  /// CURRENT at report time (re-stamped on every `_refreshDependencies`
+  /// call), so only a real teardown (no further pass ever runs) leaves it
+  /// permanently stale — the guard's intended meaning.
+  void _onReportNow(AllocationReport report) {
+    final scope = _scope;
+    if (scope == null || !scope.isCurrent || !context.mounted) {
+      _emitFlare('step.reportDropped', {
+        'report': report.runtimeType.toString(),
+        'mounted': context.mounted.toString(),
+        'scopeCurrent': (scope?.isCurrent ?? false).toString(),
+      });
+      return;
+    }
+    _onReport(scope, report);
   }
 
   /// The report sink handed to the [Allocation] (ADR-0009 D5). Maps each pushed

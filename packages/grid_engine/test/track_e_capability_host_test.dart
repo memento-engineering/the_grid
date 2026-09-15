@@ -1001,7 +1001,18 @@ void main() {
     );
 
     test(
-      'dependency supersession drops an in-flight completion while the Host stays mounted',
+      // Restated for tg-adic: a dependency supersession that leaves the Host
+      // MOUNTED must not deafen its sink. The Host is never re-keyed on a
+      // refresh (`_refreshDependencies`'s update-in-place branch), so the ONE
+      // allocation created under pass 1 is still the allocation whose result
+      // reaches the sink after pass 2 — and the sink now reads the CURRENT
+      // scope (`_scope`, re-stamped on every pass) rather than the one pass 1
+      // closed over, so the completion lands instead of vanishing. Only a
+      // real teardown (mountedness false, no further pass) still drops —
+      // covered by 'a terminal delivered AFTER dispose writes nothing + does '
+      // 'not throw' above.
+      'dependency supersession while the Host stays mounted still advances '
+      'the in-flight completion (tg-adic)',
       () async {
         final runGate = Completer<void>();
         final log = <String>[];
@@ -1040,7 +1051,16 @@ void main() {
         runGate.complete();
         await _pump();
 
-        expect(h.fakes.runner.callsFor('update'), isEmpty);
+        final updates = h.fakes.runner.callsFor('update');
+        expect(
+          updates,
+          isNotEmpty,
+          reason: 'the completion must land (tg-adic)',
+        );
+        expect(
+          h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
+          'complete',
+        );
       },
     );
 
@@ -1104,9 +1124,12 @@ void main() {
         ).allMatches(source);
 
         expect(source, isNot(contains('_cancelled')));
-        expect(staleExits, hasLength(9));
+        // tg-adic added ONE more site: `_onReportNow`'s guard reads the
+        // CURRENT `_scope` (not a captured pass) before delegating to
+        // `_onReport`, which keeps its own byte-identical guard below it.
+        expect(staleExits, hasLength(10));
         expect(activeChecks, hasLength(2));
-        expect(staleExits.length + activeChecks.length, 11);
+        expect(staleExits.length + activeChecks.length, 12);
       },
     );
 
