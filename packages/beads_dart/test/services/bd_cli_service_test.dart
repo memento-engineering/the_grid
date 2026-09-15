@@ -307,6 +307,91 @@ void main() {
       expect(types.containsKey('custom_types'), isTrue);
     });
 
+    test('externalProjects() reads projected effective-config rows', () async {
+      final runner = FakeBdRunner(
+        queuedReplies: [
+          BdReply(
+            stdout: jsonEncode({
+              'schema_version': 1,
+              'data': [
+                {
+                  'key': 'storage.backend',
+                  'value': 'dolt',
+                  'source': 'config.yaml',
+                },
+                {
+                  'key': 'external_projects.power_station',
+                  'value': '../power_station',
+                  'source': 'config.yaml',
+                },
+                {
+                  'key': 'external_projects.genesis',
+                  'value': '../genesis',
+                  'source': 'config.yaml',
+                },
+                {
+                  'key': 'external_projects.',
+                  'value': '../unnamed',
+                  'source': 'config.yaml',
+                },
+              ],
+            }),
+          ),
+        ],
+      );
+
+      expect(await BdCliService(runner).externalProjects(), {
+        'power_station',
+        'genesis',
+      });
+      expect(runner.calls.single, ['config', 'show', '--json']);
+    });
+
+    test('externalProjects() accepts a proven unconfigured store', () async {
+      final runner = FakeBdRunner(
+        queuedReplies: [
+          BdReply(
+            stdout: jsonEncode({
+              'schema_version': 1,
+              'data': [
+                {
+                  'key': 'storage.backend',
+                  'value': 'dolt',
+                  'source': 'config.yaml',
+                },
+              ],
+            }),
+          ),
+        ],
+      );
+
+      expect(await BdCliService(runner).externalProjects(), isEmpty);
+      expect(runner.calls.single, ['config', 'show', '--json']);
+    });
+
+    test('externalProjects() refuses an empty config payload', () async {
+      final runner = FakeBdRunner(
+        queuedReplies: [
+          BdReply(
+            stdout: jsonEncode({'schema_version': 1, 'data': <dynamic>[]}),
+          ),
+        ],
+      );
+
+      await expectLater(
+        BdCliService(runner).externalProjects(),
+        throwsA(
+          isA<BdParseException>().having(
+            (error) => error.message,
+            'message',
+            'bd config show --json returned no configuration rows; '
+                'project absence is unproven',
+          ),
+        ),
+      );
+      expect(runner.calls.single, ['config', 'show', '--json']);
+    });
+
     test('depList() chunks ids at 50 per spawn and de-dupes edges', () async {
       // 120 ids → ceil(120/50) = 3 spawns.
       final ids = [for (var i = 0; i < 120; i++) 'tg-$i'];

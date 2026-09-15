@@ -225,27 +225,28 @@ void main() {
       );
     });
 
-    test('names the store, the project and what bd does know', () {
+    test('names the effective-config surface and every configured project', () {
       final refusal = externalProjectConfigRefusal(
         project: 'power_station',
-        configured: const {'genesis'},
+        configured: const {'swift_infer', 'genesis'},
         store: '/work/the_grid',
       )!;
       expect(refusal, contains('/work/the_grid'));
-      expect(refusal, contains('power_station'));
-      expect(refusal, contains('genesis'));
-      expect(refusal, contains('external_projects'));
+      expect(refusal, contains('external_projects.power_station'));
+      expect(refusal, contains('Configured: genesis, swift_infer'));
+      expect(refusal, contains('bd config show --json'));
     });
 
-    test('an unconfigured store reads as <none>, never as an error', () {
-      expect(
-        externalProjectConfigRefusal(
-          project: 'power_station',
-          configured: const {},
-          store: '/work/the_grid',
-        ),
-        contains('<none>'),
-      );
+    test('an unconfigured store names the project, surface, and <none>', () {
+      final refusal = externalProjectConfigRefusal(
+        project: 'power_station',
+        configured: const {},
+        store: '/work/the_grid',
+      )!;
+      expect(refusal, contains('/work/the_grid'));
+      expect(refusal, contains('external_projects.power_station'));
+      expect(refusal, contains('bd config show --json'));
+      expect(refusal, contains('Configured: <none>'));
     });
   });
 }
