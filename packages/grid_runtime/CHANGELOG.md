@@ -1,3 +1,10 @@
+## 0.2.1-dev.5
+
+- `StationBeadWriter.closeOpenGatesForNodeAdvance` and `GateCloseCause.supersededByAdvance` (#468):
+  a node's terminal advance closes the route gates it supersedes, so a gate adjudicated for a step
+  the circuit has already moved past no longer stays open. `grid_engine` 0.4.0-dev.9 calls it from
+  the advance corridor and floors on this version.
+
 ## 0.2.1-dev.4
 
 - The external-close terminal obligation no longer starves behind session beads the ledger no
