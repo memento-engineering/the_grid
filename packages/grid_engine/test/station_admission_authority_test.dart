@@ -55,9 +55,14 @@ final class _GatedMountAttemptRunner extends RecordingBdRunner {
 }
 
 final class _GatedFailingSessionCreateRunner extends RecordingBdRunner {
-  _GatedFailingSessionCreateRunner({required this.expectedCreates});
+  _GatedFailingSessionCreateRunner({
+    required this.expectedCreates,
+    super.createdId,
+    this.failAfterRelease = true,
+  });
 
   final int expectedCreates;
+  final bool failAfterRelease;
   final allCreatesEntered = Completer<void>();
   final releaseCreates = Completer<void>();
   var sessionCreates = 0;
@@ -78,13 +83,16 @@ final class _GatedFailingSessionCreateRunner extends RecordingBdRunner {
     if (!isSessionCreate) {
       return super.run(args, timeout: timeout, stdin: stdin);
     }
-    await super.run(args, timeout: timeout, stdin: stdin);
+    final result = await super.run(args, timeout: timeout, stdin: stdin);
     sessionCreates += 1;
     if (sessionCreates == expectedCreates && !allCreatesEntered.isCompleted) {
       allCreatesEntered.complete();
     }
     await releaseCreates.future;
-    throw StateError('controlled session-create failure');
+    if (failAfterRelease) {
+      throw StateError('controlled session-create failure');
+    }
+    return result;
   }
 }
 
@@ -2322,6 +2330,111 @@ void main() {
       isEmpty,
     );
   });
+
+  test(
+    'session create that settles after release is voided and throws',
+    () async {
+      const createdSessionId = 'tg-abandoned-session';
+      const settledReleaseReason =
+          'admission reservation released while the create settled';
+      final runner = _GatedFailingSessionCreateRunner(
+        expectedCreates: 1,
+        createdId: createdSessionId,
+        failAfterRelease: false,
+      );
+      final station = _stationOver(runner, maxConcurrentWork: 1);
+      addTearDown(() {
+        if (!runner.releaseCreates.isCompleted) {
+          runner.releaseCreates.complete();
+        }
+      });
+      addTearDown(station.dispose);
+      final owner = _bead('tg-owner');
+      final rival = _bead('tg-rival');
+      final config = _config.copyWith(maxConcurrentWork: 1);
+      final snapshot = _snapshot([owner, rival]);
+      final ownerCandidate = StationAdmissionCandidate(
+        bead: owner,
+        session: null,
+      );
+      final rivalCandidate = StationAdmissionCandidate(
+        bead: rival,
+        session: null,
+      );
+      final initial = station.admission.admitPending(
+        snapshot,
+        config,
+        const ServiceBundle(),
+        [ownerCandidate, rivalCandidate],
+      );
+      final ownerReservation = initial.admitted.single;
+      final create = station.admission.createSessionAttempt(
+        snapshot,
+        ownerCandidate,
+        title: 'grid session ${owner.id}',
+        metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
+      );
+      await runner.allCreatesEntered.future;
+
+      await station.admission.abandonSessionAttempt(
+        workBeadId: owner.id,
+        sessionId: null,
+        reservationToken: ownerReservation.reservationToken,
+        services: const ServiceBundle(),
+      );
+      final replacement = station.admission.admitPending(
+        snapshot,
+        config,
+        const ServiceBundle(),
+        [rivalCandidate],
+      );
+      expect(replacement.admitted.single.candidate.bead.id, rival.id);
+      expect(station.admission.admissionStatus.reservations, hasLength(1));
+      expect(
+        station.admission.admissionStatus.reservations.single.bead,
+        rival.id,
+      );
+
+      runner.releaseCreates.complete();
+      await expectLater(
+        create,
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'the admission reservation was released while its write settled',
+          ),
+        ),
+      );
+
+      final voidUpdateIndex = runner.calls.indexWhere(
+        (call) =>
+            call.isNotEmpty &&
+            call.first == 'update' &&
+            call.contains(
+              '${SessionBeadKeys.workBead}=${owner.id}#void-$createdSessionId',
+            ) &&
+            call.contains(
+              '${SessionBeadKeys.voidedReason}=$settledReleaseReason',
+            ),
+      );
+      expect(voidUpdateIndex, isNonNegative);
+      final closeIndex = runner.calls.indexWhere(
+        (call) =>
+            call.isNotEmpty &&
+            call.first == 'close' &&
+            call.length > 1 &&
+            call[1] == createdSessionId &&
+            call.contains(settledReleaseReason),
+      );
+      expect(closeIndex, greaterThan(voidUpdateIndex));
+      expect(station.admission.admissionStatus.reservations, hasLength(1));
+      expect(
+        station.admission.admissionStatus.reservations.single.bead,
+        rival.id,
+      );
+    },
+  );
 
   test('pause during mint releases capacity and leaves readmission to the '
       'authority', () async {

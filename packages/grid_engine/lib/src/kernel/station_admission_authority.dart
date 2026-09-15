@@ -1162,6 +1162,22 @@ final class StationAdmissionAuthority {
         workBeadId: candidate.bead.id,
         metadata: metadata,
       );
+      if (!identical(_reservations[candidate.bead.id], reservation)) {
+        const reason =
+            'admission reservation released while the create settled';
+        await _writer.update(
+          id,
+          metadata: voidRetireMetadata(
+            workBeadId: candidate.bead.id,
+            deadSessionId: id,
+            reason: reason,
+          ),
+        );
+        await _writer.close(id, reason: reason);
+        throw StateError(
+          'the admission reservation was released while its write settled',
+        );
+      }
       reservation.sessionId = id;
       reservation.reclaimedSessionId = null;
       _notifyListeners();
