@@ -5,8 +5,9 @@
 /// analogue of `session_bead.dart`'s `nodeCursorMetadata`); [projectMoleculeCursor]
 /// is its read-back mirror of `projectCircuitCursor`
 /// (`session_bead.dart:459`); [instantiateMolecule] is the one-time MINT that
-/// compiles a `Circuit` formula into a [GraphApplyPlan] — a pure function, zero
-/// I/O, exactly like `sdk/frontier.dart`'s `eligibleSteps`. Every dependency
+/// compiles a `Circuit` formula into one [CanonicalMoleculeGraph] — a pure
+/// function, zero I/O, exactly like `sdk/frontier.dart`'s `eligibleSteps`.
+/// Every dependency
 /// resolution here rides `sdk/frontier.dart`'s own `stepPath`/`depTerminalPath`
 /// VERBATIM, so a `dependsOn` on a `SubCircuitStep` sibling targets the
 /// IDENTICAL terminal-step descendant path the live engine's `depsSatisfied`
@@ -18,7 +19,8 @@
 library;
 
 import 'package:beads_dart/beads_dart.dart';
-import 'package:grid_runtime/grid_runtime.dart' show GridIssueTypes;
+import 'package:grid_runtime/grid_runtime.dart'
+    show CanonicalMoleculeEdge, CanonicalMoleculeGraph, GridIssueTypes;
 
 import '../domain/session_bead.dart' show projectCircuitResults, truncateReason;
 import '../sdk/circuit.dart';
@@ -239,10 +241,10 @@ DateTime? _parseDate(Object? value) =>
 /// COOK's role — this pure function is the compile step that instantiates the
 /// durable molecule (Decided item 8). Walks [Circuit.steps], emitting one
 /// [GraphNode] per molecule/step (recursing into a [SubCircuitStep]'s own
-/// nested circuit) and one [GraphEdge] per nesting / `dependsOn` /
-/// validates-convention edge, riding [GraphApplyPlan] verbatim — the caller
-/// pours it with `applyGraph(plan, ephemeral: false)` (R6): durable, never a
-/// wisp (Decided item 1).
+/// nested circuit) and one semantic edge per `dependsOn` / validates
+/// convention. [CanonicalMoleculeGraph.toGraphApplyPlan] reconstructs nesting
+/// for the caller to pour with `applyGraph(plan, ephemeral: false)` (R6):
+/// durable, never a wisp (Decided item 1).
 ///
 /// [sessionId] is the OWNING session bead — already minted before this is
 /// called (R5 mints the session, THEN pours the molecule), so it is addressed
@@ -253,7 +255,7 @@ DateTime? _parseDate(Object? value) =>
 /// plan).
 ///
 /// [root] is the caller's breadcrumb so far (work ⇄ session); it seeds the
-/// pour's audit [GraphApplyPlan.commitMessage]. The newly-minted beads' OWN
+/// pour's audit [CanonicalMoleculeGraph.commitMessage]. The newly-minted beads' OWN
 /// [MoleculeCircuitKeys.crumb]/[MoleculeStepKeys.crumb] values do not exist
 /// yet — their bead ids are born BY this very pour — so stamping the crumb is
 /// a POST-POUR write a later rung performs once `createMolecule` (R6) returns
@@ -267,7 +269,7 @@ DateTime? _parseDate(Object? value) =>
 /// `circuitId`, `dependsOn` target, or [kValidatesParam] target mints nothing
 /// for that edge/step — fail-closed, mirroring `depTerminalPath`'s own null
 /// propagation.
-GraphApplyPlan instantiateMolecule(
+CanonicalMoleculeGraph instantiateMolecule(
   Circuit circuit, {
   required String sessionId,
   required BeadPathKey root,
@@ -276,7 +278,7 @@ GraphApplyPlan instantiateMolecule(
 }) {
   final resolve = circuitById ?? (String _) => null;
   final nodes = <GraphNode>[];
-  final edges = <GraphEdge>[];
+  final edges = <CanonicalMoleculeEdge>[];
   _emitCircuit(
     circuit,
     sessionId: sessionId,
@@ -286,9 +288,10 @@ GraphApplyPlan instantiateMolecule(
     nodes: nodes,
     edges: edges,
   );
-  return GraphApplyPlan(
+  return CanonicalMoleculeGraph(
+    formula: circuit.id,
     commitMessage: 'grid molecule ${circuit.id} @ ${root.canonical}',
-    nodes: nodes,
+    nodeDefinitions: nodes,
     edges: edges,
   );
 }
@@ -306,7 +309,7 @@ void _emitCircuit(
   required String? parentId,
   required Circuit? Function(String) circuitById,
   required List<GraphNode> nodes,
-  required List<GraphEdge> edges,
+  required List<CanonicalMoleculeEdge> edges,
 }) {
   nodes.add(
     GraphNode(
@@ -341,13 +344,6 @@ void _emitCircuit(
             },
           ),
         );
-        edges.add(
-          GraphEdge(
-            fromKey: stepKey,
-            toKey: nodePath,
-            type: DependencyType.parentChild.wire,
-          ),
-        );
         _emitSiblingEdges(circuit, step, nodePath, stepKey, circuitById, edges);
 
       case SubCircuitStep(:final circuitId):
@@ -356,13 +352,6 @@ void _emitCircuit(
         if (nested == null) {
           continue;
         }
-        edges.add(
-          GraphEdge(
-            fromKey: stepKey,
-            toKey: nodePath,
-            type: DependencyType.parentChild.wire,
-          ),
-        );
         _emitSiblingEdges(circuit, step, nodePath, stepKey, circuitById, edges);
         _emitCircuit(
           nested,
@@ -389,16 +378,16 @@ void _emitSiblingEdges(
   String nodePath,
   String stepKey,
   Circuit? Function(String) circuitById,
-  List<GraphEdge> edges,
+  List<CanonicalMoleculeEdge> edges,
 ) {
   for (final depId in step.dependsOn) {
     final depPath = depTerminalPath(circuit, nodePath, depId, circuitById);
     if (depPath == null) continue;
     edges.add(
-      GraphEdge(
-        fromKey: stepKey,
-        toKey: depPath,
-        type: DependencyType.blocks.wire,
+      CanonicalMoleculeEdge(
+        fromPath: stepKey,
+        toPath: depPath,
+        kind: DependencyType.blocks.wire,
       ),
     );
   }
@@ -412,10 +401,10 @@ void _emitSiblingEdges(
   );
   if (targetPath == null) return;
   edges.add(
-    GraphEdge(
-      fromKey: stepKey,
-      toKey: targetPath,
-      type: DependencyType.validates.wire,
+    CanonicalMoleculeEdge(
+      fromPath: stepKey,
+      toPath: targetPath,
+      kind: DependencyType.validates.wire,
     ),
   );
 }

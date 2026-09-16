@@ -283,11 +283,12 @@ void main() {
   });
 
   group('projection selection (replay is per-projection in the tree)', () {
-    test('the default rebuilds all three', () async {
+    test('the default rebuilds all four', () async {
       seedCurrentShape();
       expect(await replay(), 0);
       expect(db.matching('DELETE FROM proj_session_head'), hasLength(1));
       expect(db.matching('DELETE FROM proj_step_cursor'), hasLength(1));
+      expect(db.matching('DELETE FROM proj_step_edges'), hasLength(1));
       expect(db.matching('DELETE FROM proj_process_identity'), hasLength(1));
     });
 
@@ -296,6 +297,16 @@ void main() {
       expect(await replay(projections: const [stepCursorProjection]), 0);
       expect(db.matching('DELETE FROM proj_step_cursor'), hasLength(1));
       expect(db.matching('proj_session_head'), isEmpty);
+      expect(db.matching('proj_process_identity'), isEmpty);
+      expect(db.matching('proj_step_edges'), isEmpty);
+    });
+
+    test('step_edges is independently replayable', () async {
+      seedCurrentShape();
+      expect(await replay(projections: const [moleculeEdgeProjection]), 0);
+      expect(db.matching('DELETE FROM proj_step_edges'), hasLength(1));
+      expect(db.matching('proj_session_head'), isEmpty);
+      expect(db.matching('proj_step_cursor'), isEmpty);
       expect(db.matching('proj_process_identity'), isEmpty);
     });
 
@@ -441,7 +452,7 @@ void main() {
       );
     });
 
-    test('--projection only accepts the three real projections', () async {
+    test('--projection only accepts the four real projections', () async {
       await expectLater(
         runner().run([
           'replay',

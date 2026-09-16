@@ -1229,7 +1229,7 @@ final class StationAdmissionAuthority {
   /// state-store read and the bd graph deadline identified by
   /// [stateStoreDeadlineMetadata]. Every other failure is rethrown unchanged.
   Future<Map<String, String>> pourMolecule(
-    GraphApplyPlan plan, {
+    CanonicalMoleculeGraph molecule, {
     required String workBeadId,
     required String sessionId,
     required Iterable<String> rootCrumbs,
@@ -1237,7 +1237,7 @@ final class StationAdmissionAuthority {
   }) async {
     try {
       final result = await _writer.createMolecule(
-        plan,
+        molecule.toGraphApplyPlan(),
         substation: _stateSubstation,
         sessionId: sessionId,
         rootCrumbs: rootCrumbs,

@@ -135,4 +135,32 @@ void main() {
     expect(identity.params!['last_seq'], 41);
     expect(h.db.matching('proj_step_cursor'), isEmpty);
   });
+
+  test('molecule edges are registered in both live fold postures', () async {
+    for (final folds in [kStage1FoldDeltas, kPreCutFoldDeltas]) {
+      final h = _Harness(folds);
+      await h.appender.claimEpoch(pid: 1, pgid: 1);
+      final outcome = await h.appender.append(
+        const MoleculePoured(
+          sessionId: 'tranquility-1',
+          round: 2,
+          formula: 'code',
+          graph: {
+            'edges': [
+              {'from_path': 'work/b', 'to_path': 'work/a', 'kind': 'blocks'},
+            ],
+            'nodes': ['work/a', 'work/b'],
+          },
+          nodeCount: 2,
+          graphDigest:
+              'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        ),
+      );
+      expect(outcome, isA<Appended>());
+      final edge = h.db.matching('INSERT INTO proj_step_edges').single;
+      expect(edge.params!['session_id'], 'tranquility-1');
+      expect(edge.params!['round'], 2);
+      expect(edge.params!['kind'], 'blocks');
+    }
+  });
 }

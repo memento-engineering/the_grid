@@ -12,6 +12,7 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/src/molecule/bead_path_key.dart';
 import 'package:grid_engine/src/molecule/molecule_codec.dart';
 import 'package:grid_engine/src/molecule/molecule_schema.dart';
+import 'package:grid_runtime/grid_runtime.dart' show CanonicalMoleculeGraph;
 import 'package:test/test.dart';
 
 Bead _stepBead(
@@ -477,17 +478,40 @@ void main() {
     const nodePath = 'tg-42';
     final root = BeadPathKey(['genesis-7r9', sessionId]);
 
+    late CanonicalMoleculeGraph molecule;
     late GraphApplyPlan plan;
 
     setUp(() {
-      plan = instantiateMolecule(
+      molecule = instantiateMolecule(
         _codeCircuit,
         sessionId: sessionId,
         root: root,
         nodePath: nodePath,
         circuitById: _circuitById,
       );
+      plan = molecule.toGraphApplyPlan();
     });
+
+    test(
+      'the canonical graph carries only sorted executable nodes and semantic edges',
+      () {
+        expect(molecule.formula, 'code');
+        expect(molecule.nodes, [...molecule.nodes]..sort());
+        expect(molecule.nodeCount, 6);
+        expect(
+          molecule.edges.every(
+            (edge) =>
+                edge.kind == DependencyType.blocks.wire ||
+                edge.kind == DependencyType.validates.wire,
+          ),
+          isTrue,
+        );
+        expect(
+          molecule.graph['edges'].toString(),
+          isNot(contains(DependencyType.parentChild.wire)),
+        );
+      },
+    );
 
     test(
       'golden node set: one molecule/step GraphNode per circuit node, incl. recursion',
@@ -685,8 +709,9 @@ void main() {
         nodePath: 'tg-9',
         circuitById: (_) => null,
       );
-      expect(plan.nodes.map((n) => n.key), ['tg-9']);
-      expect(plan.edges, isEmpty);
+      final legacy = plan.toGraphApplyPlan();
+      expect(legacy.nodes.map((n) => n.key), ['tg-9']);
+      expect(legacy.edges, isEmpty);
     });
 
     test(
@@ -711,8 +736,9 @@ void main() {
           nodePath: 'tg-9',
           circuitById: null,
         );
-        expect(plan.edges.length, 1);
-        expect(plan.edges.single.type, DependencyType.parentChild.wire);
+        final legacy = plan.toGraphApplyPlan();
+        expect(legacy.edges.length, 1);
+        expect(legacy.edges.single.type, DependencyType.parentChild.wire);
       },
     );
 

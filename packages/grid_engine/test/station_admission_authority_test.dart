@@ -288,10 +288,20 @@ const _config = SubstationConfig(
   maxConcurrentWork: 2,
 );
 
-const _moleculePlan = GraphApplyPlan(
-  commitMessage: 'test molecule',
-  nodes: [GraphNode(key: 'root', title: 'root', type: 'molecule')],
-);
+CanonicalMoleculeGraph _moleculePlan(String sessionId) =>
+    CanonicalMoleculeGraph(
+      formula: 'test',
+      commitMessage: 'test molecule',
+      nodeDefinitions: [
+        GraphNode(
+          key: 'root',
+          title: 'root',
+          type: GridIssueTypes.molecule.wire,
+          parentId: sessionId,
+        ),
+      ],
+      edges: const [],
+    );
 
 StationServices _stationOver(
   RecordingBdRunner runner, {
@@ -2003,7 +2013,7 @@ void main() {
       final beforeTimeout = invalidations;
 
       final pour = station.admission.pourMolecule(
-        _moleculePlan,
+        _moleculePlan(owned.sessionId),
         workBeadId: 'tg-1',
         sessionId: owned.sessionId,
         rootCrumbs: const ['tg-1', 'tg-s1'],
@@ -2269,7 +2279,7 @@ void main() {
 
       await expectLater(
         station.admission.pourMolecule(
-          _moleculePlan,
+          _moleculePlan(owned.sessionId),
           workBeadId: 'tg-1',
           sessionId: owned.sessionId,
           rootCrumbs: const ['tg-1', 'tg-s1'],
@@ -2327,7 +2337,7 @@ void main() {
 
       await expectLater(
         unclassifiedStation.admission.pourMolecule(
-          _moleculePlan,
+          _moleculePlan(unclassifiedOwned.sessionId),
           workBeadId: 'tg-1',
           sessionId: unclassifiedOwned.sessionId,
           rootCrumbs: const ['tg-1', 'tg-unclassified'],
@@ -2358,7 +2368,7 @@ void main() {
 
       await expectLater(
         staleStation.admission.pourMolecule(
-          _moleculePlan,
+          _moleculePlan('tg-stale'),
           workBeadId: 'tg-2',
           sessionId: 'tg-stale',
           rootCrumbs: const ['tg-2', 'tg-stale'],

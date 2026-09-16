@@ -67,6 +67,9 @@ export 'src/fold/session_head_fold.dart'; // replay: fold a stream, truncate + r
 export 'src/fold/session_head_row.dart'; // the proj_session_head row image
 
 // SECTION: fold, Stage 1 — the P2 + P6 incremental folds (stage1-wiring W6).
+export 'src/fold/molecule_edge_delta.dart'; // molecule.poured delta + live/replay appliers
+export 'src/fold/molecule_edge_fold.dart'; // proj_step_edges replay + proj_meta generation
+export 'src/fold/molecule_edge_row.dart'; // immutable semantic edge row + key
 export 'src/fold/process_identity_delta.dart'; // P6 delta fn + its two appliers (SQL / in-memory)
 export 'src/fold/process_identity_fold.dart'; // P6 replay: fold, truncate + rewrite, proj_meta
 export 'src/fold/process_identity_row.dart'; // the proj_process_identity row image
