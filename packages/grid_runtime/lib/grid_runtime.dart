@@ -212,15 +212,17 @@ export 'src/trajectory/station_trajectory_recorder.dart'
 export 'src/trajectory/trajectory_append_result.dart'
     show Acked, Dropped, Suppressed, TrajectoryAppendResult;
 // Stage 1 (tg-zfek, chunk W7) — the tick's shadow-posture obligation set and
-// its two real liveness surfaces. The harness composes these; nothing here
-// writes bd or the filesystem (stage1-wiring §2.4).
+// its two real liveness surfaces. The harness composes these; only a cut owner
+// can opt into the post-loss recovery callback (stage1-wiring §2.4).
 export 'src/trajectory/stage1_obligations.dart'
     show
         AdmissionRestorationObligation,
         AppendQueuedProbe,
+        AttemptLivenessLostHandler,
         ExternalCloseTerminalObligation,
         LastActivityPoll,
         LivenessDetectorObligation,
+        LivenessLossRecoveryObligation,
         LiveWorktreeReapObligation,
         SessionClosure,
         SessionClosureProbe,
@@ -235,6 +237,7 @@ export 'src/trajectory/stage1_obligations.dart'
         kAdmissionRestorationObligation,
         kExternalCloseTerminalObligation,
         kLivenessDetectorObligation,
+        kLivenessLossRecoveryObligation,
         kObligationBatchSize,
         kPulseViaRuntime,
         kPulseViaWorktreeMtime,

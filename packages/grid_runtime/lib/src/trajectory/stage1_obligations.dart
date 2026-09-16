@@ -2,8 +2,8 @@
 ///
 /// The tick's query list arms per schema §9's amendment: attempt/step-family
 /// obligations ONLY, and **during the dual-write window an obligation must
-/// never fight a live legacy writer.** Three queries arm here, all of them
-/// record-only or legacy-idle repairs:
+/// never fight a live legacy writer.** The default queries are record-only or
+/// legacy-idle repairs:
 ///
 ///   1. [UnknownTerminalSettlementObligation] — `attempt.terminal(unknown)`
 ///      rows with no settling successor: probe the process table / worktree,
@@ -16,13 +16,20 @@
 ///   3. [LivenessDetectorObligation] — the pulse beats and their threshold
 ///      transitions, honouring `unknown` (current-epoch beats only).
 ///
-/// **Headline property, restated where it is enforced: Stage 1 changes NOTHING
-/// about what mounts.** Nothing here writes bd, nothing here writes the
-/// filesystem, and no eligibility clause is added — the worktree-outstanding
-/// barrier, the head re-stamp, and the live reap are CUT-package deliverables
-/// (§2.4, r2 blocker 1). The only writes these obligations make are trajectory
-/// appends (through the tick's fenced appender) and `traj_pulse` UPSERT/DELETE
-/// — the dolt_ignore'd working-set table the design gives the detector.
+/// A cut owner may additionally supply an [AttemptLivenessLostHandler]. That
+/// arms [LivenessLossRecoveryObligation] immediately after the detector. It is
+/// the sole optional mutation callback in this set: the tick first durably
+/// appends the loss, then invokes the handler for that unresolved loss before
+/// advancing to the next query. The default and shadow posture stays
+/// record-only.
+///
+/// **Default/shadow headline property: Stage 1 changes NOTHING about what
+/// mounts.** Without the optional cut handler, nothing here writes bd, nothing
+/// here writes the filesystem, and no eligibility clause is added. The only
+/// writes are trajectory appends (through the tick's fenced appender) and
+/// `traj_pulse` UPSERT/DELETE — the dolt_ignore'd working-set table the design
+/// gives the detector. The cut handler is explicitly different: after a
+/// durable liveness loss it delegates recovery to its station owner.
 ///
 /// The records are built through [StationTrajectoryRecorder]'s builders, which
 /// is what keeps the concrete record vocabulary in one library (§2) while the
@@ -44,6 +51,18 @@ import 'worktree_pulse_scanner.dart';
 /// (b) of §2.3. Keyed by the provider's session name, `<sessionId>/<stepPath>`
 /// (`AllocationAddress.providerName`).
 typedef LastActivityPoll = DateTime? Function(String providerName);
+
+/// Handles one durable liveness loss for the attempt that still owns an active
+/// session cursor.
+///
+/// Only a cut owner supplies this callback. A thrown error deliberately leaves
+/// the durable loss unresolved so the next fenced tick retries it.
+typedef AttemptLivenessLostHandler =
+    Future<void> Function({
+      required String attemptId,
+      required String sessionId,
+      required String workBeadId,
+    });
 
 /// What the LEDGER says about one session bead's closure — the one bd fact the
 /// external-close obligation consumes (decision
@@ -124,6 +143,7 @@ const String kExternalCloseTerminalObligation = 'external-close-terminal';
 const String kWorktreeReapedBackfillObligation = 'worktree-reaped-backfill';
 const String kLiveWorktreeReapObligation = 'live-worktree-reap';
 const String kLivenessDetectorObligation = 'liveness-detector';
+const String kLivenessLossRecoveryObligation = 'liveness-loss-recovery';
 const String kAdmissionRestorationObligation = 'admission-restoration';
 
 /// How long a ledger-closed session must stay closed-in-bd / open-in-P1 before
@@ -170,6 +190,9 @@ typedef WorktreeRootSupplier = RootCheckout? Function(String worktreePath);
 /// the scanner answering alone. [sessionClosure] is the ledger's answer for the
 /// external-close obligation; null (unwired) leaves that obligation inert, and
 /// [appendQueued] is the harness's in-flight check it consults before healing.
+/// [livenessLostHandler] is cut-only. When supplied, the recovery query follows
+/// the detector so `TrajectoryTick`'s serial append-before-next-query ordering
+/// makes the loss durable before recovery mutates station state.
 List<ObligationQuery> buildStage1ObligationQueries({
   required StationTrajectoryRecorder recorder,
   required TrajectoryDb db,
@@ -187,46 +210,58 @@ List<ObligationQuery> buildStage1ObligationQueries({
   ReapWorktree? reapWorktree,
   WorktreeRootSupplier? worktreeRoot,
   bool admissionRefusalsArmed = false,
-}) => [
-  UnknownTerminalSettlementObligation(
-    recorder: recorder,
-    station: station,
-    processes: processes ?? SystemProcessGroupController(),
-  ),
-  ExternalCloseTerminalObligation(
-    recorder: recorder,
-    station: station,
-    clock: clock ?? DateTime.now,
-    sessionClosure: sessionClosure,
-    appendQueued: appendQueued,
-    grace: externalCloseGrace,
-  ),
-  WorktreeReapedBackfillObligation(recorder: recorder),
-  if (reapWorktree != null && worktreeRoot != null)
-    LiveWorktreeReapObligation(
+  AttemptLivenessLostHandler? livenessLostHandler,
+}) {
+  final resolvedClock = clock ?? DateTime.now;
+  return [
+    UnknownTerminalSettlementObligation(
       recorder: recorder,
-      sessionClosure: sessionClosure,
-      reapWorktree: reapWorktree,
-      worktreeRoot: worktreeRoot,
+      station: station,
+      processes: processes ?? SystemProcessGroupController(),
     ),
-  LivenessDetectorObligation(
-    recorder: recorder,
-    db: db,
-    station: station,
-    bootEpoch: bootEpoch,
-    lastActivity: lastActivity,
-    scanner: scanner,
-    threshold: livenessThreshold,
-    coalesce: pulseCoalesce,
-    clock: clock ?? DateTime.now,
-  ),
-  // The barrier's restoration half (cut-wiring §W2.4 W2-B item 4), armed on
-  // the SAME lever as its refusal: the cut. Under shadow the barrier appends
-  // no refusal, so there is nothing for this query to clear and it stays out
-  // of the set entirely.
-  if (admissionRefusalsArmed)
-    AdmissionRestorationObligation(recorder: recorder, station: station),
-];
+    ExternalCloseTerminalObligation(
+      recorder: recorder,
+      station: station,
+      clock: resolvedClock,
+      sessionClosure: sessionClosure,
+      appendQueued: appendQueued,
+      grace: externalCloseGrace,
+    ),
+    WorktreeReapedBackfillObligation(recorder: recorder),
+    if (reapWorktree != null && worktreeRoot != null)
+      LiveWorktreeReapObligation(
+        recorder: recorder,
+        sessionClosure: sessionClosure,
+        reapWorktree: reapWorktree,
+        worktreeRoot: worktreeRoot,
+      ),
+    LivenessDetectorObligation(
+      recorder: recorder,
+      db: db,
+      station: station,
+      bootEpoch: bootEpoch,
+      lastActivity: lastActivity,
+      scanner: scanner,
+      threshold: livenessThreshold,
+      coalesce: pulseCoalesce,
+      clock: resolvedClock,
+    ),
+    if (livenessLostHandler != null)
+      LivenessLossRecoveryObligation(
+        handler: livenessLostHandler,
+        station: station,
+        bootEpoch: bootEpoch,
+        threshold: livenessThreshold,
+        clock: resolvedClock,
+      ),
+    // The barrier's restoration half (cut-wiring §W2.4 W2-B item 4), armed on
+    // the SAME lever as its refusal: the cut. Under shadow the barrier appends
+    // no refusal, so there is nothing for this query to clear and it stays out
+    // of the set entirely.
+    if (admissionRefusalsArmed)
+      AdmissionRestorationObligation(recorder: recorder, station: station),
+  ];
+}
 
 /// The worktree-outstanding barrier's RESTORATION (cut-wiring §W2.4 W2-B).
 ///
@@ -925,10 +960,15 @@ final class LivenessDetectorObligation extends ObligationQuery {
   @override
   String get name => kLivenessDetectorObligation;
 
-  /// Every attempt of an OPEN session of THIS station whose lease is not
-  /// released/swept, with its CURRENT-EPOCH pulse row if it has one. The epoch
-  /// predicate is the unknown rule in SQL: a beat stamped by a prior epoch
-  /// does not join, so it reads exactly like no beat at all.
+  /// Every attempt that still owns the unsuperseded running/ready cursor of an
+  /// OPEN session of THIS station, with its CURRENT-EPOCH pulse row if it has
+  /// one. The epoch predicate is the unknown rule in SQL: a beat stamped by a
+  /// prior epoch does not join, so it reads exactly like no beat at all.
+  ///
+  /// P2, not the P6 lease state, is the liveness authority. Released and swept
+  /// process identities remain subjects while their exact attempt identity is
+  /// still the active cursor; this is the restart-adoption shape the lease-only
+  /// predicate used to silence.
   ///
   /// Scoped + bounded like its two siblings: `h.rig` is the station name the
   /// mint stamped (§2.2's rig source is `stateSubstation`), so a head row born
@@ -941,11 +981,16 @@ final class LivenessDetectorObligation extends ObligationQuery {
       'p.step_path AS step_path, p.worktree AS worktree, '
       'u.beat_at AS beat_at '
       'FROM proj_process_identity p '
+      'JOIN proj_step_cursor c ON c.session_id = p.session_id '
+      'AND c.round = p.round AND c.step_path = p.step_path '
+      'AND c.step_round = p.step_round AND c.incarnation = p.incarnation '
+      'AND c.attempt_id = p.attempt_id '
       'JOIN proj_session_head h ON h.session_id = p.session_id '
       'LEFT JOIN traj_pulse u ON u.subject_id = p.attempt_id '
       "AND u.kind = 'attempt' AND u.boot_epoch = :boot_epoch "
       "WHERE h.status = 'open' AND h.rig = :station "
-      "AND (p.lease_state IS NULL OR p.lease_state = 'held') "
+      'AND c.superseded_by_step_round IS NULL '
+      "AND c.state IN ('running', 'ready') "
       'ORDER BY p.attempt_id LIMIT $batch';
 
   @override
@@ -1081,6 +1126,98 @@ final class LivenessDetectorObligation extends ObligationQuery {
     'JOIN proj_session_head h ON h.session_id = p.session_id '
     "WHERE h.status = 'closed')",
   );
+}
+
+/// Recovers a durable liveness loss whose exact attempt still owns an active
+/// cursor in an open session.
+///
+/// This is deliberately a separate query immediately after
+/// [LivenessDetectorObligation]. The tick appends the detector's loss before it
+/// executes this query. A current-epoch pulse must also be strictly older than
+/// [threshold], so an unknown subject or a subject that beat again after its
+/// loss stays inert even before a durable `attempt.liveness.regained` lands.
+///
+/// The handler is sequential and errors are not swallowed: the tick reports
+/// its existing query-failure refusal, while the unresolved loss remains
+/// eligible on the next pass.
+final class LivenessLossRecoveryObligation extends ObligationQuery {
+  LivenessLossRecoveryObligation({
+    required AttemptLivenessLostHandler handler,
+    required String station,
+    required int Function() bootEpoch,
+    required DateTime Function() clock,
+    this.threshold = kDefaultLivenessThreshold,
+    this.batch = kObligationBatchSize,
+  }) : _handler = handler,
+       _station = station,
+       _bootEpoch = bootEpoch,
+       _clock = clock;
+
+  final AttemptLivenessLostHandler _handler;
+  final String _station;
+  final int Function() _bootEpoch;
+  final DateTime Function() _clock;
+
+  /// The no-pulse interval after which recovery may act.
+  final Duration threshold;
+
+  /// Rows per pass, under the shared Stage-1 bound.
+  final int batch;
+
+  @override
+  String get name => kLivenessLossRecoveryObligation;
+
+  @override
+  Map<String, Object?> get parameters => {
+    'station': _station,
+    'boot_epoch': _bootEpoch(),
+    'stale_before': sqlDateTime6(_clock().toUtc().subtract(threshold)),
+  };
+
+  @override
+  String get sql =>
+      'SELECT h.work_bead_id AS work_bead_id, '
+      'p.session_id AS session_id, p.attempt_id AS attempt_id '
+      'FROM trajectory l '
+      'JOIN proj_process_identity p ON p.attempt_id = l.attempt_id '
+      'JOIN proj_step_cursor c ON c.session_id = p.session_id '
+      'AND c.round = p.round AND c.step_path = p.step_path '
+      'AND c.step_round = p.step_round AND c.incarnation = p.incarnation '
+      'AND c.attempt_id = p.attempt_id '
+      'JOIN proj_session_head h ON h.session_id = p.session_id '
+      'JOIN traj_pulse u ON u.subject_id = p.attempt_id '
+      "AND u.kind = 'attempt' AND u.boot_epoch = :boot_epoch "
+      "WHERE l.record_type = 'attempt.liveness.lost' "
+      'AND l.station = :station AND h.rig = :station '
+      "AND h.status = 'open' AND h.work_bead_id IS NOT NULL "
+      'AND c.superseded_by_step_round IS NULL '
+      "AND c.state IN ('running', 'ready') "
+      'AND u.beat_at < :stale_before '
+      'AND NOT EXISTS (SELECT 1 FROM trajectory n '
+      'WHERE n.attempt_id = l.attempt_id AND n.seq > l.seq '
+      "AND n.record_type IN ('attempt.liveness.regained', "
+      "'attempt.terminal')) "
+      'ORDER BY l.seq LIMIT $batch';
+
+  @override
+  Future<List<ObligationAppend>> repair(List<Map<String, String?>> rows) async {
+    final seen = <String>{};
+    for (final row in rows) {
+      final attemptId = row['attempt_id'];
+      final sessionId = row['session_id'];
+      final workBeadId = row['work_bead_id'];
+      if (attemptId == null || sessionId == null || workBeadId == null) {
+        continue;
+      }
+      if (!seen.add(attemptId)) continue;
+      await _handler(
+        attemptId: attemptId,
+        sessionId: sessionId,
+        workBeadId: workBeadId,
+      );
+    }
+    return const <ObligationAppend>[];
+  }
 }
 
 /// `traj_pulse.observed_via` for the provider's activity poll.

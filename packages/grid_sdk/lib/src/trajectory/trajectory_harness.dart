@@ -38,6 +38,7 @@ import 'package:grid_runtime/grid_runtime.dart'
     show
         Died,
         Exited,
+        AttemptLivenessLostHandler,
         LastActivityPoll,
         RuntimeEvent,
         ReapWorktree,
@@ -277,6 +278,7 @@ class TrajectoryHarness {
     required SessionClosureProbe? sessionClosure,
     required ReapWorktree? reapWorktree,
     required WorktreeRootSupplier? worktreeRoot,
+    required AttemptLivenessLostHandler? livenessLostHandler,
     required Stream<RuntimeEvent>? runtimeEvents,
     required Timer Function(Duration, void Function()) scheduleTimer,
     required DateTime Function() clock,
@@ -295,6 +297,7 @@ class TrajectoryHarness {
        _sessionClosure = sessionClosure,
        _reapWorktree = reapWorktree,
        _worktreeRoot = worktreeRoot,
+       _livenessLostHandler = livenessLostHandler,
        _runtimeEvents = runtimeEvents,
        _scheduleTimer = scheduleTimer,
        _clock = clock,
@@ -307,10 +310,13 @@ class TrajectoryHarness {
   /// connect/verify/claim happen in [start], after the stores are up (§1.2).
   ///
   /// [connect] / [appenderFactory] / [tickQueries] / [scheduleTimer] / [clock]
-  /// / [identity] are TEST seams; production takes the defaults. The default
-  /// connect path resolves the dolt listener FRESH on every call — which is
-  /// what makes the reconnect rule (§4: re-resolve, never pin the boot-time
-  /// port) hold by construction.
+  /// / [identity] are TEST seams; production takes the defaults.
+  /// [livenessLostHandler] optionally adds the cut owner's ordered recovery
+  /// callback after the record-only liveness detector. The default is null, so
+  /// shadow and caller-owned harnesses retain the record-only Stage-1 set. The
+  /// default connect path resolves the dolt listener FRESH on every call —
+  /// which is what makes the reconnect rule (§4: re-resolve, never pin the
+  /// boot-time port) hold by construction.
   static Future<TrajectoryHarness> build({
     required TrajectoryConfig config,
     required String gridHome,
@@ -325,6 +331,7 @@ class TrajectoryHarness {
     SessionClosureProbe? sessionClosure,
     ReapWorktree? reapWorktree,
     WorktreeRootSupplier? worktreeRoot,
+    AttemptLivenessLostHandler? livenessLostHandler,
     Stream<RuntimeEvent>? runtimeEvents,
     Timer Function(Duration, void Function())? scheduleTimer,
     DateTime Function()? clock,
@@ -362,6 +369,7 @@ class TrajectoryHarness {
       sessionClosure: sessionClosure,
       reapWorktree: reapWorktree,
       worktreeRoot: worktreeRoot,
+      livenessLostHandler: livenessLostHandler,
       runtimeEvents: runtimeEvents,
       scheduleTimer: scheduleTimer ?? Timer.new,
       clock: clock ?? DateTime.now,
@@ -450,6 +458,7 @@ class TrajectoryHarness {
   final SessionClosureProbe? _sessionClosure;
   final ReapWorktree? _reapWorktree;
   final WorktreeRootSupplier? _worktreeRoot;
+  final AttemptLivenessLostHandler? _livenessLostHandler;
 
   /// `RuntimeProvider.events` — §1.1's runtime-event subscriber (harness-
   /// internal): the observation surface for §2.3's `attempt.process.started`
@@ -827,9 +836,9 @@ class TrajectoryHarness {
     );
   }
 
-  /// §2.4's shadow-posture set: unknown-terminal settlement, worktree.reaped
-  /// backfill, and the liveness detector. Nothing in it writes bd or the
-  /// filesystem — Stage 1 changes NOTHING about what mounts.
+  /// §2.4's default shadow-posture set is record-only. A cut composer may add
+  /// the ordered liveness-loss callback; it remains inside this same serial,
+  /// fenced tick and runs only after the detector's loss append commits.
   List<ObligationQuery> _stage1Obligations() => buildStage1ObligationQueries(
     recorder: recorder,
     // The tick's own read path: serialized on the harness's one lane and
@@ -852,6 +861,7 @@ class TrajectoryHarness {
     appendQueued: hasQueuedAppendForAttemptOrSession,
     reapWorktree: _reapWorktree,
     worktreeRoot: _worktreeRoot,
+    livenessLostHandler: _livenessLostHandler,
     // The barrier's restoration half arms on the cut, with its refusal
     // (cut-wiring §W2.4 W2-B item 4): under shadow the mount boundary appends
     // no `admission.refused`, so the query would have nothing to clear.

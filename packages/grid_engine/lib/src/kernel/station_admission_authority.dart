@@ -210,6 +210,18 @@ final class _UnsnapshottedReservation {
   bool minting = false;
 }
 
+final class _LostSessionRetirement {
+  _LostSessionRetirement({required this.workBeadId, required this.attemptId})
+    : completer = Completer<String>() {
+    future = completer.future;
+  }
+
+  final String workBeadId;
+  final String attemptId;
+  final Completer<String> completer;
+  late final Future<String> future;
+}
+
 /// All mutable admission state for one station/substation scope.
 ///
 /// Stage 3 exclusively owns retirement into trajectory projections and
@@ -294,6 +306,9 @@ final class StationAdmissionAuthority {
   // Writes not yet represented by JoinedSnapshot require one shared future.
   final Map<String, Future<void>> _mountAttemptWrites =
       <String, Future<void>>{};
+  // In-flight liveness-loss cuts are unavailable from JoinedSnapshot.
+  final Map<String, _LostSessionRetirement> _lostSessionRetirements =
+      <String, _LostSessionRetirement>{};
   // Cancellation quarantine persists until a later snapshot proves readiness.
   final Set<String> _blockedUntilFreshReady = <String>{};
   // This flag represents one queued capacity invalidation operation.
@@ -1312,6 +1327,71 @@ final class StationAdmissionAuthority {
       services: services,
       retryAfterClose: false,
     );
+  }
+
+  /// Stops every runtime below [sessionId], then retires the lost session
+  /// through the incumbent void path so capacity is released only after its
+  /// durable close.
+  ///
+  /// Calls for the identical work/session/attempt tuple share the exact same
+  /// in-flight future. A competing identity for that session throws
+  /// synchronously: silently joining it would let one liveness loss testify
+  /// for another attempt. Any provider or writer failure completes the shared
+  /// future with that error and removes the entry so a later fenced tick can
+  /// retry the still-unresolved loss.
+  Future<String> retireLostSession({
+    required String workBeadId,
+    required String sessionId,
+    required String attemptId,
+    required ServiceBundle services,
+  }) {
+    final existing = _lostSessionRetirements[sessionId];
+    if (existing != null) {
+      if (existing.workBeadId != workBeadId ||
+          existing.attemptId != attemptId) {
+        throw StateError(
+          'lost-session retirement identity changed for "$sessionId"',
+        );
+      }
+      return existing.future;
+    }
+
+    final entry = _LostSessionRetirement(
+      workBeadId: workBeadId,
+      attemptId: attemptId,
+    );
+    _lostSessionRetirements[sessionId] = entry;
+    unawaited(
+      _retireLostSession(entry, sessionId: sessionId, services: services),
+    );
+    return entry.future;
+  }
+
+  Future<void> _retireLostSession(
+    _LostSessionRetirement entry, {
+    required String sessionId,
+    required ServiceBundle services,
+  }) async {
+    try {
+      final running = _provider.listRunning('$sessionId/');
+      for (final runtime in running) {
+        await _provider.stop(runtime);
+      }
+      final retired = await _voidCreatedSession(
+        workBeadId: entry.workBeadId,
+        sessionId: sessionId,
+        reason: 'attempt-liveness-lost',
+        services: services,
+        retryAfterClose: true,
+      );
+      entry.completer.complete(retired);
+    } on Object catch (error, stackTrace) {
+      entry.completer.completeError(error, stackTrace);
+    } finally {
+      if (identical(_lostSessionRetirements[sessionId], entry)) {
+        _lostSessionRetirements.remove(sessionId);
+      }
+    }
   }
 
   Future<String> _voidCreatedSession({

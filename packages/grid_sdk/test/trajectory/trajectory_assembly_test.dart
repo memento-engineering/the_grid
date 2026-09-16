@@ -345,6 +345,56 @@ void main() {
     },
   );
 
+  test('station assembly keeps liveness-loss recovery cut-only, shared, and '
+      'post-flush', () async {
+    final source = File('lib/src/work/work_assembly.dart').readAsStringSync();
+
+    expect(
+      source,
+      contains('trajectoryOverride ??\n      await TrajectoryHarness.build('),
+      reason: 'a caller-owned harness is not retrofitted',
+    );
+    expect(
+      source,
+      contains(
+        'livenessLostHandler:\n'
+        '            trajectoryConfig.discipline != '
+        'TrajectoryDiscipline.cut\n'
+        '            ? null',
+      ),
+      reason: 'shadow remains record-only',
+    );
+    expect(
+      source,
+      allOf(
+        contains('attemptLivenessRecovery = StationAttemptLivenessRecovery('),
+        contains('services: () => services,'),
+        contains('recorder: recorder,'),
+        contains(
+          'snapshot: () => stateSource.current ?? _emptyGraphSnapshot()',
+        ),
+      ),
+      reason: 'the callback shares assembly\'s authority, recorder, and state',
+    );
+    final relayActivation = source.indexOf('sessionLiveness.activate();');
+    final lossActivation = source.indexOf(
+      '_attemptLivenessRecovery.activate();',
+    );
+    expect(relayActivation, isNonNegative);
+    expect(lossActivation, greaterThan(relayActivation));
+
+    final work = await assemble();
+    addTearDown(work.shutdown);
+    await work.start();
+    work.afterFlush();
+    work.afterFlush();
+    expect(
+      work.trajectory.tick,
+      isNull,
+      reason: 'the resolved shadow/disabled harness owns no recovery query',
+    );
+  });
+
   test('work-session liveness obligation rides the fenced tick seam', () async {
     const first = _NoOpQuery('first-extension');
     const second = _NoOpQuery('second-extension');
