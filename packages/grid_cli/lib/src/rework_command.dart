@@ -112,7 +112,32 @@ class ReworkCommand extends Command<int> {
       },
     );
     switch (result) {
-      case StationCommandCompleted():
+      case StationCommandCompleted(:final value):
+        final closedSession = switch (value['closedSession']) {
+          final Map<Object?, Object?> row => row.cast<String, Object?>(),
+          _ => const <String, Object?>{},
+        };
+        if (closedSession case {
+          'sessionId': final Object sessionId,
+          'reason': final Object reason,
+        }) {
+          stdout.writeln('grid rework — closed session $sessionId ($reason).');
+        }
+        final closedGates =
+            <Map<String, Object?>>[
+              if (value['closedGates'] case final List<Object?> rows)
+                for (final row in rows.whereType<Map<Object?, Object?>>())
+                  row.cast<String, Object?>(),
+            ]..sort(
+              (left, right) =>
+                  '${left['gateId']}'.compareTo('${right['gateId']}'),
+            );
+        for (final gate in closedGates) {
+          stdout.writeln(
+            'grid rework — closed gate ${gate['gateId']} '
+            '(${gate['cause']}).',
+          );
+        }
         return 0;
       case StationCommandRefused(:final message) ||
           StationCommandUnavailable(:final message):
