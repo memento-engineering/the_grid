@@ -1,4 +1,4 @@
-/// The W6 guard's runner-relative budget (bead `tg-2zao`).
+/// The W6 guard's runner-relative budget (bead `tg-z105`).
 ///
 /// W6's acceptance numbers (`docs/design/trajectory/stage1-wiring.md` §2.5/§6)
 /// are WALL-CLOCK: a sustained drain rate and a p99 writer-loop transaction
@@ -11,11 +11,12 @@
 /// with it on the same connection. Measured locally against dolt 2.2.2 over
 /// six runs — one of them 1.8x slower than the others — the mean ratio stayed
 /// in 1.26–1.55 and the p99-tail ratio in 1.18–1.70. The calibrated ratios
-/// below carry ~2.6x and ~2.9x headroom over those; the shared-runner
-/// tolerances (`tg-shry`) widen the ASSERTED ceilings to 13.33x and 12.5x a
-/// bare round trip, so against the slowest measured base a fold regression of
-/// ~8.6x or more still reddens the guard on a shared runner, while ordinary
-/// runner swing no longer does.
+/// below carry ~2.6x and ~2.9x headroom over those. The shared-runner drain
+/// tolerance (`tg-z105`) widens the ASSERTED mean ceiling to 16.0x a bare
+/// round trip, while the unchanged tail tolerance (`tg-shry`) keeps the p99
+/// ceiling at 12.5x the machine tail. Against the slowest measured base a fold
+/// regression of ~10.3x or more still reddens the drain guard on a shared
+/// runner, while ordinary runner swing no longer does.
 library;
 
 /// The environment variable a SHARED CI runner sets to `1`.
@@ -42,8 +43,8 @@ const double kFoldMeanCostRatio = 4.0;
 /// unchanged from the same entry, on the same terms.
 const double kFoldTailCostRatio = 5.0;
 
-/// The shared-runner tolerance on the calibrated drain bound (`tg-shry`): the
-/// guarded drain must clear 0.30x it.
+/// The shared-runner tolerance on the calibrated drain bound (`tg-z105`): the
+/// guarded drain must clear 0.25x it.
 ///
 /// `tg-2zao`'s 0.60 was read off ratios measured against the ROUND-1 baseline
 /// — one bare probe per append: 22.5 against 28 (0.80), 106.65 against 119.27
@@ -51,10 +52,14 @@ const double kFoldTailCostRatio = 5.0;
 /// bare probes, whose ratio to the sustained drain is 0.60. The floor landed
 /// ON the observation: run 33818055118 (PR #297, rerun 23:37Z 2026-09-03)
 /// failed at 120.69804320618569 against a 120.77294685990339 floor, a 0.5996
-/// drain/bound ratio, and PRs #296 and #299 failed the same job. 0.30 is half
-/// that observed ratio — a 2x fold slowdown of that receipt still lands under
-/// the floor, and runner swing no longer does.
-const double kDrainToleranceFraction = 0.30;
+/// drain/bound ratio, and PRs #296 and #299 failed the same job. `tg-shry`
+/// moved the band to 0.30, half that observed ratio.
+///
+/// PR #459 run 34887368169 then delivered 47.81391559648549 appends/s against
+/// the old 49.6031746031746 floor: a 0.2892 drain/calibrated-bound ratio. The
+/// 0.25 band puts that run's floor at 41.335978835978835 appends/s with
+/// headroom, while a twofold slowdown of the receipt remains below it.
+const double kDrainToleranceFraction = 0.25;
 
 /// The shared-runner tolerance on the calibrated tail bound (`tg-shry`): the
 /// fold p99 may reach 2.50x it — double-plus the observed shared-runner
@@ -140,7 +145,7 @@ class GuardBudget {
       baselineTailMicros * kFoldTailCostRatio / 1000.0;
 
   /// The drain floor this runner must clear, in appends/s: the calibrated
-  /// bound at the `tg-shry` shared-runner tolerance.
+  /// bound at the `tg-z105` shared-runner tolerance.
   double get minimumDrainPerSecond =>
       baselineOpsPerSecond / kFoldMeanCostRatio * kDrainToleranceFraction;
 
@@ -165,7 +170,7 @@ String drainFailureMessage({
     'W6 drain leg FAILED. expected: greater than '
     '${budget.minimumDrainPerSecond.toStringAsFixed(3)} appends/s (the '
     '${budget.calibratedDrainBound.toStringAsFixed(3)}/s calibrated bound at '
-    'the ${kDrainToleranceFraction}x tg-shry shared-runner tolerance); '
+    'the ${kDrainToleranceFraction}x tg-z105 shared-runner tolerance); '
     'actual: ${drainRate.toStringAsFixed(3)} appends/s. OBSERVED RATIOS: '
     'drain/probe-rate '
     '${(drainRate / budget.baselineOpsPerSecond).toStringAsFixed(4)} (bare '

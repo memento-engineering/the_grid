@@ -232,7 +232,7 @@ void main() {
         '  host: ${host.name} — calibrated floor '
         '${budget.minimumDrainPerSecond.toStringAsFixed(1)} appends/s '
         '(${kFoldMeanCostRatio}x bound at the '
-        '${kDrainToleranceFraction}x tg-shry shared-runner tolerance), '
+        '${kDrainToleranceFraction}x tg-z105 shared-runner tolerance), '
         'calibrated p99 ceiling '
         '${budget.maximumP99Millis.toStringAsFixed(1)} ms '
         '(${kFoldTailCostRatio}x bound at the '
