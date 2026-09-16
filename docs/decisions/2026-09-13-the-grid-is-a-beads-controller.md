@@ -19,6 +19,7 @@ register:
   updated-by:
     - capability-edges-are-bd-native-and-link-is-sugar
     - link-beads-retire-in-one-hard-cut
+    - provides-label-is-the-cross-store-shipped-contract
   bead: tg-6vfb
   legacy-id: null
 ---
