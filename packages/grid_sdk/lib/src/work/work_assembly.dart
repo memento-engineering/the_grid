@@ -1123,6 +1123,9 @@ Future<StationWorkRuntime> assembleStationWork({
     dryRun: dryRun,
     breakGlassReason: (environment ?? systemEnvironment())[kGridG1BreakGlass],
   );
+  final g2G1PrerequisiteRefusal =
+      resolvedTrajectoryConfig.g2G1PrerequisiteRefusal;
+  if (g2G1PrerequisiteRefusal != null) throw g2G1PrerequisiteRefusal;
   final cutPostureRefusal = resolvedTrajectoryConfig.cutPostureRefusal;
   if (cutPostureRefusal != null) throw cutPostureRefusal;
 

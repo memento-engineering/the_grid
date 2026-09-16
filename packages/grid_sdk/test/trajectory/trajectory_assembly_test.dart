@@ -222,6 +222,19 @@ void main() {
     expect(work.lastRestartReport, isNotNull);
   });
 
+  test('dry-run forces a requested non-off G2 posture back to off', () async {
+    final work = await assemble(
+      trajectoryConfig: const TrajectoryConfig(
+        g2Posture: G2Posture.cut,
+        g1CertificatePassed: false,
+      ),
+    );
+    addTearDown(work.shutdown);
+
+    expect(work.trajectory.config.g2Posture, G2Posture.off);
+    expect(work.trajectory.config.g2G1PrerequisiteRefusal, isNull);
+  });
+
   test(
     'the default auto posture on an unprovisioned home is a quiet no-op',
     () async {
@@ -671,6 +684,89 @@ void main() {
       );
       expect(attached, isFalse);
       expect(bundleAcquired, isFalse);
+    },
+  );
+
+  test(
+    'every G2 prerequisite mismatch refuses before resource builders',
+    () async {
+      final cases = <(TrajectoryConfig, String)>[
+        (const TrajectoryConfig(g2Posture: G2Posture.shadow), 'g1Certificate'),
+        (
+          const TrajectoryConfig(
+            g2Posture: G2Posture.cut,
+            g1CertificatePassed: false,
+          ),
+          'g1Certificate',
+        ),
+        (
+          const TrajectoryConfig(
+            mode: TrajectoryConfigMode.required,
+            dualRead: DualReadMode.primary,
+            g2Posture: G2Posture.shadow,
+            g1CertificatePassed: true,
+          ),
+          'discipline',
+        ),
+        (
+          const TrajectoryConfig(
+            discipline: TrajectoryDiscipline.cut,
+            mode: TrajectoryConfigMode.auto,
+            g2Posture: G2Posture.shadow,
+            g1CertificatePassed: true,
+          ),
+          'mode',
+        ),
+        (
+          const TrajectoryConfig(
+            discipline: TrajectoryDiscipline.cut,
+            dualRead: DualReadMode.observe,
+            g2Posture: G2Posture.cut,
+            g1CertificatePassed: true,
+          ),
+          'dualRead',
+        ),
+      ];
+      for (final (config, field) in cases) {
+        var bundleBuilt = false;
+        var driverBuilt = false;
+        await expectLater(
+          assembleStationWork(
+            stateStore: GridStateStore.forGridRoot('${tmp.path}/absent'),
+            substations: [
+              SubstationWorkSpec(
+                name: 'never',
+                root: '${tmp.path}/absent-work',
+              ),
+            ],
+            resolver: const _NullResolver(),
+            dryRun: false,
+            trajectoryConfig: config,
+            bundleBuilder:
+                ({
+                  required storeName,
+                  required workspace,
+                  required buildDefault,
+                }) {
+                  bundleBuilt = true;
+                  return buildDefault();
+                },
+            driverBuilder: ({required buildDefault}) {
+              driverBuilt = true;
+              return buildDefault();
+            },
+          ),
+          throwsA(
+            isA<G2G1PrerequisiteRefused>().having(
+              (value) => value.field,
+              'field',
+              field,
+            ),
+          ),
+        );
+        expect(bundleBuilt, isFalse, reason: field);
+        expect(driverBuilt, isFalse, reason: field);
+      }
     },
   );
 

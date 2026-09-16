@@ -1,13 +1,14 @@
 /// `traj replay` — the operator's rebuild of the fold, and the P1 reshape
 /// (cut-wiring C0).
 ///
-/// The verb is a WRAPPER: the three replay functions already ship in-tree
-/// (`replaySessionHeads`, `replayStepCursors`, `replayProcessIdentities`), and
+/// The verb is a WRAPPER: the four replay functions already ship in-tree
+/// (`replaySessionHeads`, `replayStepCursors`, `replayMoleculeEdges`,
+/// `replayProcessIdentities`), and
 /// each one is a `DELETE FROM proj_*` + re-insert + `proj_meta` upsert inside
 /// ONE `START TRANSACTION`. Replay is per-PROJECTION: `'step_cursor'` and
 /// `'process_identity'` keep their own `proj_meta` rows while P1's replay
 /// upserts the shared `'fold'` row, so `--projection` is a real partial
-/// rebuild and the default runs all three.
+/// rebuild and the default runs all four.
 ///
 /// **QUIESCE-ONLY.** The rebuild refuses while a station holds this grid home
 /// — see `traj_quiesce.dart` for the fence and why there is no override. The
@@ -42,6 +43,7 @@ import '../connect/trajectory_db.dart';
 import '../ddl/trajectory_provisioning.dart';
 import '../ddl/trajectory_schema.dart';
 import '../fold/fold_lag.dart';
+import '../fold/molecule_edge_fold.dart';
 import '../fold/process_identity_fold.dart';
 import '../fold/session_head_fold.dart';
 import '../fold/step_cursor_fold.dart';
@@ -59,6 +61,7 @@ const String sessionHeadProjection = 'session_head';
 const List<String> replayProjections = [
   sessionHeadProjection,
   stepCursorProjection,
+  moleculeEdgeProjection,
   processIdentityProjection,
 ];
 
@@ -81,7 +84,7 @@ class TrajReplayCommand extends Command<int> {
         allowed: replayProjections,
         help:
             'Which projection(s) to rebuild. Repeatable; the default is all '
-            'three. Each keeps its own proj_meta bookkeeping, so a partial '
+            'four. Each keeps its own proj_meta bookkeeping, so a partial '
             'rebuild is a real, supported operation.',
       )
       ..addFlag(
@@ -325,6 +328,16 @@ Future<int> _rebuild(
           appliedSeq: result.appliedSeq,
           skipped: result.skipped,
           foldVersion: stepCursorFoldVersion,
+        );
+      case moleculeEdgeProjection:
+        final result = await replayMoleculeEdges(db, clock: clock);
+        _writeResult(
+          write,
+          projection: projection,
+          rows: result.rows.length,
+          appliedSeq: result.appliedSeq,
+          skipped: result.skipped,
+          foldVersion: moleculeEdgeFoldVersion,
         );
       case processIdentityProjection:
         final result = await replayProcessIdentities(db, clock: clock);
