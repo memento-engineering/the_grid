@@ -33,8 +33,8 @@ void main() {
   });
 
   group('the shared-runner tolerances', () {
-    test('are pinned at the tg-shry bands', () {
-      expect(kDrainToleranceFraction, 0.30);
+    test('pin the tg-z105 drain and tg-shry tail bands', () {
+      expect(kDrainToleranceFraction, 0.25);
       expect(kTailToleranceFactor, 2.50);
     });
 
@@ -43,11 +43,8 @@ void main() {
       expect(kFoldTailCostRatio, 5.0);
     });
 
-    test('the effective shared-runner ceilings are 13.33x and 12.5x', () {
-      expect(
-        kFoldMeanCostRatio / kDrainToleranceFraction,
-        closeTo(13.333333333333334, 1e-9),
-      );
+    test('the effective shared-runner ceilings are 16.0x and 12.5x', () {
+      expect(kFoldMeanCostRatio / kDrainToleranceFraction, closeTo(16.0, 1e-9));
       expect(kFoldTailCostRatio * kTailToleranceFactor, closeTo(12.5, 1e-9));
     });
   });
@@ -59,9 +56,9 @@ void main() {
         baselineTailMicros: 10000,
       );
       expect(budget.baselineOpsPerSecond, 200);
-      // 200 ops/s at the 4.0x fold cost => a 50/s bound; at 0.30 => 15/s.
+      // 200 ops/s at the 4.0x fold cost => a 50/s bound; at 0.25 => 12.5/s.
       expect(budget.calibratedDrainBound, closeTo(50, 1e-9));
-      expect(budget.minimumDrainPerSecond, closeTo(15, 1e-9));
+      expect(budget.minimumDrainPerSecond, closeTo(12.5, 1e-9));
       // A 10 ms tail at the 5.0x fold cost => a 50 ms bound; at 2.50 => 125.
       expect(budget.calibratedP99BoundMillis, closeTo(50, 1e-9));
       expect(budget.maximumP99Millis, closeTo(125, 1e-9));
@@ -76,7 +73,7 @@ void main() {
       expect(budget.maximumP99Millis, greaterThan(297.775));
     });
 
-    test('the round-4 receipt clears the floor and half of it does not', () {
+    test('the historical round-4 receipt clears the further-widened floor', () {
       // Run 33818055118 (PR #297, rerun 23:37Z on 2026-09-03): the 0.60 band
       // demanded 120.77294685990339 appends/s and the run delivered
       // 120.69804320618569 — the floor sat ON the observation.
@@ -91,9 +88,29 @@ void main() {
         reason: 'a 1242 us unit is the unit CI\'s failing floor came from',
       );
       expect(budget.minimumDrainPerSecond, lessThan(observedDrain));
-      // The band still has TEETH: a 2x fold slowdown of that same receipt
-      // lands under the widened floor.
-      expect(budget.minimumDrainPerSecond, greaterThan(observedDrain / 2));
+    });
+
+    test('the PR 459 receipt clears 0.25 with twofold-regression headroom', () {
+      // Run 34887368169 (PR #459, 2026-09-14T19:33Z): the 0.30 band
+      // demanded 49.6031746031746 appends/s and the run delivered
+      // 47.81391559648549, despite clearing the 28.0/s storm-band top.
+      const observedDrain = 47.81391559648549;
+      final budget = GuardBudget(
+        baselineUnitMicros: 1512,
+        baselineTailMicros: 3024,
+      );
+      expect(
+        budget.calibratedDrainBound * 0.30,
+        closeTo(49.6031746031746, 1e-9),
+      );
+      expect(
+        (observedDrain / budget.calibratedDrainBound).toStringAsFixed(4),
+        '0.2892',
+      );
+      expect(budget.minimumDrainPerSecond, closeTo(41.335978835978835, 1e-9));
+      expect(observedDrain, greaterThan(kStormProductionRateTop));
+      expect(observedDrain, greaterThan(budget.minimumDrainPerSecond));
+      expect(observedDrain / 2, lessThan(budget.minimumDrainPerSecond));
     });
 
     test('the round-1 receipts clear the widened floor, which still '
@@ -151,13 +168,13 @@ void main() {
         budget: budget,
         drainRate: 120.69804320618569,
       );
-      expect(message, contains('expected: greater than 60.386 appends/s'));
+      expect(message, contains('expected: greater than 50.322 appends/s'));
       expect(message, contains('actual: 120.698 appends/s'));
       expect(message, contains('drain/probe-rate 0.1499'));
       expect(message, contains('drain/calibrated-bound 0.5996'));
       expect(
         message,
-        contains('201.288/s calibrated bound at the 0.3x tg-shry'),
+        contains('201.288/s calibrated bound at the 0.25x tg-z105'),
       );
     });
 
