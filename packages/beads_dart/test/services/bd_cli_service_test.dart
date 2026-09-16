@@ -8,6 +8,23 @@ import 'package:test/test.dart';
 import '../support/fake_bd_runner.dart';
 import '../support/fixtures.dart';
 
+const _hostileProxyEnvironment = <String, String>{
+  'PATH': '/usr/bin',
+  'BEADS_DOLT_SERVER_MODE': '0',
+  'BEADS_DOLT_SERVER_HOST': '127.0.0.99',
+  'BEADS_DOLT_SERVER_PORT': '53064',
+  'BEADS_DOLT_SERVER_DATABASE': 'stale-state',
+  'BEADS_DOLT_SERVER_USER': 'stale-user',
+  'BEADS_DOLT_PASSWORD': 'stale-secret',
+  'BEADS_DOLT_SHARED_SERVER': '1',
+  'BEADS_DOLT_PROXIED_SERVER': '1',
+  'BEADS_DOLT_AUTO_START': '1',
+  'BEADS_DOLT_SERVER_SOCKET': '/tmp/stale.sock',
+  'BEADS_DOLT_SERVER_TLS': '1',
+  'BD_JSON_ENVELOPE': '0',
+  'BD_NON_INTERACTIVE': '0',
+};
+
 void main() {
   group('BdCliService reads (FakeBdRunner + pinned fixtures)', () {
     test('ready() returns more than the default page', () async {
@@ -1599,6 +1616,74 @@ void main() {
           'BD_NON_INTERACTIVE': '0',
         },
       );
+      expect(runner.environment['BD_JSON_ENVELOPE'], '1');
+      expect(runner.environment['BD_NON_INTERACTIVE'], '1');
+      expect(runner.environment['PATH'], '/usr/bin');
+    });
+
+    test('owned proxy coordinates force every bd route variable', () {
+      final runner = ProcessBdRunner(
+        workspaceRoot: Directory.systemTemp.path,
+        environment: _hostileProxyEnvironment,
+        ownedProxyEndpoint: const DoltEndpoint(
+          host: '127.0.0.1',
+          port: 52613,
+          database: 'tgstate',
+          user: 'beads_dart',
+          password: 'read-secret',
+        ),
+      );
+
+      expect(runner.environment, containsPair('PATH', '/usr/bin'));
+      expect(runner.environment, containsPair('BEADS_DOLT_SERVER_MODE', '1'));
+      expect(
+        runner.environment,
+        containsPair('BEADS_DOLT_SERVER_HOST', '127.0.0.1'),
+      );
+      expect(
+        runner.environment,
+        containsPair('BEADS_DOLT_SERVER_PORT', '52613'),
+      );
+      expect(
+        runner.environment,
+        containsPair('BEADS_DOLT_SERVER_DATABASE', 'tgstate'),
+      );
+      expect(
+        runner.environment,
+        containsPair('BEADS_DOLT_SERVER_USER', 'root'),
+      );
+      expect(runner.environment, containsPair('BEADS_DOLT_PASSWORD', ''));
+      expect(runner.environment, containsPair('BEADS_DOLT_SHARED_SERVER', '0'));
+      expect(
+        runner.environment,
+        containsPair('BEADS_DOLT_PROXIED_SERVER', '0'),
+      );
+      expect(runner.environment, containsPair('BEADS_DOLT_AUTO_START', '0'));
+      expect(runner.environment, containsPair('BEADS_DOLT_SERVER_SOCKET', ''));
+      expect(runner.environment, containsPair('BEADS_DOLT_SERVER_TLS', '0'));
+      expect(runner.environment, containsPair('BD_JSON_ENVELOPE', '1'));
+      expect(runner.environment, containsPair('BD_NON_INTERACTIVE', '1'));
+      expect(
+        runner.environment.values,
+        everyElement(isNot(contains('read-secret'))),
+      );
+    });
+
+    test('an unbound runner preserves caller-owned route variables', () {
+      final runner = ProcessBdRunner(
+        workspaceRoot: Directory.systemTemp.path,
+        environment: _hostileProxyEnvironment,
+      );
+      final routeEnvironment = <String, String>{
+        for (final entry in runner.environment.entries)
+          if (entry.key.startsWith('BEADS_DOLT_')) entry.key: entry.value,
+      };
+      final expectedRouteEnvironment = <String, String>{
+        for (final entry in _hostileProxyEnvironment.entries)
+          if (entry.key.startsWith('BEADS_DOLT_')) entry.key: entry.value,
+      };
+
+      expect(routeEnvironment, expectedRouteEnvironment);
       expect(runner.environment['BD_JSON_ENVELOPE'], '1');
       expect(runner.environment['BD_NON_INTERACTIVE'], '1');
       expect(runner.environment['PATH'], '/usr/bin');
