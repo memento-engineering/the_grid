@@ -51,12 +51,16 @@ import 'package:grid_runtime/grid_runtime.dart'
         buildStage1ObligationQueries;
 import 'package:grid_engine/grid_engine.dart'
     show
+        Backoff,
         DualReadMode,
+        ExhaustionBehavior,
+        RetryPolicy,
         TerminalReconcileOutcome,
         TerminalReconcileRequest,
         TrajectoryHeadSnapshot,
         TrajectoryProcessIdentitySnapshot,
-        TrajectoryStepSnapshot;
+        TrajectoryStepSnapshot,
+        kWorktreeOutstandingStaleAfter;
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:meta/meta.dart';
 import 'package:state_notifier/state_notifier.dart' show RemoveListener;
@@ -129,6 +133,19 @@ final class _TrajectoryQueueEntry {
   final DateTime? ackQueuedAt;
   Timer? deadline;
   bool settled = false;
+}
+
+final class _TickStaleEpisode {
+  _TickStaleEpisode({
+    required this.lastBeat,
+    required this.detectedAt,
+    required this.ownsCompromise,
+  });
+
+  final DateTime? lastBeat;
+  final DateTime detectedAt;
+  final bool ownsCompromise;
+  int attempts = 0;
 }
 
 /// The harness's posture — what `/status` renders and the failure table in
@@ -239,6 +256,13 @@ final class TrajectoryHarnessStatus {
 
 /// The fenced service's station-side owner (stage1-wiring §1.1).
 class TrajectoryHarness {
+  static const String _kTickStaleKind = 'tickStale';
+  static const RetryPolicy _kTickRestartPolicy = RetryPolicy(
+    maxRestarts: 3,
+    backoff: Backoff.standard,
+    onExhaustion: ExhaustionBehavior.latchFailed,
+  );
+
   TrajectoryHarness._({
     required this.config,
     required String gridHome,
@@ -457,6 +481,14 @@ class TrajectoryHarness {
 
   TrajectoryAppender? _appender;
   TrajectoryTick? _tick;
+  List<ObligationQuery>? _orderedTickQueries;
+  int _currentTickGeneration = -1;
+  int _nextTickGeneration = 0;
+  Timer? _tickWatchdogTimer;
+  Timer? _tickRestartBackoffTimer;
+  Timer? _tickAttemptDeadlineTimer;
+  _TickStaleEpisode? _tickStaleEpisode;
+  bool _tickRestartDead = false;
   Timer? _gcTimer;
 
   /// The gc POSTURE latch (tg-3o6b): set when the server refuses `DOLT_GC` on
@@ -726,23 +758,18 @@ class TrajectoryHarness {
       }
 
       final baseQueries = _tickQueries ?? _stage1Obligations();
-      _tick = TrajectoryTick(
-        appender: _SerializedTickAppender(this, appender),
-        db: _SerializedDb(this),
-        // §2.4: the Stage-1 set is built HERE, after the claim — the liveness
-        // detector's unknown rule keys on the epoch this process holds, and
-        // there is no such epoch before `claimEpoch` returned.
-        // Station-authored queries join the same ordered, fenced tick after
-        // that base set; they never replace the rollout obligations.
-        queries: [...baseQueries, ...config.obligationQueryExtensions],
-        interval: config.tickInterval,
-        clock: _clock,
-        scheduleTimer: _scheduleTimer,
-        // Schema §5's N-consecutive-failure accounting reads the pass
-        // telemetry; the note it files rides the queue, not the pass.
-        // The mirror's guards ride the SAME tick (§0.2: "re-reads all rows on
-        // its existing timer tick") rather than arming a timer of their own.
-        onPass: _onTickPass,
+      // Resolve the ordered obligation set ONCE per claimed epoch. Every
+      // supervised generation receives the same immutable list: a replacement
+      // is the same station pass, never a newly composed pass.
+      _orderedTickQueries = List<ObligationQuery>.unmodifiable([
+        ...baseQueries,
+        ...config.obligationQueryExtensions,
+      ]);
+      _currentTickGeneration = 0;
+      _nextTickGeneration = 0;
+      _tick = _createTick(
+        appender: appender,
+        generation: _currentTickGeneration,
       );
       // The P1 boot seed (§0.2): ONE SELECT on the serialized connection,
       // after the epoch claim and BEFORE the mode goes live — so no post-ACK
@@ -773,6 +800,31 @@ class TrajectoryHarness {
       _degrade('$error');
       await _closeDbQuietly();
     }
+  }
+
+  TrajectoryTick _createTick({
+    required TrajectoryAppender appender,
+    required int generation,
+  }) {
+    final queries = _orderedTickQueries;
+    if (queries == null) {
+      throw StateError('trajectory tick obligations are not resolved');
+    }
+    return TrajectoryTick(
+      appender: _SerializedTickAppender(this, appender),
+      db: _SerializedDb(this),
+      // §2.4: the Stage-1 set is resolved after the epoch claim because the
+      // liveness detector keys on that epoch. Every replacement reuses this
+      // same ordered, fenced set.
+      queries: queries,
+      interval: config.tickInterval,
+      clock: _clock,
+      scheduleTimer: _scheduleTimer,
+      // The callback captures its generation. A disposed or timed-out pass
+      // may still finish after replacement; generation rejection happens
+      // before heartbeat, accounting, mirror work, or flares.
+      onPass: (pass) => _onTickPass(pass, generation),
+    );
   }
 
   /// §2.4's shadow-posture set: unknown-terminal settlement, worktree.reaped
@@ -1038,13 +1090,44 @@ class TrajectoryHarness {
   }
 
   /// The tick's telemetry hook, extended with the mirror's two per-pass
-  /// guards. Emit-only, like every flare seam: a throw here never breaks the
-  /// tick's loop.
-  void _onTickPass(TrajectoryTickPass pass) {
+  /// guards and the harness-owned P6 watchdog.
+  ///
+  /// Lifecycle follows [WedgeMonitor]'s discipline: an injected scheduler, a
+  /// self-rearming one-shot, an episode latch, and one rising/falling edge.
+  /// The concrete monitor cannot be reused here: it observes a
+  /// `JoinedSnapshot` and emits station-flow wedge telemetry, while this owner
+  /// observes a P6 heartbeat and replaces a station pass. A third copy of the
+  /// generic latch/timer/edge shape should be lifted into `grid_trajectory`;
+  /// this bead deliberately adds no shared abstraction.
+  void _onTickPass(TrajectoryTickPass pass, int generation) {
+    if (_isShutdown || generation != _currentTickGeneration) return;
+
+    final episode = _tickStaleEpisode;
+    if (episode != null) {
+      if (!pass.ran) {
+        _failTickRestart(
+          generation: generation,
+          reason: 'skipped: ${pass.disposition.name}',
+        );
+        return;
+      }
+      final resumedAt = _clock().toUtc();
+      final lastBeat = episode.lastBeat;
+      if (lastBeat != null && !resumedAt.isAfter(lastBeat)) {
+        _failTickRestart(
+          generation: generation,
+          reason: 'heartbeat did not advance',
+        );
+        return;
+      }
+      _resumeTickPass(pass, episode: episode, resumedAt: resumedAt);
+      return;
+    }
+
     _accountant.observe(pass);
     // POSTURE FIRST (r13): at `off` the mirrors were never seeded and nothing
     // reads them, so the tick keeps exactly its pre-cut shape — no generation
-    // SELECT per interval, no eviction scan, no health latch.
+    // SELECT per interval, no eviction scan, no health latch or watchdog.
     if (!_dualReadArmed) return;
     // The mode latch (§0.2's wave-1 health): a harness that has left `live`
     // freezes the mirror, and a frozen fold must not keep reading `live`.
@@ -1052,9 +1135,203 @@ class TrajectoryHarness {
       _latchMirrorCompromised('harness mode ${_mode.name}');
       return;
     }
-    if (pass.ran) _processIdentities.noteTickAt(_clock().toUtc());
+    if (pass.ran) {
+      _processIdentities.noteTickAt(_clock().toUtc());
+      _armTickWatchdog();
+    }
+    _runTickMirrorGuards();
+  }
+
+  void _runTickMirrorGuards() {
     _evictClosedStepCursors();
     unawaited(_checkFoldGeneration());
+  }
+
+  void _armTickWatchdog() {
+    _tickWatchdogTimer?.cancel();
+    _tickWatchdogTimer = null;
+    if (_isShutdown ||
+        _mode != TrajectoryHarnessMode.live ||
+        !_dualReadArmed ||
+        _tickStaleEpisode != null ||
+        _tickRestartDead) {
+      return;
+    }
+    _tickWatchdogTimer = _scheduleTimer(
+      config.tickInterval,
+      _sampleTickHeartbeat,
+    );
+  }
+
+  void _sampleTickHeartbeat() {
+    _tickWatchdogTimer = null;
+    if (_isShutdown ||
+        _mode != TrajectoryHarnessMode.live ||
+        !_dualReadArmed ||
+        _tickStaleEpisode != null ||
+        _tickRestartDead) {
+      return;
+    }
+    final now = _clock().toUtc();
+    final snapshot = _processIdentities.snapshot;
+    final lastBeat = snapshot.lastTickAt ?? snapshot.seededAt;
+    final stale =
+        lastBeat == null ||
+        now.difference(lastBeat.toUtc()) > kWorktreeOutstandingStaleAfter;
+    if (!stale) {
+      _armTickWatchdog();
+      return;
+    }
+
+    // Freeze the original progress instant for the whole episode. This is the
+    // same strict heartbeat predicate the pure mount barrier reads; health is
+    // an honest reflection of the outage, never a second staleness predicate.
+    _tick?.dispose();
+    _currentTickGeneration = -1;
+    final ownsCompromise = _processIdentities.latchCompromised();
+    final episode = _TickStaleEpisode(
+      lastBeat: lastBeat?.toUtc(),
+      detectedAt: now,
+      ownsCompromise: ownsCompromise,
+    );
+    _tickStaleEpisode = episode;
+    _flare('trajectory.tickStale', {
+      'pass': 'P6',
+      'kind': _kTickStaleKind,
+      'lastBeat': _renderTickBeat(episode.lastBeat),
+      'staleFor': '${_tickStaleForSeconds(episode, now)}',
+    });
+    _scheduleTickRestart(1);
+  }
+
+  void _scheduleTickRestart(int attempt) {
+    final episode = _tickStaleEpisode;
+    final maxRestarts = _kTickRestartPolicy.maxRestarts;
+    final backoff = _kTickRestartPolicy.backoff;
+    if (_isShutdown ||
+        _tickRestartDead ||
+        episode == null ||
+        maxRestarts == null ||
+        backoff == null ||
+        attempt > maxRestarts) {
+      return;
+    }
+    _tickRestartBackoffTimer?.cancel();
+    _tickRestartBackoffTimer = _scheduleTimer(backoff.delayFor(attempt), () {
+      _tickRestartBackoffTimer = null;
+      if (_isShutdown ||
+          _tickRestartDead ||
+          !identical(_tickStaleEpisode, episode)) {
+        return;
+      }
+      unawaited(_startTickRestart(attempt));
+    });
+  }
+
+  Future<void> _startTickRestart(int attempt) async {
+    final episode = _tickStaleEpisode;
+    final appender = _appender;
+    if (_isShutdown ||
+        _tickRestartDead ||
+        episode == null ||
+        appender == null) {
+      return;
+    }
+    episode.attempts = attempt;
+    final generation = ++_nextTickGeneration;
+    _currentTickGeneration = generation;
+    final replacement = _createTick(appender: appender, generation: generation);
+    _tick = replacement;
+    _tickAttemptDeadlineTimer?.cancel();
+    _tickAttemptDeadlineTimer = _scheduleTimer(config.tickInterval, () {
+      _tickAttemptDeadlineTimer = null;
+      _failTickRestart(
+        generation: generation,
+        reason: 'timeout after ${config.tickInterval.inMilliseconds}ms',
+      );
+    });
+
+    try {
+      final pass = await replacement.start();
+      if (_isShutdown || generation != _currentTickGeneration) return;
+      // A current generation's onPass settles ran/skipped synchronously before
+      // start returns. Reaching here means a future TrajectoryTick variant did
+      // not report it; preserve the fail-closed disposition.
+      _failTickRestart(
+        generation: generation,
+        reason: pass.ran
+            ? 'heartbeat did not advance'
+            : 'skipped: ${pass.disposition.name}',
+      );
+    } on Object catch (error) {
+      _failTickRestart(generation: generation, reason: 'threw: $error');
+    }
+  }
+
+  void _failTickRestart({required int generation, required String reason}) {
+    final episode = _tickStaleEpisode;
+    if (_isShutdown ||
+        _tickRestartDead ||
+        episode == null ||
+        generation != _currentTickGeneration) {
+      return;
+    }
+    _tickAttemptDeadlineTimer?.cancel();
+    _tickAttemptDeadlineTimer = null;
+    _tick?.dispose();
+    _currentTickGeneration = -1;
+
+    final maxRestarts = _kTickRestartPolicy.maxRestarts ?? 0;
+    if (episode.attempts < maxRestarts) {
+      _scheduleTickRestart(episode.attempts + 1);
+      return;
+    }
+
+    _tickRestartDead = true;
+    final now = _clock().toUtc();
+    _flare('trajectory.tickDead', {
+      'pass': 'P6',
+      'kind': _kTickStaleKind,
+      'lastBeat': _renderTickBeat(episode.lastBeat),
+      'staleFor': '${_tickStaleForSeconds(episode, now)}',
+      'attempts': '${episode.attempts}',
+      'reason': reason,
+    });
+  }
+
+  void _resumeTickPass(
+    TrajectoryTickPass pass, {
+    required _TickStaleEpisode episode,
+    required DateTime resumedAt,
+  }) {
+    _tickAttemptDeadlineTimer?.cancel();
+    _tickAttemptDeadlineTimer = null;
+    if (episode.ownsCompromise) {
+      _processIdentities.noteResumedTickAt(resumedAt);
+    } else {
+      _processIdentities.noteTickAt(resumedAt);
+    }
+    _flare('trajectory.tickResumed', {
+      'pass': 'P6',
+      'kind': _kTickStaleKind,
+      'lastBeat': _renderTickBeat(episode.lastBeat),
+      'resumedAt': resumedAt.toIso8601String(),
+      'staleFor': '${_tickStaleForSeconds(episode, resumedAt)}',
+      'attempts': '${episode.attempts}',
+    });
+    _tickStaleEpisode = null;
+    _accountant.observe(pass);
+    _runTickMirrorGuards();
+    _armTickWatchdog();
+  }
+
+  static String _renderTickBeat(DateTime? beat) =>
+      beat?.toUtc().toIso8601String() ?? 'never';
+
+  static int _tickStaleForSeconds(_TickStaleEpisode episode, DateTime now) {
+    final anchor = episode.lastBeat ?? episode.detectedAt;
+    final seconds = now.toUtc().difference(anchor).inSeconds;
+    return seconds < 0 ? 0 : seconds;
   }
 
   /// P2's EVICTION (§0.2's memory bound), driven off P1: rows for sessions
@@ -1735,6 +2012,17 @@ class TrajectoryHarness {
   Future<void> shutdown() async {
     if (_isShutdown) return;
     _isShutdown = true;
+    // Supervision timers die at the shutdown boundary, before any queue or
+    // fixpoint work. The tick itself retains its established final-disposal
+    // position below; invalidating the generation makes every late pass inert
+    // in the meantime.
+    _tickWatchdogTimer?.cancel();
+    _tickWatchdogTimer = null;
+    _tickRestartBackoffTimer?.cancel();
+    _tickRestartBackoffTimer = null;
+    _tickAttemptDeadlineTimer?.cancel();
+    _tickAttemptDeadlineTimer = null;
+    _currentTickGeneration = -1;
     _gcTimer?.cancel();
     _gcTimer = null;
     // 0 — the runtime-event subscriber dies first: no new derivations enter

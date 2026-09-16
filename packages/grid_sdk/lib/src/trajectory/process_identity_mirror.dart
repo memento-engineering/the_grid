@@ -167,6 +167,21 @@ final class ProcessIdentityMirror {
     _publish();
   }
 
+  /// Publishes the first heartbeat from a supervised replacement tick.
+  ///
+  /// Only a supervisor-owned compromise may be cleared through this method:
+  /// an ordinary [noteTickAt] never clears append loss, a failed fold reseed,
+  /// fencing, halt, or degradation. The heartbeat and health transition are
+  /// published in one immutable snapshot so readers cannot observe a resumed
+  /// beat with the stale health value.
+  bool noteResumedTickAt(DateTime instant) {
+    _lastTickAt = instant;
+    final changed = _health == TrajectorySnapshotHealth.compromised;
+    if (changed) _health = TrajectorySnapshotHealth.live;
+    _publish();
+    return changed;
+  }
+
   bool latchCompromised() {
     if (_health != TrajectorySnapshotHealth.live) return false;
     _health = TrajectorySnapshotHealth.compromised;
