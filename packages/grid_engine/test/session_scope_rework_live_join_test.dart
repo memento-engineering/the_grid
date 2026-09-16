@@ -1,9 +1,7 @@
-// tg-zat — reproduces the live rework re-arm through the REAL
-// StationJoinBridge (not the hand-rolled `_joined()` snapshots
-// `session_scope_rework_test.dart` builds by hand), so the join's own
-// `work_bead` re-key handling is exercised exactly as `grid rework` +
-// `StationJoinBridge._join` produce it, with a genuine OPEN `type=gate`
-// bead in the mix (D-7) — the piece the hand-rolled test never modeled.
+// Rework re-arm through the REAL StationJoinBridge (not the hand-rolled
+// `_joined()` snapshots `session_scope_rework_test.dart` builds by hand).
+// The suite covers both the command handler's close-first projection and the
+// mint-time fallback against the historical OPEN-gate projection.
 import 'dart:async';
 
 import 'package:genesis_tree/genesis_tree.dart';
@@ -36,6 +34,31 @@ class _RecordingTransport implements ExplorationTransport {
 
   List<({String name, Map<String, String> data})> named(String name) =>
       flares.where((flare) => flare.name == name).toList();
+}
+
+final class _IdempotentTrajectorySink implements TrajectoryRecordSink {
+  static const context = IdemContext(station: stateSubstation, bootEpoch: 82);
+
+  final Map<String, TrajectoryRecord> _recordsByKey = {};
+  final Map<String, int> enqueuesByKey = {};
+
+  @override
+  bool get accepting => true;
+
+  @override
+  void enqueue(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+  }) {
+    final key = record.idemKeyText(context);
+    enqueuesByKey.update(key, (count) => count + 1, ifAbsent: () => 1);
+    _recordsByKey.putIfAbsent(key, () => record);
+  }
+
+  Iterable<TrajectoryRecord> get records => _recordsByKey.values;
 }
 
 final class _ThrowingGateUpdateRunner extends RecordingBdRunner {
@@ -247,14 +270,27 @@ List<Bead> _round1Steps(String sessionId) => [
   ),
 ];
 
-/// The OPEN committee gate `grid rework` leaves standing (D-7) — it blocks
-/// [sessionId] at `tg-1/route`; `grid rework` re-keys the SESSION, never this
-/// bead, so it stays open across the rekey exactly like the live incident.
+/// An OPEN committee gate from the historical pre-close command projection.
+/// The mint-time fallback must continue to close this shape for replay and
+/// already-written rounds that predate the close-first handler.
 Bead _openGate(String id, {required String sessionId}) => Bead(
   id: id,
   issueType: GridIssueTypes.gate,
   status: BeadStatus.open,
   metadata: {'rig': stateSubstation, 'blocks': sessionId, 'node': 'tg-1/route'},
+);
+
+Bead _closedReworkGate(String id, {required String sessionId}) => Bead(
+  id: id,
+  issueType: GridIssueTypes.gate,
+  status: BeadStatus.closed,
+  metadata: {
+    'rig': stateSubstation,
+    'blocks': sessionId,
+    'node': 'tg-1/spec_review/readiness-route',
+    StationBeadWriter.gateCloseCauseKey:
+        GateCloseCause.supersededRound.wireValue,
+  },
 );
 
 ({TreeOwner owner, Branch root}) _mountFull({
@@ -264,6 +300,7 @@ Bead _openGate(String id, {required String sessionId}) => Bead(
   required RootCircuitFor rootCircuit,
   ExplorationTransport? transport,
   MountEligibilityPredicate? mountEligibility,
+  TrajectoryRecorderScope? trajectoryScope,
 }) {
   final owner = TreeOwner();
   final root = owner.mountRoot(
@@ -274,23 +311,26 @@ Bead _openGate(String id, {required String sessionId}) => Bead(
           value: ctx,
           child: InheritedSeed<CapabilityRegistry>(
             value: registry,
-            child: InheritedSeed<SessionResolver>(
-              value: CircuitResolver(rootCircuit),
-              child: Station([
-                SubstationScope(
-                  configNotifier: SubstationConfigNotifier(
-                    const SubstationConfig(
-                      substationId: 'tg',
-                      ownedSubstations: {'tg'},
+            child: InheritedSeed<TrajectoryRecorderScope>(
+              value: trajectoryScope ?? TrajectoryRecorderScope.disabled,
+              child: InheritedSeed<SessionResolver>(
+                value: CircuitResolver(rootCircuit),
+                child: Station([
+                  SubstationScope(
+                    configNotifier: SubstationConfigNotifier(
+                      const SubstationConfig(
+                        substationId: 'tg',
+                        ownedSubstations: {'tg'},
+                      ),
                     ),
+                    services: ServiceBundle(
+                      transport: transport,
+                      mountEligibility: mountEligibility,
+                    ),
+                    key: const ValueKey('scope.tg'),
                   ),
-                  services: ServiceBundle(
-                    transport: transport,
-                    mountEligibility: mountEligibility,
-                  ),
-                  key: const ValueKey('scope.tg'),
-                ),
-              ]),
+                ]),
+              ),
             ),
           ),
         ),
@@ -461,10 +501,117 @@ void main() {
       );
     });
 
-    test('a GATED round re-keyed by `grid rework` (leaving its gate bead OPEN, '
-        'exactly as the CLI does) still closes the retired round and mints '
-        'round N+1 — proving the join itself is not where the live deviation '
-        'comes from', () async {
+    test(
+      'already-closed command transition replays idempotently and mints',
+      () async {
+        final runner = RecordingBdRunner(createdId: 'tgdog-round2');
+        final transport = _RecordingTransport();
+        final f = _fakesOver(runner, transport: transport);
+        final registry = RecordingCapabilityRegistry(circuits: const {});
+        final retired = Bead(
+          id: 'tgdog-round1',
+          issueType: GridIssueTypes.session,
+          status: BeadStatus.closed,
+          metadata: const {
+            'rig': stateSubstation,
+            SessionBeadKeys.workBead: 'tg-1#r1',
+            SessionBeadKeys.model: kSessionModelMolecule,
+          },
+        );
+        final gate = _closedReworkGate('gate-1', sessionId: 'tgdog-round1');
+        runner.exportBeads = [retired, gate];
+
+        final sink = _IdempotentTrajectorySink();
+        final recorder =
+            StationTrajectoryRecorder(
+              sink: sink,
+              substationPrefixes: const {'tg', stateSubstation},
+            )..roundRetired(
+              sessionId: 'tgdog-round1',
+              cause: RoundRetireCause.rework,
+              oldRound: 0,
+            );
+        final workSrc = FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'}));
+        final stateSrc = FakeSnapshotSource(_state([retired, gate]));
+        final bridge = StationJoinBridge(work: workSrc, state: stateSrc)
+          ..start();
+        addTearDown(bridge.dispose);
+        final mounted = _mountFull(
+          joined: bridge.notifier,
+          ctx: f.ctx,
+          registry: registry,
+          rootCircuit: (_) => _code,
+          transport: transport,
+          trajectoryScope: TrajectoryRecorderScope(recorder),
+        );
+        addTearDown(mounted.owner.dispose);
+
+        await _pumpUntil(
+          mounted.owner,
+          () =>
+              runner.callsFor('close').any((call) => call[1] == 'tgdog-round1'),
+        );
+        workSrc.push(
+          _work(
+            [bead('tg-1')],
+            {'tg-1'},
+            tick: DateTime.now()
+                .add(const Duration(seconds: 1))
+                .millisecondsSinceEpoch,
+          ),
+        );
+        await _pumpUntil(mounted.owner, () => runner.workCreates.length >= 2);
+        expect(transport.named('gate.autoCloseFailed'), isEmpty);
+        expect(
+          runner.callsFor('close').where((call) => call[1] == 'tgdog-round1'),
+          hasLength(1),
+        );
+        expect(
+          runner.callsFor('close').where((call) => call[1] == 'gate-1'),
+          isEmpty,
+        );
+        expect(
+          runner.workCreates.where((call) => !call.contains('--graph')),
+          hasLength(1),
+        );
+        expect(
+          runner.workCreates.where((call) => call.contains('--graph')),
+          hasLength(1),
+        );
+
+        stateSrc.push(
+          _state([
+            retired,
+            gate,
+            _freshSession('tgdog-round2', workBead: 'tg-1'),
+            ..._freshSteps('tgdog-round2'),
+          ], tick: 1),
+        );
+        await _pumpUntil(
+          mounted.owner,
+          () =>
+              registry.events.contains('START agent(tgdog-round2/tg-1/agent)'),
+        );
+        expect(
+          registry.events,
+          contains('START agent(tgdog-round2/tg-1/agent)'),
+        );
+
+        const retiredKey = 'round-retired:tgdog-round1:0';
+        final retiredRecords = sink.records
+            .where((record) => record.recordType == 'attempt.round.retired')
+            .toList(growable: false);
+        expect(retiredRecords, hasLength(1));
+        expect(
+          retiredRecords.single.idemKeyText(_IdempotentTrajectorySink.context),
+          retiredKey,
+        );
+        expect(sink.enqueuesByKey[retiredKey], 2);
+      },
+    );
+
+    test('a legacy GATED round re-keyed with its gate bead still OPEN closes '
+        'the retired round and mints round N+1', () async {
       final f = buildFakes(createdId: 'tgdog-round2');
       final reg = RecordingCapabilityRegistry(circuits: const {});
       final transport = _RecordingTransport();
@@ -495,10 +642,9 @@ void main() {
       // Adopted synchronously — round 1's gated session, no mint.
       expect(f.runner.workCreates, isEmpty);
 
-      // `grid rework tg-1`: re-keys ONLY `work_bead` on the SAME session
-      // bead (bd `--metadata` merge — every other key, incl. the stale
-      // `route` cursor, survives byte-identical) and leaves the gate bead
-      // it never touches OPEN, exactly like the resident command rework path.
+      // Historical command projection: ONLY `work_bead` was re-keyed on the
+      // SAME session bead and the gate stayed OPEN. The handler now closes
+      // both first; this remains the mint-time compatibility fallback.
       final reworkDecisionAt = DateTime.now();
       stateSrc.push(
         _state([
