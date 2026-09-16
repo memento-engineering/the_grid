@@ -103,6 +103,7 @@ void main() {
         '_listeners',
         '_retryTimers',
         '_mountAttemptWrites',
+        '_lostSessionRetirements',
         '_blockedUntilFreshReady',
         '_rivalCleanupsInFlight',
       };
@@ -121,6 +122,8 @@ void main() {
         '_listeners': 'Registered station consumers',
         '_retryTimers': 'Live backoff operations',
         '_mountAttemptWrites': 'Writes not yet represented by JoinedSnapshot',
+        '_lostSessionRetirements':
+            'In-flight liveness-loss cuts are unavailable',
         '_blockedUntilFreshReady': 'Cancellation quarantine persists',
         '_rivalCleanupsInFlight': 'rival-cleanup microtasks are unavailable',
       };

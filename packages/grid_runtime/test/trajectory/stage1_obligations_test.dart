@@ -7,6 +7,7 @@
 // (the detector's whole contract is "how stale is this beat"); the filesystem
 // is real (the reaped backfill's external check is a directory that is either
 // there or not — faking it would test nothing).
+import 'dart:async';
 import 'dart:io';
 
 import 'package:grid_runtime/grid_runtime.dart';
@@ -121,6 +122,34 @@ void main() {
       );
       expect(names(armed: true).last, kAdmissionRestorationObligation);
     });
+
+    test(
+      'cut recovery follows liveness detection before later obligations',
+      () {
+        final queries = buildStage1ObligationQueries(
+          recorder: _recorder(),
+          db: _FakeDb(),
+          station: 'tranquility',
+          bootEpoch: () => 7,
+          admissionRefusalsArmed: true,
+          livenessLostHandler:
+              ({
+                required attemptId,
+                required sessionId,
+                required workBeadId,
+              }) async {},
+        );
+
+        expect(queries.map((query) => query.name), [
+          kUnknownTerminalSettlementObligation,
+          kExternalCloseTerminalObligation,
+          kWorktreeReapedBackfillObligation,
+          kLivenessDetectorObligation,
+          kLivenessLossRecoveryObligation,
+          kAdmissionRestorationObligation,
+        ]);
+      },
+    );
 
     test('writes NOTHING that mounts: no bd, no filesystem mutation, no '
         'eligibility clause — every statement is a trajectory read, a '
@@ -940,6 +969,22 @@ void main() {
       expect(query.parameters['station'], 'tranquility');
     });
 
+    test('keeps released and swept identities subject while their exact P2 '
+        'cursor remains active and unsuperseded', () {
+      final sql = build().sql;
+
+      expect(sql, contains('JOIN proj_step_cursor c'));
+      expect(sql, contains('c.session_id = p.session_id'));
+      expect(sql, contains('c.round = p.round'));
+      expect(sql, contains('c.step_path = p.step_path'));
+      expect(sql, contains('c.step_round = p.step_round'));
+      expect(sql, contains('c.incarnation = p.incarnation'));
+      expect(sql, contains('c.attempt_id = p.attempt_id'));
+      expect(sql, contains('c.superseded_by_step_round IS NULL'));
+      expect(sql, contains("c.state IN ('running', 'ready')"));
+      expect(sql, isNot(contains('lease_state')));
+    });
+
     test('UNKNOWN: a subject with no observable beat emits NOTHING and writes '
         'no pulse — a restored log can never mint a loss', () async {
       final detector = build();
@@ -1092,6 +1137,128 @@ void main() {
         expect(detector.lastScanCost!.scanned, 1);
       },
     );
+  });
+
+  group('liveness-loss recovery', () {
+    late _FakeClock clock;
+
+    setUp(() => clock = _FakeClock());
+
+    LivenessLossRecoveryObligation build({
+      required AttemptLivenessLostHandler handler,
+      int epoch = 17,
+      Duration threshold = const Duration(minutes: 10),
+    }) => LivenessLossRecoveryObligation(
+      handler: handler,
+      station: 'tranquility',
+      bootEpoch: () => epoch,
+      clock: clock.call,
+      threshold: threshold,
+    );
+
+    test('selects oldest unresolved stale current-epoch losses through the '
+        'full active-attempt identity', () {
+      final query = build(
+        handler:
+            ({
+              required attemptId,
+              required sessionId,
+              required workBeadId,
+            }) async {},
+      );
+
+      expect(query.sql, contains("l.record_type = 'attempt.liveness.lost'"));
+      expect(query.sql, contains('l.station = :station'));
+      expect(query.sql, contains('h.rig = :station'));
+      expect(query.sql, contains("h.status = 'open'"));
+      expect(query.sql, contains('JOIN proj_step_cursor c'));
+      expect(query.sql, contains('c.session_id = p.session_id'));
+      expect(query.sql, contains('c.round = p.round'));
+      expect(query.sql, contains('c.step_path = p.step_path'));
+      expect(query.sql, contains('c.step_round = p.step_round'));
+      expect(query.sql, contains('c.incarnation = p.incarnation'));
+      expect(query.sql, contains('c.attempt_id = p.attempt_id'));
+      expect(query.sql, contains('c.superseded_by_step_round IS NULL'));
+      expect(query.sql, contains("c.state IN ('running', 'ready')"));
+      expect(query.sql, contains('u.boot_epoch = :boot_epoch'));
+      expect(query.sql, contains('u.beat_at < :stale_before'));
+      expect(
+        query.sql,
+        contains(
+          "n.record_type IN ('attempt.liveness.regained', "
+          "'attempt.terminal')",
+        ),
+      );
+      expect(query.sql, contains('n.seq > l.seq'));
+      expect(query.sql, contains('ORDER BY l.seq'));
+      expect(query.sql, contains('LIMIT $kObligationBatchSize'));
+      expect(query.sql, isNot(contains('lease_state')));
+      expect(query.parameters, {
+        'station': 'tranquility',
+        'boot_epoch': 17,
+        'stale_before': sqlDateTime6(
+          clock.now.subtract(const Duration(minutes: 10)),
+        ),
+      });
+    });
+
+    test('skips incomplete rows, de-duplicates an attempt, and handles '
+        'complete losses sequentially', () async {
+      final gate = Completer<void>();
+      final events = <String>[];
+      final query = build(
+        handler:
+            ({
+              required attemptId,
+              required sessionId,
+              required workBeadId,
+            }) async {
+              events.add('$attemptId:start');
+              if (attemptId == 'A1') await gate.future;
+              events.add('$attemptId:end');
+            },
+      );
+
+      final repairing = query.repair([
+        {'attempt_id': 'A1', 'session_id': 'S1', 'work_bead_id': 'W1'},
+        {'attempt_id': 'A1', 'session_id': 'S1', 'work_bead_id': 'W1'},
+        {
+          'attempt_id': null,
+          'session_id': 'S-incomplete',
+          'work_bead_id': 'W-incomplete',
+        },
+        {'attempt_id': 'A2', 'session_id': 'S2', 'work_bead_id': 'W2'},
+      ]);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(events, ['A1:start']);
+      gate.complete();
+      expect(await repairing, isEmpty);
+      expect(events, ['A1:start', 'A1:end', 'A2:start', 'A2:end']);
+    });
+
+    test('propagates a handler failure and leaves the same durable loss '
+        'retryable on the next pass', () async {
+      var calls = 0;
+      final query = build(
+        handler:
+            ({
+              required attemptId,
+              required sessionId,
+              required workBeadId,
+            }) async {
+              calls += 1;
+              if (calls == 1) throw StateError('cut failed');
+            },
+      );
+      final rows = [
+        {'attempt_id': 'A1', 'session_id': 'S1', 'work_bead_id': 'W1'},
+      ];
+
+      await expectLater(query.repair(rows), throwsStateError);
+      expect(await query.repair(rows), isEmpty);
+      expect(calls, 2);
+    });
   });
 
   group('the barrier\'s restoration (§W2.4 W2-B)', () {
