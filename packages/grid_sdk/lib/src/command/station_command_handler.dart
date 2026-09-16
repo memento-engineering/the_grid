@@ -1326,6 +1326,25 @@ final class StationCommandHandler implements GridCommandHandler {
       }
     }
 
+    final List<GateAutoCloseReceipt> closedGates;
+    try {
+      closedGates = [
+        ...await _stateWriter.closeSessionAndOpenGatesForTerminal(
+          sessionId: session.id,
+          closeReason: 'reworked',
+          trigger: GateCloseCause.supersededRound,
+        ),
+      ]..sort((left, right) => left.gateId.compareTo(right.gateId));
+    } on OwnershipRefused catch (error) {
+      return _refused('ownership_refused', error.toString());
+    } on OwnershipGuardRefused catch (error) {
+      return _refused('ownership_refused', error.toString());
+    } on Object catch (error) {
+      return _refused(
+        'rework_close_failed',
+        'Could not close session "${session.id}" for rework: $error',
+      );
+    }
     String? reapFailure;
     try {
       await workStore.writer.clearRoundAuthoredSpec(beadId);
@@ -1393,6 +1412,15 @@ final class StationCommandHandler implements GridCommandHandler {
         'beadId': beadId,
         'sessionId': session.id,
         'round': round,
+        'closedSession': {'sessionId': session.id, 'reason': 'reworked'},
+        'closedGates': [
+          for (final receipt in closedGates)
+            {
+              'gateId': receipt.gateId,
+              'sessionId': receipt.sessionId,
+              'cause': receipt.cause.wireValue,
+            },
+        ],
         if (reapFailure != null) 'reapFailure': reapFailure,
       },
     );

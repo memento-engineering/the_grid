@@ -386,7 +386,14 @@ void main() {
           ),
           isEmpty,
         );
-        expect(stateRunner.calls.single.join(' '), contains('tg-1#r1'));
+        expect(
+          _roundKeyUpdates(
+            stateRunner,
+            sessionId: 'tgdog-session',
+            workBeadKey: 'tg-1#r1',
+          ).single.join(' '),
+          contains('tg-1#r1'),
+        );
         expect(work.current!.beads.single.design, 'operator design');
         expect(
           work.current!.beads.single.acceptanceCriteria,
@@ -395,71 +402,130 @@ void main() {
       },
     );
 
-    test('grid/rework finds a gated session through bare and round-suffixed '
-        'work keys', () async {
-      for (final entry
-          in <({String sessionId, String workBeadKey, String retiredKey})>[
-            (
-              sessionId: 'tgdog-bare',
-              workBeadKey: 'tg-1',
-              retiredKey: reworkKeyFor('tg-1', 1),
-            ),
-            (
-              sessionId: 'tgdog-round',
-              workBeadKey: reworkKeyFor('tg-1', 1),
-              retiredKey: reworkKeyFor('tg-1', 2),
-            ),
-          ]) {
-        final stateRunner = _RecordingRunner();
-        final workRunner = _RecordingRunner();
-        final handler = _handler(
-          state: _Source(
-            _snapshot([
-              _session(
-                entry.sessionId,
-                workBead: entry.workBeadKey,
-                molecule: true,
-                open: true,
+    test(
+      'grid/rework closes route and readiness gates before re-keying',
+      () async {
+        for (final entry
+            in <
+              ({
+                String gateId,
+                String nodePath,
+                String sessionId,
+                String workBeadKey,
+                String retiredKey,
+              })
+            >[
+              (
+                gateId: 'tgdog-route-gate',
+                nodePath: 'tg-1/review/route',
+                sessionId: 'tgdog-bare',
+                workBeadKey: 'tg-1',
+                retiredKey: reworkKeyFor('tg-1', 1),
               ),
-              Bead(
-                id: '${entry.sessionId}-gate',
-                issueType: GridIssueTypes.gate,
-                metadata: {
-                  'rig': 'tgdog',
-                  'blocks': entry.sessionId,
-                  'node': 'tg-1/review/route',
-                },
+              (
+                gateId: 'tgdog-readiness-gate',
+                nodePath: 'tg-1/spec_review/readiness-route',
+                sessionId: 'tgdog-round',
+                workBeadKey: reworkKeyFor('tg-1', 1),
+                retiredKey: reworkKeyFor('tg-1', 2),
               ),
-            ]),
-          ),
-          work: _Source(_workSnapshot()),
-          stateRunner: stateRunner,
-          workRunner: workRunner,
-        );
+            ]) {
+          final session = _session(
+            entry.sessionId,
+            workBead: entry.workBeadKey,
+            molecule: true,
+            open: true,
+          );
+          final gate = Bead(
+            id: entry.gateId,
+            issueType: GridIssueTypes.gate,
+            metadata: {
+              'rig': 'tgdog',
+              'blocks': entry.sessionId,
+              'node': entry.nodePath,
+            },
+          );
+          final gatedStep = Bead(
+            id: '${entry.sessionId}-step',
+            issueType: GridIssueTypes.step,
+            metadata: {
+              'rig': 'tgdog',
+              MoleculeStepKeys.path: entry.nodePath,
+              MoleculeStepKeys.session: entry.sessionId,
+              MoleculeStepKeys.capability: 'readiness',
+              MoleculeStepKeys.state: StepState.gated.name,
+              ...nodeResultMetadata(entry.nodePath, const {
+                ResultKeys.grade: 'E',
+                ResultKeys.routeVerdict: kRouteVerdictEscalate,
+              }),
+            },
+          );
+          final stateRunner = _RecordingRunner(
+            exportBeads: [session, gate, gatedStep],
+          )..openBeadsResult = [gate];
+          final workRunner = _RecordingRunner();
+          final handler = _handler(
+            state: _Source(_snapshot([session, gate, gatedStep])),
+            work: _Source(_workSnapshot()),
+            stateRunner: stateRunner,
+            workRunner: workRunner,
+          );
 
-        final result = await handler(
-          const GridCommandRequest.rework(
-            beadId: 'tg-1',
-            note: 'carry critique',
-          ),
-        );
-
-        expect(result, isA<GridCommandCompleted>());
-        expect(
-          stateRunner.calls,
-          contains(
-            allOf(
-              containsAllInOrder(['update', entry.sessionId]),
-              contains('work_bead=${entry.retiredKey}'),
+          final result = await handler(
+            const GridCommandRequest.rework(
+              beadId: 'tg-1',
+              note: 'carry critique',
             ),
-          ),
-        );
-        final noteWrite = workRunner.calls.singleWhere(
-          (call) => call.contains('--append-notes'),
-        );
-        expect(noteWrite.join(' '), contains('carry critique'));
-      }
-    });
+          );
+
+          expect(result, isA<GridCommandCompleted>());
+          final value = (result as GridCommandCompleted).value;
+          expect(value['closedSession'], {
+            'sessionId': entry.sessionId,
+            'reason': 'reworked',
+          });
+          expect(value['closedGates'], [
+            {
+              'gateId': entry.gateId,
+              'sessionId': entry.sessionId,
+              'cause': GateCloseCause.supersededRound.wireValue,
+            },
+          ]);
+          final sessionClose = stateRunner.calls.indexWhere(
+            (call) =>
+                call.first == 'close' &&
+                call[1] == entry.sessionId &&
+                call.contains('reworked'),
+          );
+          final gateCause = stateRunner.calls.indexWhere(
+            (call) =>
+                call.first == 'update' &&
+                call[1] == entry.gateId &&
+                call.contains(
+                  '${StationBeadWriter.gateCloseCauseKey}='
+                  '${GateCloseCause.supersededRound.wireValue}',
+                ),
+          );
+          final gateClose = stateRunner.calls.indexWhere(
+            (call) => call.first == 'close' && call[1] == entry.gateId,
+          );
+          final rekey = stateRunner.calls.indexWhere(
+            (call) =>
+                call.first == 'update' &&
+                call[1] == entry.sessionId &&
+                call.contains('work_bead=${entry.retiredKey}'),
+          );
+          expect(sessionClose, greaterThanOrEqualTo(0));
+          expect(gateCause, greaterThan(sessionClose));
+          expect(gateClose, greaterThan(gateCause));
+          expect(rekey, greaterThan(gateClose));
+          final noteWrite = workRunner.calls.singleWhere(
+            (call) => call.contains('--append-notes'),
+          );
+          expect(noteWrite.join(' '), contains('carry critique'));
+        }
+      },
+    );
 
     test(
       'grid/rework publishes its own retire and replay does not retire twice',
@@ -561,7 +627,11 @@ void main() {
         contains(containsAll(['update', 'swift-infer-097'])),
       );
       expect(
-        stateRunner.calls.single.join(' '),
+        _roundKeyUpdates(
+          stateRunner,
+          sessionId: 'tgdog-session',
+          workBeadKey: 'swift-infer-097#r1',
+        ).single.join(' '),
         contains('swift-infer-097#r1'),
       );
     });
@@ -1501,6 +1571,7 @@ void main() {
       GridCommandRequest request = const GridCommandRequest.rework(
         beadId: 'tg-1',
       ),
+      Set<String> stateWriterOwnership = const {'tg', 'tgdog'},
       Set<String> workWriterOwnership = const {'tg'},
     }) async {
       final stateRunner = _RecordingRunner();
@@ -1511,6 +1582,7 @@ void main() {
           work: _Source(work),
           stateRunner: stateRunner,
           workRunner: workRunner,
+          stateWriterOwnership: stateWriterOwnership,
           workWriterOwnership: workWriterOwnership,
         ),
         request,
@@ -1684,14 +1756,112 @@ void main() {
       ),
     );
     test(
-      'writer rejects ownership',
+      'state writer rejects close ownership before any write',
       () => refused(
         state: _snapshot([_session('tgdog-session')]),
         work: _workSnapshot(),
         code: 'ownership_refused',
-        workWriterOwnership: const {'other'},
+        stateWriterOwnership: const {'other'},
       ),
     );
+
+    test('work writer refusal follows the required session close', () async {
+      final stateRunner = _RecordingRunner();
+      final workRunner = _RecordingRunner();
+      final result = await _handler(
+        state: _Source(_snapshot([_session('tgdog-session')])),
+        work: _Source(_workSnapshot()),
+        stateRunner: stateRunner,
+        workRunner: workRunner,
+        workWriterOwnership: const {'other'},
+      )(const GridCommandRequest.rework(beadId: 'tg-1'));
+
+      expect(
+        result,
+        isA<GridCommandRefused>().having(
+          (value) => value.code,
+          'code',
+          'ownership_refused',
+        ),
+      );
+      expect(
+        stateRunner.calls.where(
+          (call) => call.first == 'close' && call[1] == 'tgdog-session',
+        ),
+        hasLength(1),
+      );
+      expect(_reworkUpdates(stateRunner), isEmpty);
+      expect(workRunner.calls, isEmpty);
+    });
+
+    test('close failure refuses before every round mutation', () async {
+      final session = _session('tgdog-session', molecule: true, open: true);
+      const gate = Bead(
+        id: 'tgdog-readiness-gate',
+        issueType: GridIssueTypes.gate,
+        metadata: {
+          'rig': 'tgdog',
+          'blocks': 'tgdog-session',
+          'node': 'tg-1/spec_review/readiness-route',
+        },
+      );
+      const workBead = Bead(
+        id: 'tg-1',
+        issueType: IssueType.task,
+        design: 'specify design',
+        acceptanceCriteria: 'specify acceptance',
+        metadata: {
+          'rig': 'tg',
+          StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor,
+        },
+      );
+      final stateRunner = _RecordingRunner(
+        throwOnSessionClose: true,
+        exportBeads: [session, gate],
+      )..openBeadsResult = const [gate];
+      final workRunner = _RecordingRunner(exportBeads: const [workBead]);
+      final sink = _CapturingSink();
+      final result =
+          await _handler(
+            state: _Source(_snapshot([session, gate])),
+            work: _Source(_snapshot(const [workBead])),
+            stateRunner: stateRunner,
+            workRunner: workRunner,
+            recorder: StationTrajectoryRecorder(sink: sink),
+          )(
+            const GridCommandRequest.rework(
+              beadId: 'tg-1',
+              note: 'operator finding',
+            ),
+          );
+
+      expect(
+        result,
+        isA<GridCommandRefused>()
+            .having((value) => value.code, 'code', 'rework_close_failed')
+            .having(
+              (value) => value.message,
+              'message',
+              contains('fake session close failed'),
+            ),
+      );
+      expect(
+        stateRunner.calls.where(
+          (call) =>
+              call.first == 'update' &&
+              call.any((argument) => argument.startsWith('work_bead=')),
+        ),
+        isEmpty,
+      );
+      expect(
+        stateRunner.calls.where(
+          (call) => call.first == 'dep' || call.first == 'batch',
+        ),
+        isEmpty,
+      );
+      expect(sink.records, isEmpty);
+      expect(workRunner.calls, isEmpty);
+    });
   });
 
   group('grid/gate/resolve refusals', () {
@@ -1918,7 +2088,7 @@ void main() {
         isA<GridCommandCompleted>(),
       );
       // The record shadows this write; it never leads it.
-      expect(stateRunner.calls.single.join(' '), contains('tg-1#r1'));
+      expect(_reworkUpdates(stateRunner).single.join(' '), contains('tg-1#r1'));
     }
 
     test(
@@ -2414,15 +2584,25 @@ GraphSnapshot _gateSnapshot() => _snapshot([
   ),
 ]);
 
-List<List<String>> _reworkUpdates(_RecordingRunner runner) => runner.calls
+List<List<String>> _roundKeyUpdates(
+  _RecordingRunner runner, {
+  required String sessionId,
+  required String workBeadKey,
+}) => runner.calls
     .where(
       (call) =>
           call.length > 1 &&
           call[0] == 'update' &&
-          call[1] == 'tgdog-session' &&
-          call.any((argument) => argument.contains('tg-1#r1')),
+          call[1] == sessionId &&
+          call.contains('work_bead=$workBeadKey'),
     )
     .toList(growable: false);
+
+List<List<String>> _reworkUpdates(_RecordingRunner runner) => _roundKeyUpdates(
+  runner,
+  sessionId: 'tgdog-session',
+  workBeadKey: 'tg-1#r1',
+);
 
 Future<void> _expectRefused(
   StationCommandHandler handler,
@@ -2585,12 +2765,14 @@ final class _RecordingRunner implements BdRunner, BeadProbeReader {
   _RecordingRunner({
     this.blockFirst = false,
     this.refuseConditionalGateUpdate = false,
+    this.throwOnSessionClose = false,
     List<BdResult> results = const [],
     this.exportBeads = const [],
   }) : _results = List.of(results);
 
   final bool blockFirst;
   bool refuseConditionalGateUpdate;
+  final bool throwOnSessionClose;
 
   /// When set, a `batch` invocation throws — the reap-failure shape.
   bool throwOnBatch = false;
@@ -2640,6 +2822,12 @@ final class _RecordingRunner implements BdRunner, BeadProbeReader {
     }
     if (throwOnBatch && args.isNotEmpty && args.first == 'batch') {
       throw StateError('fake batch refused');
+    }
+    if (throwOnSessionClose &&
+        args.length > 1 &&
+        args.first == 'close' &&
+        args[1] == 'tgdog-session') {
+      throw StateError('fake session close failed');
     }
     if (blockFirst && calls.length == 1) {
       _blocked = Completer<void>();
