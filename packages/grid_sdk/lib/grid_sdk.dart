@@ -166,7 +166,12 @@ export 'package:grid_trajectory/grid_trajectory.dart'
         TrajectoryTickFixpoint,
         TrajectoryTickPass;
 export 'package:grid_runtime/grid_runtime.dart'
-    show Acked, Dropped, Suppressed, TrajectoryAppendResult;
+    show
+        Acked,
+        AttemptLivenessLostHandler,
+        Dropped,
+        Suppressed,
+        TrajectoryAppendResult;
 // The P1 MIRROR (the trajectory cut, wave 1 / C1): the harness's in-memory
 // fold read surface, implementing the ENGINE's `TrajectoryHeadSnapshot` seam
 // over `grid_trajectory`'s row types. Exported so a status surface can read
@@ -178,6 +183,7 @@ export 'src/trajectory/session_head_mirror.dart';
 export 'src/trajectory/step_cursor_mirror.dart';
 export 'src/trajectory/trajectory_config.dart';
 export 'src/trajectory/process_identity_mirror.dart';
+export 'src/trajectory/attempt_liveness_recovery.dart';
 export 'src/trajectory/trajectory_harness.dart';
 
 // ── Station command extension ───────────────────────────────────────────────

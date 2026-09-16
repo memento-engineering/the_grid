@@ -490,6 +490,7 @@ void main() {
     List<ObligationQuery>? tickQueries,
     Stopwatch Function()? stopwatch,
     TrajectoryAdmissionHaltCallback? onAdmissionHalt,
+    AttemptLivenessLostHandler? livenessLostHandler,
   }) => TrajectoryHarness.build(
     config: config,
     gridHome: tmp.path,
@@ -497,6 +498,7 @@ void main() {
     substationPrefixes: const {'tg', 'the_grid', 'tranquility'},
     onFlare: (name, data) => flares.add((name, data)),
     onAdmissionHalt: onAdmissionHalt,
+    livenessLostHandler: livenessLostHandler,
     runtimeEvents: runtimeEvents,
     tickQueries: tickQueries,
     connect: () async {
@@ -2487,6 +2489,69 @@ void main() {
       expect(h.tick!.lastPass!.queriesRun, 4);
       expect(h.tick!.lastPass!.refusals, isEmpty);
     });
+
+    test('an optional loss handler inserts ordered cut recovery and receives '
+        'the selected durable attempt', () async {
+      final handled = <({String attempt, String session, String work})>[];
+      dbScript = (sql) => sql.contains('FROM trajectory l ')
+          ? const SqlResult(
+              rows: [
+                {
+                  'attempt_id': 'attempt-1',
+                  'session_id': 'tranquility-s1',
+                  'work_bead_id': 'tg-1',
+                },
+              ],
+            )
+          : null;
+      final h = await harness(
+        livenessLostHandler:
+            ({
+              required attemptId,
+              required sessionId,
+              required workBeadId,
+            }) async => handled.add((
+              attempt: attemptId,
+              session: sessionId,
+              work: workBeadId,
+            )),
+      );
+
+      await h.start();
+
+      expect(h.tick!.queries.map((query) => query.name), [
+        kUnknownTerminalSettlementObligation,
+        kExternalCloseTerminalObligation,
+        kWorktreeReapedBackfillObligation,
+        kLivenessDetectorObligation,
+        kLivenessLossRecoveryObligation,
+      ]);
+      expect(handled, [
+        (attempt: 'attempt-1', session: 'tranquility-s1', work: 'tg-1'),
+      ]);
+      expect(h.tick!.lastPass!.queriesRun, 5);
+    });
+
+    test(
+      'an explicit caller-owned query set is not retrofitted with recovery',
+      () async {
+        var handled = 0;
+        final h = await harness(
+          tickQueries: [_ProbeQuery()],
+          livenessLostHandler:
+              ({
+                required attemptId,
+                required sessionId,
+                required workBeadId,
+              }) async => handled += 1,
+        );
+
+        await h.start();
+
+        expect(h.tick!.queries.map((query) => query.name), ['probe']);
+        expect(handled, 0);
+      },
+    );
 
     test(
       'extensions append after Stage 1 and share boot interval and fixpoint',

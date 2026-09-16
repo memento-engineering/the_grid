@@ -13,6 +13,7 @@ import '../roster/substation_roster.dart';
 import '../stores/state_store_gc.dart' show MaintenanceSink;
 import '../stores/state_store_pruner.dart';
 import '../stores/stores.dart';
+import '../trajectory/attempt_liveness_recovery.dart';
 import '../trajectory/session_closure.dart';
 import '../trajectory/state_store_prune_obligation.dart';
 import '../trajectory/trajectory_config.dart';
@@ -246,6 +247,7 @@ class StationWorkRuntime implements SubstationProvisioner {
     required this.git,
     required this.trajectory,
     required this.sessionLiveness,
+    required StationAttemptLivenessRecovery attemptLivenessRecovery,
     required this.stateSubstation,
     required this.readPathName,
     required this.openStores,
@@ -279,6 +281,7 @@ class StationWorkRuntime implements SubstationProvisioner {
     required _WorkWriterFactory buildWorkWriter,
   }) : _driver = driver,
        _restart = restart,
+       _attemptLivenessRecovery = attemptLivenessRecovery,
        _provider = provider,
        _onOrphan = onOrphan,
        _onRefusal = onRefusal,
@@ -328,6 +331,7 @@ class StationWorkRuntime implements SubstationProvisioner {
   /// The single station-lifetime work-session relay coordinator shared by the
   /// driver, trajectory obligation, and ambient registrar.
   final WorkSessionLiveness sessionLiveness;
+  final StationAttemptLivenessRecovery _attemptLivenessRecovery;
 
   /// The owned state partition sessions are minted into — re-sourced from the
   /// grid's own state store identity (its `dolt_database`), never a flag
@@ -689,6 +693,7 @@ class StationWorkRuntime implements SubstationProvisioner {
       // The first flush occurs only after the authored tree (and any relay
       // asset) mounted. The trajectory boot pass therefore remains inert.
       sessionLiveness.activate();
+      _attemptLivenessRecovery.activate();
     }
   }
 
@@ -1473,6 +1478,7 @@ Future<StationWorkRuntime> _acquireStationWork({
   final rootsByName = <String, RootCheckout>{};
 
   late final TrajectoryHarness trajectory;
+  late final StationAttemptLivenessRecovery attemptLivenessRecovery;
   final trajectoryAdmissionHalt =
       trajectoryConfig.discipline == TrajectoryDiscipline.cut
       ? TrajectoryAdmissionHalt(
@@ -1592,6 +1598,23 @@ Future<StationWorkRuntime> _acquireStationWork({
                 }
                 return match;
               },
+        // This is not a second station-maintenance loop. Decision
+        // `closed-session-graphs-prune-on-fenced-station-ticks` gives its
+        // sibling prune job an existing non-stacking tick and says, “Every
+        // fenced run emits exactly one receipt”. Liveness recovery owns no
+        // independent run to receipt: the existing serial TrajectoryTick
+        // selects one durable loss, invokes this per-attempt callback, and
+        // reports a thrown action through its existing query-failure refusal.
+        // The attempt's durable loss/terminal testimony is its audit trail.
+        livenessLostHandler:
+            trajectoryConfig.discipline != TrajectoryDiscipline.cut
+            ? null
+            : ({required attemptId, required sessionId, required workBeadId}) =>
+                  attemptLivenessRecovery.handle(
+                    attemptId: attemptId,
+                    sessionId: sessionId,
+                    workBeadId: workBeadId,
+                  ),
         // §1.1's runtime-event subscriber (harness-internal, over
         // `provider.events`): the observation surface for
         // `attempt.process.started`/`.exited` (§2.3 rows 2–3). The harness
@@ -1815,6 +1838,12 @@ Future<StationWorkRuntime> _acquireStationWork({
     // `clear`), so a dry run is unchanged.
     workSignal: stationWorkSignal(git),
   );
+  attemptLivenessRecovery = StationAttemptLivenessRecovery(
+    services: () => services,
+    snapshot: () => stateSource.current ?? _emptyGraphSnapshot(),
+    recorder: recorder,
+    transportServices: ServiceBundle(transport: transport),
+  );
   final commands = StationCommandHandler(
     stateSource: stateSource,
     refreshState: stateBundle.runtime.requery,
@@ -1995,6 +2024,7 @@ Future<StationWorkRuntime> _acquireStationWork({
     git: git,
     trajectory: trajectory,
     sessionLiveness: sessionLiveness,
+    attemptLivenessRecovery: attemptLivenessRecovery,
     stateSubstation: stateSubstation,
     readPathName: readPathName,
     openStores: openStores,

@@ -364,6 +364,176 @@ Future<void> _waitUntil(bool Function() condition) async {
 }
 
 void main() {
+  test(
+    'lost-session retirement shares one exact future and stops every runtime '
+    'before the incumbent void path',
+    () async {
+      final runner = RecordingBdRunner();
+      final provider = _GatedStopProvider();
+      addTearDown(() {
+        if (!provider.releaseStop.isCompleted) provider.releaseStop.complete();
+      });
+      addTearDown(provider.close);
+      await provider.start(
+        'tg-lost/tg-work/agent',
+        const RuntimeConfig(workDir: '/tmp', command: 'sh'),
+      );
+      await provider.start(
+        'tg-lost/tg-work/verify',
+        const RuntimeConfig(workDir: '/tmp', command: 'sh'),
+      );
+      final station = _stationOver(runner, provider: provider);
+      addTearDown(station.dispose);
+
+      final first = station.admission.retireLostSession(
+        workBeadId: 'tg-work',
+        sessionId: 'tg-lost',
+        attemptId: 'attempt-1',
+        services: const ServiceBundle(),
+      );
+      await provider.stopEntered.future;
+      final same = station.admission.retireLostSession(
+        workBeadId: 'tg-work',
+        sessionId: 'tg-lost',
+        attemptId: 'attempt-1',
+        services: const ServiceBundle(),
+      );
+
+      expect(identical(first, same), isTrue);
+      expect(
+        () => station.admission.retireLostSession(
+          workBeadId: 'tg-work',
+          sessionId: 'tg-lost',
+          attemptId: 'attempt-2',
+          services: const ServiceBundle(),
+        ),
+        throwsStateError,
+      );
+      expect(provider.listRunningCalls, 1);
+      expect(
+        runner.calls,
+        isEmpty,
+        reason: 'all runtime stops precede voiding',
+      );
+
+      provider.releaseStop.complete();
+      expect(await first, 'tg-lost');
+      expect(await same, 'tg-lost');
+      expect(provider.stopped, [
+        'tg-lost/tg-work/agent',
+        'tg-lost/tg-work/verify',
+      ]);
+      final update = runner
+          .callsFor('update')
+          .singleWhere(
+            (call) => call.contains(
+              '${SessionBeadKeys.voidedReason}=attempt-liveness-lost',
+            ),
+          );
+      expect(
+        update,
+        contains('${SessionBeadKeys.voidedReason}=attempt-liveness-lost'),
+      );
+      expect(
+        update,
+        contains('${SessionBeadKeys.workBead}=tg-work#void-tg-lost'),
+      );
+      expect(runner.callsFor('close'), hasLength(1));
+    },
+  );
+
+  test('lost-session close holds capacity and releases it before retry '
+      'invalidation', () async {
+    final runner = _GatedCloseRunner(createdId: 'tg-lost');
+    final provider = FakeRuntimeProvider();
+    addTearDown(() {
+      if (!runner.releaseClose.isCompleted) runner.releaseClose.complete();
+    });
+    addTearDown(provider.close);
+    final station = _stationOver(
+      runner,
+      provider: provider,
+      maxConcurrentWork: 1,
+    );
+    addTearDown(station.dispose);
+    final owned = await _reserveAndCreate(station, 'tg-work');
+    var invalidations = 0;
+    station.admission.addInvalidationListener(() => invalidations += 1);
+    final beforeRetirement = invalidations;
+
+    final retirement = station.admission.retireLostSession(
+      workBeadId: 'tg-work',
+      sessionId: owned.sessionId,
+      attemptId: 'attempt-1',
+      services: const ServiceBundle(),
+    );
+    await runner.closeEntered.future;
+    expect(
+      station.admission.admissionStatus.reservations.single.sessionId,
+      owned.sessionId,
+    );
+    final rival = _bead('tg-rival');
+    final held = station.admission.admitPending(
+      _snapshot([owned.candidate.bead, rival]),
+      _config.copyWith(maxConcurrentWork: 1),
+      const ServiceBundle(),
+      [owned.candidate, StationAdmissionCandidate(bead: rival, session: null)],
+    );
+    expect(held.waiting.single.bead.id, 'tg-rival');
+    expect(invalidations, beforeRetirement);
+
+    runner.releaseClose.complete();
+    await retirement;
+    expect(station.admission.admissionStatus.reservations, isEmpty);
+    expect(invalidations, greaterThan(beforeRetirement));
+    final admitted = station.admission.admitPending(
+      _snapshot([rival]),
+      _config.copyWith(maxConcurrentWork: 1),
+      const ServiceBundle(),
+      [StationAdmissionCandidate(bead: rival, session: null)],
+    );
+    expect(admitted.admitted.single.candidate.bead.id, 'tg-rival');
+  });
+
+  test(
+    'a failed lost-session void removes the in-flight identity for retry',
+    () async {
+      final runner = _FailFirstVoidUpdateRunner();
+      final provider = _GatedStopProvider();
+      addTearDown(() {
+        if (!provider.releaseStop.isCompleted) provider.releaseStop.complete();
+      });
+      addTearDown(provider.close);
+      await provider.start(
+        'tg-lost/tg-work/agent',
+        const RuntimeConfig(workDir: '/tmp', command: 'sh'),
+      );
+      final station = _stationOver(runner, provider: provider);
+      addTearDown(station.dispose);
+
+      final failed = station.admission.retireLostSession(
+        workBeadId: 'tg-work',
+        sessionId: 'tg-lost',
+        attemptId: 'attempt-1',
+        services: const ServiceBundle(),
+      );
+      await provider.stopEntered.future;
+      provider.releaseStop.complete();
+      await expectLater(failed, throwsStateError);
+
+      final retried = station.admission.retireLostSession(
+        workBeadId: 'tg-work',
+        sessionId: 'tg-lost',
+        attemptId: 'attempt-1',
+        services: const ServiceBundle(),
+      );
+      expect(identical(failed, retried), isFalse);
+      expect(await retried, 'tg-lost');
+      expect(provider.listRunningCalls, 2);
+      expect(runner.callsFor('close'), hasLength(1));
+    },
+  );
+
   test('trajectory loss invalidates admission, preserves live work, and routes '
       'step and terminal gates through their distinct seams', () async {
     final runner = RecordingBdRunner(createdId: 'tg-gate');
