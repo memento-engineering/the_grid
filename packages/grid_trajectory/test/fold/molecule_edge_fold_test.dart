@@ -85,6 +85,8 @@ void main() {
     ]);
     expect(result.skipped, {'step.transition@v1': 1, 'molecule.poured@v2': 1});
     expect(result.appliedSeq, 9);
+    expect(result.rows.clear, throwsUnsupportedError);
+    expect(result.skipped.clear, throwsUnsupportedError);
   });
 
   test(

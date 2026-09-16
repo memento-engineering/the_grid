@@ -101,6 +101,111 @@ void main() {
     );
   });
 
+  test('invalid node and semantic-endpoint shapes refuse loudly', () {
+    expect(
+      () => graph(
+        nodes: [
+          node('work', GridIssueTypes.molecule.wire, parentId: 'session-1'),
+          node('work/not-a-step', 'task'),
+        ],
+        edges: const [],
+      ),
+      throwsArgumentError,
+    );
+    expect(
+      () => graph(
+        edges: [
+          CanonicalMoleculeEdge(
+            fromPath: 'work/z',
+            toPath: 'work/missing',
+            kind: DependencyType.blocks.wire,
+          ),
+        ],
+      ),
+      throwsArgumentError,
+    );
+    expect(
+      () => graph(
+        nodes: [
+          node('work', GridIssueTypes.molecule.wire, parentId: 'session-1'),
+          node('other', GridIssueTypes.molecule.wire, parentId: 'session-1'),
+        ],
+        edges: const [],
+      ),
+      throwsArgumentError,
+    );
+    expect(
+      () => graph(
+        nodes: [
+          node('work', GridIssueTypes.molecule.wire, parentId: 'session-1'),
+          const GraphNode(
+            key: 'work/a',
+            title: 'a',
+            type: 'step',
+            parentKey: 'work',
+          ),
+        ],
+        edges: const [],
+      ),
+      throwsArgumentError,
+    );
+  });
+
+  test('snapshots mutable inputs and exposes structural equality', () {
+    final metadata = <String, String>{'mutable': 'before'};
+    final inputNodes = <GraphNode>[
+      GraphNode(
+        key: 'work',
+        title: 'work',
+        type: GridIssueTypes.molecule.wire,
+        parentId: 'session-1',
+        metadata: metadata,
+      ),
+      node('work/a', GridIssueTypes.step.wire),
+      node('work/b', GridIssueTypes.step.wire),
+    ];
+    final inputEdges = <CanonicalMoleculeEdge>[
+      CanonicalMoleculeEdge(
+        fromPath: 'work/b',
+        toPath: 'work/a',
+        kind: DependencyType.blocks.wire,
+      ),
+    ];
+    final canonical = CanonicalMoleculeGraph(
+      formula: 'code',
+      commitMessage: 'pour code',
+      nodeDefinitions: inputNodes,
+      edges: inputEdges,
+    );
+    final equivalent = CanonicalMoleculeGraph(
+      formula: 'code',
+      commitMessage: 'pour code',
+      nodeDefinitions: inputNodes,
+      edges: inputEdges,
+    );
+
+    metadata['mutable'] = 'after';
+    inputNodes.add(node('work/c', GridIssueTypes.step.wire));
+    inputEdges.clear();
+
+    expect(canonical, equivalent);
+    expect(canonical.hashCode, equivalent.hashCode);
+    expect(canonical.nodeDefinitions, hasLength(3));
+    expect(canonical.edges, hasLength(1));
+    expect(canonical.nodeDefinitions.first.metadata['mutable'], 'before');
+    expect(
+      () => canonical.nodeDefinitions.first.metadata['mutable'] = 'changed',
+      throwsUnsupportedError,
+    );
+    expect(
+      () =>
+          ((canonical.graph['edges']! as List<Object?>).single!
+                  as Map<String, Object?>)['kind'] =
+              'validates',
+      throwsUnsupportedError,
+    );
+  });
+
   test('the legacy adapter reconstructs nearest parent-child edges only', () {
     final canonical = graph();
     final plan = canonical.toGraphApplyPlan();

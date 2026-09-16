@@ -29,14 +29,30 @@ const Map<String, (int, int)> moleculeEdgeFoldConsumes = {
 /// One pure edge replay's rows and bookkeeping.
 @immutable
 final class MoleculeEdgeFoldResult {
-  const MoleculeEdgeFoldResult({
+  /// Snapshots the replay rows and bookkeeping maps.
+  factory MoleculeEdgeFoldResult({
+    required Map<MoleculeEdgeKey, MoleculeEdgeRow> rows,
+    required int appliedSeq,
+    required Map<String, int> skipped,
+  }) => MoleculeEdgeFoldResult._(
+    rows: Map<MoleculeEdgeKey, MoleculeEdgeRow>.unmodifiable(rows),
+    appliedSeq: appliedSeq,
+    skipped: Map<String, int>.unmodifiable(skipped),
+  );
+
+  const MoleculeEdgeFoldResult._({
     required this.rows,
     required this.appliedSeq,
     required this.skipped,
   });
 
+  /// Folded rows keyed by the existing projection's complete primary key.
   final Map<MoleculeEdgeKey, MoleculeEdgeRow> rows;
+
+  /// The highest trajectory sequence scanned, whether consumed or skipped.
   final int appliedSeq;
+
+  /// Unconsumed step-family record/version counts by `<type>@v<version>`.
   final Map<String, int> skipped;
 }
 

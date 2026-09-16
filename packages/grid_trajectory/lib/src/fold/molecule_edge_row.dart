@@ -15,6 +15,7 @@ typedef MoleculeEdgeKey = ({
 /// One immutable semantic edge from a poured molecule.
 @immutable
 final class MoleculeEdgeRow {
+  /// Creates one row in the existing semantic edge projection.
   const MoleculeEdgeRow({
     required this.sessionId,
     required this.round,
@@ -23,10 +24,19 @@ final class MoleculeEdgeRow {
     required this.kind,
   });
 
+  /// The owning session correlation.
   final String sessionId;
+
+  /// The owning session round.
   final int round;
+
+  /// The graph path whose dependency row is authored.
   final String fromPath;
+
+  /// The graph path [fromPath] depends on or validates.
   final String toPath;
+
+  /// The exact DDL enum wire (`blocks` or `validates`).
   final String kind;
 
   MoleculeEdgeKey get key => (

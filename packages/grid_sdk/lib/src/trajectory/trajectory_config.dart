@@ -65,6 +65,7 @@ enum G2Posture {
 /// A non-off G2 posture whose resolved G1 prerequisite is not certified.
 @immutable
 final class G2G1PrerequisiteRefused implements Exception {
+  /// Creates the named boot refusal for the first mismatched prerequisite.
   const G2G1PrerequisiteRefused({
     required this.posture,
     required this.field,

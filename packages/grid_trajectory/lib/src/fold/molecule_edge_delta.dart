@@ -12,9 +12,11 @@ import 'session_head_delta.dart' show SqlStatement;
 /// One pour's valid `blocks` and `validates` edge rows.
 @immutable
 final class MoleculeEdgeDelta {
+  /// Snapshots one pour's valid edge rows.
   MoleculeEdgeDelta(Iterable<MoleculeEdgeRow> rows)
     : rows = List<MoleculeEdgeRow>.unmodifiable(rows);
 
+  /// The complete immutable row set rendered by either applier.
   final List<MoleculeEdgeRow> rows;
 }
 

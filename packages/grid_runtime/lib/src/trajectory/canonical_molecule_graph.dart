@@ -18,6 +18,7 @@ import '../models/grid_issue_types.dart';
 /// metadata for the legacy writer only.
 @immutable
 final class CanonicalMoleculeEdge {
+  /// Creates a semantic edge between two canonical graph paths.
   CanonicalMoleculeEdge({
     required this.fromPath,
     required this.toPath,
@@ -33,8 +34,13 @@ final class CanonicalMoleculeEdge {
     }
   }
 
+  /// The graph path whose dependency row is authored.
   final String fromPath;
+
+  /// The graph path [fromPath] depends on or validates.
   final String toPath;
+
+  /// The semantic dependency kind (`blocks` or `validates`).
   final String kind;
 
   Map<String, Object?> get _json => Map<String, Object?>.unmodifiable({
@@ -64,6 +70,7 @@ final class CanonicalMoleculeEdge {
 /// second graph derivation.
 @immutable
 final class CanonicalMoleculeGraph {
+  /// Snapshots and validates one selected formula's complete graph.
   factory CanonicalMoleculeGraph({
     required String formula,
     required String commitMessage,
@@ -92,6 +99,21 @@ final class CanonicalMoleculeGraph {
               : 'duplicate node key',
         );
       }
+      if (node.type != GridIssueTypes.molecule.wire &&
+          node.type != GridIssueTypes.step.wire) {
+        throw ArgumentError.value(
+          node.type,
+          'nodeDefinitions',
+          'canonical molecule graphs contain only molecule and step nodes',
+        );
+      }
+      if (node.parentKey != null) {
+        throw ArgumentError.value(
+          node.parentKey,
+          'nodeDefinitions',
+          'parent-key structure is reconstructed by toGraphApplyPlan',
+        );
+      }
       copiedNodes.add(_copyNode(node));
     }
     if (copiedNodes.isEmpty) {
@@ -99,6 +121,18 @@ final class CanonicalMoleculeGraph {
         nodeDefinitions,
         'nodeDefinitions',
         'must contain at least one molecule node',
+      );
+    }
+    final externalRoots = [
+      for (final node in copiedNodes)
+        if (node.parentId != null) node,
+    ];
+    if (externalRoots.length != 1 ||
+        externalRoots.single.type != GridIssueTypes.molecule.wire) {
+      throw ArgumentError.value(
+        externalRoots.map((node) => node.key).toList(growable: false),
+        'nodeDefinitions',
+        'must contain exactly one externally parented molecule root',
       );
     }
     final copiedEdges = edges.toList(growable: false)..sort(_compareEdges);
