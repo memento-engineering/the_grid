@@ -1106,6 +1106,10 @@ void main() {
         expect(method.requests, isEmpty);
         expect(h.fakes.runner.callsFor('update'), isEmpty);
         expect(transport.named('step.persistFailed'), isEmpty);
+        final dropped = transport.named('step.persistDropped').single;
+        expect(dropped.data['op'], 'advance');
+        expect(dropped.data['mounted'], 'false');
+        expect(dropped.data['scopeCurrent'], 'false');
       },
     );
 
@@ -1124,12 +1128,12 @@ void main() {
         ).allMatches(source);
 
         expect(source, isNot(contains('_cancelled')));
-        // tg-adic added ONE more site: `_onReportNow`'s guard reads the
-        // CURRENT `_scope` (not a captured pass) before delegating to
-        // `_onReport`, which keeps its own byte-identical guard below it.
-        expect(staleExits, hasLength(10));
-        expect(activeChecks, hasLength(2));
-        expect(staleExits.length + activeChecks.length, 12);
+        // The two explicit stale checks are the originating deferred kick and
+        // the report sink. Every persist continuation reads the re-stamped
+        // `_scope` through the one centralized active predicate.
+        expect(staleExits, hasLength(2));
+        expect(activeChecks, hasLength(1));
+        expect(staleExits.length + activeChecks.length, 3);
       },
     );
 
