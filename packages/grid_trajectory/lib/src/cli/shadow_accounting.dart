@@ -9,37 +9,38 @@
 /// dropped append cannot count as a clean round.** The window's integrity
 /// comes from counting, not from the queue being durable (§2.5).
 ///
-/// The counters live in the RUNNING station's memory and reach the operator
-/// through the `/status` trajectory block (§3). This verb runs in a different
-/// process, so the numbers arrive one of two ways: the operator passes them
-/// (`--dropped` / `--suppressed`, read off `/status`), or a composing runner
-/// injects a [ShadowAccountingSource] that reads its own live harness. With
-/// neither, accounting is UNKNOWN — and an unknown-accounting run does not
-/// count toward the cut criterion, for exactly the reason an INCOMPLETE read
-/// does not: the clean round would be unearned.
+/// The counters live in the RUNNING station's memory. This verb runs in a
+/// different process, so each number is an observation supplied either by the
+/// operator (`--dropped` / `--suppressed`) or by a composing runner through a
+/// [ShadowAccountingSource]. A missing observation stays missing: with neither
+/// counter, or with only one, accounting is UNKNOWN — and an
+/// unknown-accounting run does not count toward the cut criterion, for exactly
+/// the reason an INCOMPLETE read does not: the clean round would be unearned.
 library;
 
 import 'package:meta/meta.dart';
 
-/// One round's append accounting, as `/status` reports it.
+/// One round's observed append accounting.
 @immutable
 class ShadowRunAccounting {
   const ShadowRunAccounting({
     required this.dropped,
-    this.suppressed = 0,
+    required this.suppressed,
     this.mode,
     this.epoch,
   });
 
   /// Appends lost to queue overflow, server errors, or a failed reconnect —
   /// §2.5's `dropped` counter, the one §3 names in the disqualification rule.
-  final int dropped;
+  /// Null means this counter was not observed; zero is an observed zero.
+  final int? dropped;
 
   /// Appends short-circuited to a count after a latch (fenced out / halted /
   /// degraded). These are missing records too: the comparator cannot tell a
   /// suppressed append from a fold that agreed, so they disqualify on the
   /// same grounds as [dropped] rather than on a separate rule.
-  final int suppressed;
+  /// Null means this counter was not observed; zero is an observed zero.
+  final int? suppressed;
 
   /// The harness mode string (`live` / `degraded` / `fenced-out` / `halted`),
   /// carried for the report only — the disqualification reads the counters,
@@ -49,12 +50,18 @@ class ShadowRunAccounting {
   /// The claimed boot epoch, for the report's cursor back into the log.
   final int? epoch;
 
+  /// Whether both counters were observed for this round.
+  bool get isComplete => dropped != null && suppressed != null;
+
   /// Why this run cannot count, or null when the accounting is clean.
   ///
   /// Stated as a reason string rather than a bool because the report prints
   /// it: an operator reading "does NOT count" must be able to see which
   /// counter said so without opening `/status` again.
   String? get disqualification {
+    if (!isComplete) return 'append accounting UNKNOWN';
+    final dropped = this.dropped!;
+    final suppressed = this.suppressed!;
     if (dropped > 0 && suppressed > 0) {
       return '$dropped dropped and $suppressed suppressed append'
           '${suppressed == 1 ? '' : 's'}';
@@ -69,7 +76,8 @@ class ShadowRunAccounting {
 
   /// The report's one-line rendering.
   String get summary =>
-      'dropped: $dropped, suppressed: $suppressed'
+      'dropped: ${dropped ?? 'NOT SUPPLIED'}, '
+      'suppressed: ${suppressed ?? 'NOT SUPPLIED'}'
       '${mode == null ? '' : ', mode: $mode'}'
       '${epoch == null ? '' : ', epoch: $epoch'}';
 }

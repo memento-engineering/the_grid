@@ -165,7 +165,8 @@ final class EpochEvidence {
   String? describeLoss() {
     if (countedLoss) {
       return 'epoch $epoch: recorder counted '
-          '${dropped ?? 0} dropped / ${suppressed ?? 0} suppressed'
+          '${dropped ?? 'NOT SUPPLIED'} dropped / '
+          '${suppressed ?? 'NOT SUPPLIED'} suppressed'
           '${accountingSource == null ? '' : ' ($accountingSource)'}';
     }
     if (dark) return 'epoch $epoch: claimed but holds zero records (dark)';
