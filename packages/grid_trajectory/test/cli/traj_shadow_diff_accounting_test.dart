@@ -3,6 +3,10 @@
 /// however clean the comparison itself came out.
 library;
 
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:args/command_runner.dart';
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:test/test.dart';
@@ -57,11 +61,159 @@ Future<(int, String)> _run({
   return (code, out.join('\n'));
 }
 
+final class _ByteConsumer implements StreamConsumer<List<int>> {
+  final _bytes = <int>[];
+
+  String get text => utf8.decode(_bytes);
+
+  @override
+  Future<void> addStream(Stream<List<int>> stream) async {
+    await for (final chunk in stream) {
+      _bytes.addAll(chunk);
+    }
+  }
+
+  @override
+  Future<void> close() async {}
+}
+
+final class _RecordingSink implements Stdout {
+  _RecordingSink(_ByteConsumer consumer) : _sink = IOSink(consumer);
+
+  final IOSink _sink;
+
+  @override
+  Encoding get encoding => _sink.encoding;
+  @override
+  set encoding(Encoding value) => _sink.encoding = value;
+  @override
+  String lineTerminator = '\n';
+  @override
+  Future<void> get done => _sink.done;
+  @override
+  bool get hasTerminal => false;
+  @override
+  int get terminalColumns => 80;
+  @override
+  int get terminalLines => 24;
+  @override
+  bool get supportsAnsiEscapes => false;
+  @override
+  IOSink get nonBlocking => _sink;
+  @override
+  void add(List<int> data) => _sink.add(data);
+  @override
+  void addError(Object error, [StackTrace? stackTrace]) =>
+      _sink.addError(error, stackTrace);
+  @override
+  Future<void> addStream(Stream<List<int>> stream) => _sink.addStream(stream);
+  @override
+  Future<void> close() => _sink.close();
+  @override
+  Future<void> flush() => _sink.flush();
+  @override
+  void write(Object? object) => _sink.write(object);
+  @override
+  void writeAll(Iterable<Object?> objects, [String separator = '']) =>
+      _sink.writeAll(objects, separator);
+  @override
+  void writeCharCode(int charCode) => _sink.writeCharCode(charCode);
+  @override
+  void writeln([Object? object = '']) => _sink.writeln(object);
+}
+
+Future<({int? code, String stderr, String stdout})> _runCommand({
+  List<String> flags = const [],
+  ShadowCompare compare = const _AgreeingCompare(),
+  ShadowAccountingSource? accountingFor,
+}) async {
+  final stdoutBytes = _ByteConsumer();
+  final stdoutSink = _RecordingSink(stdoutBytes);
+  final stderrBytes = _ByteConsumer();
+  final stderrSink = _RecordingSink(stderrBytes);
+  final runner = CommandRunner<int>('grid', 'test')
+    ..addCommand(
+      TrajCommand(
+        open: openerFor(TrajectoryOpened(ScriptedReader([_row(1)]))),
+        compare: compare,
+        accountingFor: accountingFor,
+      ),
+    );
+  final code = await IOOverrides.runZoned(
+    () => runner.run([
+      'traj',
+      'shadow-diff',
+      '--state-workspace',
+      '/tmp',
+      ...flags,
+    ]),
+    stdout: () => stdoutSink,
+    stderr: () => stderrSink,
+  );
+  await Future.wait([stdoutSink.flush(), stderrSink.flush()]);
+  return (code: code, stderr: stderrBytes.text, stdout: stdoutBytes.text);
+}
+
 void main() {
+  group('accounting observations', () {
+    test('observed zero remains distinct from a missing counter', () {
+      const accounting = ShadowRunAccounting(dropped: 0, suppressed: null);
+
+      expect(accounting.dropped, 0);
+      expect(accounting.suppressed, isNull);
+      expect(accounting.isComplete, isFalse);
+    });
+
+    test('both observed counters make complete accounting', () {
+      const accounting = ShadowRunAccounting(
+        dropped: 0,
+        suppressed: 0,
+        mode: 'live',
+        epoch: 7,
+      );
+
+      expect(accounting.isComplete, isTrue);
+      expect(accounting.disqualification, isNull);
+      expect(
+        accounting.summary,
+        'dropped: 0, suppressed: 0, mode: live, epoch: 7',
+      );
+    });
+
+    test('partial summaries name the missing observation and disqualify', () {
+      const missingSuppressed = ShadowRunAccounting(
+        dropped: 3,
+        suppressed: null,
+      );
+      const missingDropped = ShadowRunAccounting(dropped: null, suppressed: 4);
+
+      expect(missingSuppressed.summary, 'dropped: 3, suppressed: NOT SUPPLIED');
+      expect(missingDropped.summary, 'dropped: NOT SUPPLIED, suppressed: 4');
+      expect(missingSuppressed.disqualification, 'append accounting UNKNOWN');
+      expect(missingDropped.disqualification, 'append accounting UNKNOWN');
+    });
+
+    test(
+      'complete positive counters retain their disqualification wording',
+      () {
+        const accounting = ShadowRunAccounting(dropped: 2, suppressed: 3);
+
+        expect(
+          accounting.disqualification,
+          '2 dropped and 3 suppressed appends',
+        );
+      },
+    );
+  });
+
   group('the disqualification rule', () {
     test('zero drops is the clean round', () async {
       final (code, text) = await _run(
-        accounting: const ShadowRunAccounting(dropped: 0, mode: 'live'),
+        accounting: const ShadowRunAccounting(
+          dropped: 0,
+          suppressed: 0,
+          mode: 'live',
+        ),
       );
       expect(code, 0);
       expect(text, contains('append accounting: dropped: 0, suppressed: 0'));
@@ -71,7 +223,7 @@ void main() {
 
     test('ANY dropped append disqualifies a zero-mismatch run', () async {
       final (code, text) = await _run(
-        accounting: const ShadowRunAccounting(dropped: 1),
+        accounting: const ShadowRunAccounting(dropped: 1, suppressed: 0),
       );
       // Not a blocked cut — nothing diverged — but emphatically not a clean
       // round: the drop is a record the comparison could not have missed.
@@ -113,7 +265,7 @@ void main() {
     test('an unexplained mismatch still BLOCKS, whatever the '
         'accounting says', () async {
       final (code, text) = await _run(
-        accounting: const ShadowRunAccounting(dropped: 9),
+        accounting: const ShadowRunAccounting(dropped: 9, suppressed: 0),
         compare: const _AgreeingCompare([
           ShadowMismatch(
             sessionId: _session,
@@ -130,7 +282,7 @@ void main() {
 
     test('named gaps are counted by class in the report', () async {
       final (code, text) = await _run(
-        accounting: const ShadowRunAccounting(dropped: 0),
+        accounting: const ShadowRunAccounting(dropped: 0, suppressed: 0),
         compare: const _AgreeingCompare([
           ShadowMismatch(
             sessionId: _session,
@@ -179,7 +331,7 @@ void main() {
       final (code, text) = await _run(
         accountingFor: (gridHome) async {
           homes.add(gridHome);
-          return const ShadowRunAccounting(dropped: 0, epoch: 7);
+          return const ShadowRunAccounting(dropped: 0, suppressed: 0, epoch: 7);
         },
       );
       expect(code, 0);
@@ -190,8 +342,9 @@ void main() {
 
     test("the operator's flag outranks the source", () async {
       final (_, text) = await _run(
-        accounting: const ShadowRunAccounting(dropped: 5),
-        accountingFor: (_) async => const ShadowRunAccounting(dropped: 0),
+        accounting: const ShadowRunAccounting(dropped: 5, suppressed: 0),
+        accountingFor: (_) async =>
+            const ShadowRunAccounting(dropped: 0, suppressed: 0),
       );
       expect(text, contains('5 dropped appends'));
     });
@@ -203,52 +356,124 @@ void main() {
   });
 
   group('the flag surface', () {
-    CommandRunner<int> runner() => CommandRunner<int>('grid', 'test')
-      ..addCommand(
-        TrajCommand(open: openerFor(const TrajectoryNotBootstrapped('absent'))),
+    test(
+      '--dropped alone stays partial and outranks a composed source',
+      () async {
+        var sourceCalls = 0;
+        final result = await _runCommand(
+          flags: const ['--dropped', '0', '--epoch', '1'],
+          accountingFor: (_) async {
+            sourceCalls++;
+            return const ShadowRunAccounting(dropped: 0, suppressed: 0);
+          },
+        );
+
+        expect(result.code, 0);
+        expect(sourceCalls, 0);
+        expect(const LineSplitter().convert(result.stderr), const [
+          'traj shadow-diff: --suppressed not supplied: accounting UNKNOWN, '
+              'round not counted',
+        ]);
+        expect(
+          result.stdout,
+          contains(
+            'append accounting: UNKNOWN — dropped: 0, '
+            'suppressed: NOT SUPPLIED',
+          ),
+        );
+        expect(result.stdout, contains('append accounting UNKNOWN'));
+        expect(result.stdout, contains('accounting known for 0'));
+        expect(result.stdout, isNot(contains('suppressed: 0')));
+        expect(result.stdout, isNot(contains('— clean')));
+        expect(result.stdout, isNot(contains('one clean run')));
+      },
+    );
+
+    test('--suppressed alone stays partial and preserves its value', () async {
+      final result = await _runCommand(
+        flags: const ['--suppressed', '7', '--epoch', '1'],
       );
 
-    test('--dropped 0 is accepted — asserting a clean round is the '
-        'point', () async {
+      expect(result.code, 0);
+      expect(const LineSplitter().convert(result.stderr), const [
+        'traj shadow-diff: --dropped not supplied: accounting UNKNOWN, '
+            'round not counted',
+      ]);
       expect(
-        await runner().run([
-          'traj',
-          'shadow-diff',
-          '--state-workspace',
-          '/tmp',
-          '--dropped',
-          '0',
-        ]),
-        0,
+        result.stdout,
+        contains(
+          'append accounting: UNKNOWN — dropped: NOT SUPPLIED, '
+          'suppressed: 7',
+        ),
       );
+      expect(result.stdout, contains('append accounting UNKNOWN'));
+      expect(result.stdout, contains('accounting known for 0'));
+      expect(result.stdout, isNot(contains('dropped: 0')));
+      expect(result.stdout, isNot(contains('— clean')));
+      expect(result.stdout, isNot(contains('one clean run')));
+    });
+
+    test('partial accounting keeps a mismatch-derived exit 1', () async {
+      final result = await _runCommand(
+        flags: const ['--dropped', '0'],
+        compare: const _AgreeingCompare([
+          ShadowMismatch(
+            sessionId: _session,
+            field: 'outcome',
+            legacyValue: 'failed',
+            foldValue: 'succeeded',
+            seq: 12,
+          ),
+        ]),
+      );
+
+      expect(result.code, 1);
+      expect(result.stdout, contains('BLOCKED'));
+      expect(result.stdout, isNot(contains('one clean run')));
+    });
+
+    test('both observed zero counters retain the clean verdict', () async {
+      final result = await _runCommand(
+        flags: const ['--dropped', '0', '--suppressed', '0'],
+      );
+
+      expect(result.code, 0);
+      expect(result.stderr, isEmpty);
+      expect(
+        result.stdout,
+        contains('append accounting: dropped: 0, suppressed: 0 — clean'),
+      );
+      expect(result.stdout, contains('one clean run toward the criterion'));
+    });
+
+    test('neither flag retains the NOT SUPPLIED unknown report', () async {
+      final result = await _runCommand();
+
+      expect(result.code, 0);
+      expect(result.stderr, isEmpty);
+      expect(result.stdout, contains('append accounting NOT SUPPLIED'));
+      expect(result.stdout, contains('append accounting UNKNOWN'));
+      expect(result.stdout, isNot(contains('one clean run')));
     });
 
     test('a negative --dropped is refused', () async {
-      expect(
-        await runner().run([
-          'traj',
-          'shadow-diff',
-          '--state-workspace',
-          '/tmp',
-          '--dropped',
-          '-1',
-        ]),
-        64,
-      );
+      final result = await _runCommand(flags: const ['--dropped', '-1']);
+
+      expect(result.code, 64);
+      expect(const LineSplitter().convert(result.stderr), const [
+        'traj shadow-diff: --dropped must be a non-negative integer '
+            '(got "-1").',
+      ]);
     });
 
     test('a non-numeric --suppressed is refused', () async {
-      expect(
-        await runner().run([
-          'traj',
-          'shadow-diff',
-          '--state-workspace',
-          '/tmp',
-          '--suppressed',
-          'lots',
-        ]),
-        64,
-      );
+      final result = await _runCommand(flags: const ['--suppressed', 'lots']);
+
+      expect(result.code, 64);
+      expect(const LineSplitter().convert(result.stderr), const [
+        'traj shadow-diff: --suppressed must be a non-negative integer '
+            '(got "lots").',
+      ]);
     });
   });
 }

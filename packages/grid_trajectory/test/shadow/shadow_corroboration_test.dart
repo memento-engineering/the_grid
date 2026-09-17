@@ -179,10 +179,28 @@ void main() {
       expect(epochs[3]!.dropped, isNull, reason: 'unknown, never zero');
     });
 
+    test('partial accounting never renders a fabricated companion zero', () {
+      final epochs = foldEpochEvidence(
+        claims: claims,
+        accounting: const ShadowRunAccounting(
+          dropped: 2,
+          suppressed: null,
+          epoch: 5,
+        ),
+      );
+
+      expect(epochs[5]!.dropped, 2);
+      expect(epochs[5]!.suppressed, isNull);
+      expect(
+        epochs[5]!.describeLoss(),
+        contains('2 dropped / NOT SUPPLIED suppressed'),
+      );
+    });
+
     test('an un-epoch\'d accounting joins no row', () {
       final epochs = foldEpochEvidence(
         claims: claims,
-        accounting: const ShadowRunAccounting(dropped: 2),
+        accounting: const ShadowRunAccounting(dropped: 2, suppressed: 0),
       );
       expect(epochs.values.every((e) => e.dropped == null), isTrue);
     });
@@ -318,7 +336,11 @@ void main() {
               claims: const [
                 EpochClaim(station: 'lunar', epoch: 3, records: 12),
               ],
-              accounting: const ShadowRunAccounting(dropped: 0, epoch: 3),
+              accounting: const ShadowRunAccounting(
+                dropped: 0,
+                suppressed: 0,
+                epoch: 3,
+              ),
             ),
           ),
         ),

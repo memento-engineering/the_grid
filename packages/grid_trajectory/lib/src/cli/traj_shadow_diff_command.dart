@@ -270,15 +270,18 @@ class TrajShadowDiffCommand extends Command<int> {
         help:
             "This round's dropped-append count, read off the station's "
             '/status trajectory block. Any drop disqualifies the round from '
-            'the clean-round criterion; supplying nothing leaves accounting '
-            'UNKNOWN, which does not count either.',
+            'the clean-round criterion. Supply --suppressed too for complete '
+            'accounting; with either counter missing, accounting is UNKNOWN '
+            'and does not count.',
       )
       ..addOption(
         'suppressed',
         help:
             "This round's suppressed-append count from /status (appends "
             'short-circuited after a fenced-out/halted/degraded latch). '
-            'Disqualifies on the same grounds as --dropped.',
+            'Disqualifies on the same grounds as --dropped. Supply --dropped '
+            'too for complete accounting; with either counter missing, '
+            'accounting is UNKNOWN and does not count.',
       )
       ..addOption(
         'epoch',
@@ -344,18 +347,26 @@ class TrajShadowDiffCommand extends Command<int> {
     }
     final epoch = _countFrom(argResults!, 'epoch');
     if (epoch == null && argResults!.option('epoch') != null) return 64;
+    final accounting = dropped == null && suppressed == null
+        ? null
+        : ShadowRunAccounting(
+            dropped: dropped,
+            suppressed: suppressed,
+            epoch: epoch,
+          );
+    if (accounting != null && !accounting.isComplete) {
+      final missing = dropped == null ? 'dropped' : 'suppressed';
+      stderr.writeln(
+        'traj shadow-diff: --$missing not supplied: accounting UNKNOWN, '
+        'round not counted',
+      );
+    }
     return runTrajShadowDiff(
       gridHome: gridHome,
       open: _open,
       compare: _compare,
       compareFor: _compareFor,
-      accounting: dropped == null && suppressed == null
-          ? null
-          : ShadowRunAccounting(
-              dropped: dropped ?? 0,
-              suppressed: suppressed ?? 0,
-              epoch: epoch,
-            ),
+      accounting: accounting,
       accountingFor: _accountingFor,
       sessions: argResults!.multiOption('session'),
       round: round,
@@ -609,6 +620,10 @@ void _writeAccounting(
     write('  append accounting: UNKNOWN — $unknownAccountingReason.');
     return;
   }
+  if (!accounting.isComplete) {
+    write('  append accounting: UNKNOWN — ${accounting.summary}');
+    return;
+  }
   final reason = accounting.disqualification;
   write(
     '  append accounting: ${accounting.summary}'
@@ -679,7 +694,9 @@ void _writeCorroboration(
   final keys = epochs.keys.toList()..sort();
   final dark = epochs.values.where((e) => e.dark).length;
   final counted = epochs.values.where((e) => e.countedLoss).length;
-  final known = epochs.values.where((e) => e.dropped != null).length;
+  final known = epochs.values
+      .where((e) => e.dropped != null && e.suppressed != null)
+      .length;
   write(
     '  corroboration: $attemptsRead attempt${attemptsRead == 1 ? '' : 's'} '
     'read; epochs ${keys.first}..${keys.last} (${keys.length} claimed, '
