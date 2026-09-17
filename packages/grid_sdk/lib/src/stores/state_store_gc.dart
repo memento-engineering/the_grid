@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart' show BeadsWorkspace;
@@ -5,6 +6,9 @@ import 'package:path/path.dart' as p;
 
 /// State-store databases larger than this are collected before a live boot.
 const int kStateStoreGcThresholdBytes = 1024 * 1024 * 1024;
+
+/// State-store databases larger than this are flattened before collection.
+const int kStateStoreFlattenThresholdBytes = 8 * 1024 * 1024 * 1024;
 
 typedef MaintenanceProcessRunner =
     Future<ProcessResult> Function(
@@ -35,7 +39,7 @@ Future<int> readDirectorySize(String path) async {
   return bytes;
 }
 
-/// Performs threshold-gated offline collection of the station state store.
+/// Performs threshold-gated offline maintenance of the station state store.
 final class StateStoreGc {
   StateStoreGc({
     MaintenanceProcessRunner? runProcess,
@@ -81,7 +85,10 @@ final class StateStoreGc {
         return;
       }
 
-      final proxyRoot = p.join(workspace.beadsDir, 'dolt');
+      final sourceMetadata = await _readJsonObject(
+        p.join(workspace.beadsDir, 'metadata.json'),
+      );
+      final proxyRoot = await _resolveProxyRoot(workspace.beadsDir);
       final databaseDir = p.join(proxyRoot, database);
       failureStore = databaseDir;
       if (!await Directory(databaseDir).exists()) {
@@ -116,49 +123,80 @@ final class StateStoreGc {
         );
       }
 
-      await _clearProxyState(proxyRoot);
-      final gc = await _runProcess('dolt', const <String>[
-        'gc',
-        '--full',
-      ], workingDirectory: databaseDir);
-      if (gc.exitCode != 0) {
-        throw ProcessException(
-          'dolt',
-          const <String>['gc', '--full'],
-          '${gc.stdout}${gc.stderr}',
-          gc.exitCode,
+      final failures = <Object>[];
+      var proxyStateCleared = false;
+      try {
+        await _clearProxyState(proxyRoot);
+        proxyStateCleared = true;
+      } on Object catch (error) {
+        failures.add(error);
+      }
+
+      final shouldFlatten = before > kStateStoreFlattenThresholdBytes;
+      if (shouldFlatten && proxyStateCleared) {
+        failures.addAll(
+          await _flatten(sourceMetadata: sourceMetadata, proxyRoot: proxyRoot),
         );
+      }
+
+      try {
+        final gc = await _runProcess('dolt', const <String>[
+          'gc',
+          '--full',
+        ], workingDirectory: databaseDir);
+        if (gc.exitCode != 0) {
+          throw ProcessException(
+            'dolt',
+            const <String>['gc', '--full'],
+            '${gc.stdout}${gc.stderr}',
+            gc.exitCode,
+          );
+        }
+      } on Object catch (error) {
+        failures.add(error);
       }
 
       // The first store-scoped bd client call restarts the persistent proxy
       // whose local artifacts were cleared above. Boot may resolve the state
       // endpoint immediately after this method returns, so existence is part
       // of maintenance success rather than a later client concern.
-      final info = await _runProcess('bd', const <String>[
-        'info',
-        '--json',
-      ], workingDirectory: runtimeDir);
-      if (info.exitCode != 0) {
-        throw ProcessException(
-          'bd',
-          const <String>['info', '--json'],
-          '${info.stdout}${info.stderr}',
-          info.exitCode,
-        );
+      try {
+        final info = await _runProcess('bd', const <String>[
+          'info',
+          '--json',
+        ], workingDirectory: runtimeDir);
+        if (info.exitCode != 0) {
+          throw ProcessException(
+            'bd',
+            const <String>['info', '--json'],
+            '${info.stdout}${info.stderr}',
+            info.exitCode,
+          );
+        }
+        final proxyPid = File(p.join(proxyRoot, 'proxy.pid'));
+        if (!await proxyPid.exists()) {
+          throw FileSystemException(
+            'bd info --json did not restore the state-store proxy',
+            proxyPid.path,
+          );
+        }
+      } on Object catch (error) {
+        failures.add(error);
       }
-      final proxyPid = File(p.join(proxyRoot, 'proxy.pid'));
-      if (!await proxyPid.exists()) {
-        throw FileSystemException(
-          'bd info --json did not restore the state-store proxy',
-          proxyPid.path,
-        );
+
+      if (failures.isNotEmpty) {
+        throw _MaintenanceFailures(failures);
       }
 
       final after = await _readSize(databaseDir);
       final elapsed = _now().difference(startedAt).inMilliseconds;
+      final flattenReceipt = shouldFlatten
+          ? 'flatten=complete'
+          : 'flatten=skipped flatten_reason=below_threshold '
+                'flatten_threshold_bytes=$kStateStoreFlattenThresholdBytes';
       _out(
         'state-store gc complete: store=$databaseDir before_bytes=$before '
-        'after_bytes=$after elapsed_ms=$elapsed',
+        'after_bytes=$after elapsed_ms=$elapsed $flattenReceipt',
       );
     } on Object catch (error) {
       final elapsed = startedAt == null
@@ -174,6 +212,86 @@ final class StateStoreGc {
     }
   }
 
+  Future<List<Object>> _flatten({
+    required Map<String, Object?> sourceMetadata,
+    required String proxyRoot,
+  }) async {
+    final failures = <Object>[];
+    Directory? facade;
+    try {
+      facade = await Directory.systemTemp.createTemp('state-store-flatten-');
+      final beadsDir = Directory(p.join(facade.path, '.beads'));
+      await beadsDir.create();
+      final facadeMetadata = Map<String, Object?>.of(sourceMetadata)
+        ..['dolt_mode'] = 'embedded';
+      await File(
+        p.join(beadsDir.path, 'metadata.json'),
+      ).writeAsString(jsonEncode(facadeMetadata));
+      await Link(p.join(beadsDir.path, 'embeddeddolt')).create(proxyRoot);
+
+      final flatten = await _runProcess('bd', const <String>[
+        'flatten',
+        '--force',
+        '--json',
+      ], workingDirectory: facade.path);
+      if (flatten.exitCode != 0) {
+        throw ProcessException(
+          'bd',
+          const <String>['flatten', '--force', '--json'],
+          '${flatten.stdout}${flatten.stderr}',
+          flatten.exitCode,
+        );
+      }
+      final decoded = jsonDecode(flatten.stdout as String);
+      if (decoded is! Map<String, Object?> || decoded['success'] != true) {
+        throw FormatException(
+          'bd flatten --force --json did not report success: '
+          '${flatten.stdout}',
+        );
+      }
+    } on Object catch (error) {
+      failures.add(error);
+    } finally {
+      if (facade != null) {
+        try {
+          await facade.delete(recursive: true);
+        } on Object catch (error) {
+          failures.add(error);
+        }
+      }
+    }
+    return failures;
+  }
+
+  Future<Map<String, Object?>> _readJsonObject(String path) async {
+    final decoded = jsonDecode(await File(path).readAsString());
+    if (decoded is! Map<String, Object?>) {
+      throw FormatException('$path must contain a JSON object');
+    }
+    return decoded;
+  }
+
+  Future<String> _resolveProxyRoot(String beadsDir) async {
+    final fallback = p.join(beadsDir, 'dolt');
+    final sidecar = File(p.join(beadsDir, 'proxied_server_client_info.json'));
+    if (!await sidecar.exists()) return fallback;
+
+    final decoded = await _readJsonObject(sidecar.path);
+    final rootPath = decoded['root_path'];
+    if (rootPath == null || rootPath is String && rootPath.trim().isEmpty) {
+      return fallback;
+    }
+    if (rootPath is! String) {
+      throw FormatException('${sidecar.path} root_path must be a string');
+    }
+    final configuredRoot = rootPath.trim();
+    return p.normalize(
+      p.isAbsolute(configuredRoot)
+          ? configuredRoot
+          : p.join(beadsDir, configuredRoot),
+    );
+  }
+
   Future<void> _clearProxyState(String proxyRoot) async {
     await for (final entity in Directory(proxyRoot).list()) {
       final name = p.basename(entity.path);
@@ -185,4 +303,13 @@ final class StateStoreGc {
       }
     }
   }
+}
+
+final class _MaintenanceFailures implements Exception {
+  _MaintenanceFailures(this.failures);
+
+  final List<Object> failures;
+
+  @override
+  String toString() => failures.join('; ');
 }

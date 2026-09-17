@@ -146,6 +146,7 @@ export 'src/stores/state_store_gc.dart'
         MaintenanceProcessRunner,
         MaintenanceSink,
         StateStoreGc,
+        kStateStoreFlattenThresholdBytes,
         kStateStoreGcThresholdBytes;
 export 'src/stores/substation_init.dart';
 

@@ -7,6 +7,9 @@ import 'package:grid_sdk/grid_sdk.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
+ProcessResult _result(int exitCode, {String stdout = '', String stderr = ''}) =>
+    ProcessResult(1, exitCode, stdout, stderr);
+
 final class _Leaf extends MultiChildSeed {
   const _Leaf() : super(children: const <Seed>[]);
 }
@@ -52,6 +55,19 @@ final class _EnabledDelegate extends _RecordingDelegate {
   bool get maintainsStateStoreOnBoot {
     postureReads++;
     return true;
+  }
+}
+
+final class _ProxyCheckingDelegate extends _EnabledDelegate {
+  _ProxyCheckingDelegate({required super.rootPath, required this.proxyPid});
+
+  final File proxyPid;
+  var proxyPresentAtBoot = false;
+
+  @override
+  Future<void> boot(GridConfiguration configuration) async {
+    proxyPresentAtBoot = proxyPid.existsSync();
+    await super.boot(configuration);
   }
 }
 
@@ -371,6 +387,76 @@ void main() {
         'boot',
         'build',
       ]);
+    },
+  );
+
+  test(
+    'real maintainer contains flatten refusal after restoring the proxy',
+    () async {
+      final gridHome = Directory.systemTemp.createTempSync(
+        'run-grid-flatten-containment-',
+      );
+      addTearDown(() => gridHome.deleteSync(recursive: true));
+      final runtimeDir = p.join(gridHome.path, '.grid');
+      final beadsDir = p.join(runtimeDir, '.beads');
+      final proxyRoot = p.join(beadsDir, 'dolt');
+      final databaseDir = p.join(proxyRoot, 'tranquility');
+      Directory(databaseDir).createSync(recursive: true);
+      File(p.join(beadsDir, 'metadata.json')).writeAsStringSync(
+        '{"dolt_mode":"proxied-server",'
+        '"dolt_database":"tranquility"}',
+      );
+      final proxyPid = File(p.join(proxyRoot, 'proxy.pid'))
+        ..writeAsStringSync('{"pid":1,"port":65000}');
+      final delegate = _ProxyCheckingDelegate(
+        rootPath: gridHome.path,
+        proxyPid: proxyPid,
+      );
+      final hookErrors = <GridHookError>[];
+      final maintenanceReports = <String>[];
+      final calls = <String>[];
+
+      final handle = await runGrid(
+        delegate,
+        maintainStateStore: ({required gridHome}) async {
+          await StateStoreGc(
+            readSize: (_) async => kStateStoreFlattenThresholdBytes + 1,
+            runProcess:
+                (executable, arguments, {required workingDirectory}) async {
+                  calls.add('$executable ${arguments.join(' ')}');
+                  if (arguments.first == 'flatten') {
+                    return _result(
+                      0,
+                      stdout: '{"success":false,"error":"refused"}',
+                    );
+                  }
+                  if (arguments.first == 'info') {
+                    proxyPid.writeAsStringSync('{"pid":2,"port":65001}');
+                  }
+                  return _result(0);
+                },
+            err: (receipt) {
+              maintenanceReports.add(receipt);
+              throw StateError(receipt);
+            },
+          ).run(gridHome: gridHome);
+        },
+        onError: hookErrors.add,
+      );
+      addTearDown(handle.teardown);
+
+      expect(calls, <String>[
+        'bd dolt stop',
+        'bd flatten --force --json',
+        'dolt gc --full',
+        'bd info --json',
+      ]);
+      expect(maintenanceReports, hasLength(1));
+      expect(hookErrors, hasLength(1));
+      expect(hookErrors.single.hook, 'maintenance');
+      expect(hookErrors.single.cause, isA<StateError>());
+      expect(delegate.proxyPresentAtBoot, isTrue);
+      expect(delegate.events, <String>['didLaunch', 'boot', 'build']);
     },
   );
 
