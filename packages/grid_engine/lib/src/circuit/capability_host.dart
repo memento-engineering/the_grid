@@ -221,7 +221,7 @@ class CapabilityHostState extends State<CapabilityHost>
   /// was re-stamped when that later pass ran. Only a real teardown (no
   /// further `_refreshDependencies` call) leaves this pointing at an
   /// invalidated scope forever — exactly the guard's intended meaning.
-  TreeDependencyScope? _scope;
+  late TreeDependencyScope _scope;
 
   /// The Stage-1 derivation layer (stage1-wiring §2), re-resolved on every
   /// `didChangeDependencies` and held for the persist paths — which all run
@@ -378,7 +378,7 @@ class CapabilityHostState extends State<CapabilityHost>
       // EVERY exit path — even a dispose that races the kick before it spawns
       // (the Track E finding #1). Defer the ONE kick until build has mounted
       // the allocation's non-Seed lifecycle and delivered its dependencies.
-      final alloc = _createAllocationOrFlare(scope);
+      final alloc = _createAllocationOrFlare();
       if (alloc == null) return;
       setState(() => _allocation = alloc);
       scheduleMicrotask(() {
@@ -393,7 +393,7 @@ class CapabilityHostState extends State<CapabilityHost>
       // families are not updatable, and a genuine replace is a re-key the
       // CircuitScope owns (a `restartCount` bump → a new key → a fresh mount).
       // We NEVER re-key here.
-      final next = _createAllocationOrFlare(scope);
+      final next = _createAllocationOrFlare();
       if (next != null && existing.canUpdate(next)) {
         unawaited(existing.update(next));
       }
@@ -416,9 +416,9 @@ class CapabilityHostState extends State<CapabilityHost>
   /// `step.allocationFailed` + routed to a supervised failure, so the bounded
   /// restart budget → breaker → escalation chain surfaces it to a human
   /// instead of a silent stall or a dead station.
-  Allocation? _createAllocationOrFlare(TreeDependencyScope scope) {
+  Allocation? _createAllocationOrFlare() {
     try {
-      final inputs = _buildAllocationInputs(scope);
+      final inputs = _buildAllocationInputs();
       final capability = seed.capability;
       // Resolve the write target at MOUNT for every capability — a host that
       // cannot name its step bead must never run an effect it cannot persist.
@@ -438,9 +438,8 @@ class CapabilityHostState extends State<CapabilityHost>
     } on Object catch (e) {
       _emitFlare('step.allocationFailed', {'error': truncateReason('$e')});
       _firePersist(
-        scope,
         'allocation',
-        () => _persistFailure(scope, 'allocation failed: $e'),
+        () => _persistFailure('allocation failed: $e'),
         recoverable: false,
       );
       return null;
@@ -455,7 +454,7 @@ class CapabilityHostState extends State<CapabilityHost>
   /// values, process transport, stable address, engine env overlay, report
   /// sink, and adopt fence (the prior identity for a no-adopt-on-faith proof —
   /// D4). Tree dependencies arrive through the Allocation lifecycle instead.
-  AllocationInputs _buildAllocationInputs(TreeDependencyScope scope) {
+  AllocationInputs _buildAllocationInputs() {
     final ctx = _ctx!;
     return AllocationInputs(
       args: _args!,
@@ -509,15 +508,15 @@ class CapabilityHostState extends State<CapabilityHost>
   /// permanently stale — the guard's intended meaning.
   void _onReportNow(AllocationReport report) {
     final scope = _scope;
-    if (scope == null || !scope.isCurrent || !context.mounted) {
+    if (!scope.isCurrent || !context.mounted) {
       _emitFlare('step.reportDropped', {
         'report': report.runtimeType.toString(),
         'mounted': context.mounted.toString(),
-        'scopeCurrent': (scope?.isCurrent ?? false).toString(),
+        'scopeCurrent': scope.isCurrent.toString(),
       });
       return;
     }
-    _onReport(scope, report);
+    _onReport(report);
   }
 
   /// The report sink handed to the [Allocation] (ADR-0009 D5). Maps each pushed
@@ -525,22 +524,21 @@ class CapabilityHostState extends State<CapabilityHost>
   /// the effect never holds the writer (invariant 2). Guarded: a report reaching
   /// a superseded or removed node is dropped; the terminal latch fires once (a
   /// daemon `ready` does not latch).
-  void _onReport(TreeDependencyScope scope, AllocationReport report) {
-    if (!scope.isCurrent || !context.mounted) return;
+  void _onReport(AllocationReport report) {
     _reconcileAdoptedAttempt();
     switch (report) {
       case AllocationStarted():
         // The report's pid/pgid are NOT persisted here: process identity is
         // vendor-owned (`grid.lease.*` on the step bead, R3) — this write
         // records only the `running` transition.
-        _firePersist(scope, 'started', () => _persistStarted(scope));
+        _firePersist('started', _persistStarted);
       case AllocationReady(:final payload):
         if (_completed) return;
-        _firePersist(scope, 'ready', () => _persistReady(scope, payload));
+        _firePersist('ready', () => _persistReady(payload));
       case AllocationCompleted(:final payload):
         if (_completed) return;
         _completed = true;
-        _firePersist(scope, 'complete', () => _persistComplete(scope, payload));
+        _firePersist('complete', () => _persistComplete(payload));
       case AllocationFailed(:final reason, :final kind, :final kindDeclared):
         if (_completed) return;
         _completed = true;
@@ -550,10 +548,8 @@ class CapabilityHostState extends State<CapabilityHost>
           });
         }
         _firePersist(
-          scope,
           'failure',
           () => _persistReportedFailure(
-            scope,
             reason,
             kind: kind,
             kindDeclared: kindDeclared,
@@ -563,19 +559,15 @@ class CapabilityHostState extends State<CapabilityHost>
       case AllocationAdvanced(:final payload):
         if (_completed) return;
         _completed = true;
-        _firePersist(scope, 'advance', () => _persistAdvance(scope, payload));
+        _firePersist('advance', () => _persistAdvance(payload));
       case AllocationEscalated(:final reason):
         if (_completed) return;
         _completed = true;
-        _firePersist(scope, 'escalate', () => _persistEscalate(scope, reason));
+        _firePersist('escalate', () => _persistEscalate(reason));
       case AllocationRewound(:final stepIds, :final reason):
         if (_completed) return;
         _completed = true;
-        _firePersist(
-          scope,
-          'rewind',
-          () => _persistRewindReport(scope, stepIds, reason),
-        );
+        _firePersist('rewind', () => _persistRewindReport(stepIds, reason));
     }
   }
 
@@ -601,6 +593,20 @@ class CapabilityHostState extends State<CapabilityHost>
     final adopted = alloc.handle?.attemptId ?? '';
     if (adopted.isEmpty || adopted == _attemptId) return;
     _attemptId = adopted;
+  }
+
+  /// Whether a persist still belongs to this Host's current dependency pass.
+  bool get _persistIsActive => _scope.isCurrent && context.mounted;
+
+  /// Refuses a persist only after genuine teardown, and makes the drop loud.
+  bool _guardPersist(String op) {
+    if (_persistIsActive) return true;
+    _emitFlare('step.persistDropped', {
+      'op': op,
+      'mounted': context.mounted.toString(),
+      'scopeCurrent': _scope.isCurrent.toString(),
+    });
+    return false;
   }
 
   /// Fires a persist path that must NEVER take the station down (bead `tg-7ux`).
@@ -643,21 +649,20 @@ class CapabilityHostState extends State<CapabilityHost>
   /// failure-write is the loop this bead exists to close. At most TWO writes
   /// leave this method per report, never a third.
   void _firePersist(
-    TreeDependencyScope scope,
     String op,
     Future<void> Function() persist, {
     bool recoverable = true,
-  }) => unawaited(_runPersist(scope, op, persist, recoverable: recoverable));
+  }) => unawaited(_runPersist(op, persist, recoverable: recoverable));
 
   /// [_firePersist]'s awaited body — `try`/`await`/`catch`, never the `Future`
   /// error-callback form the house rule bans (the `Future` API is limited to its
   /// statics, and that exact construct hid `tg-6e4j` here before).
   Future<void> _runPersist(
-    TreeDependencyScope scope,
     String op,
     Future<void> Function() persist, {
     required bool recoverable,
   }) async {
+    if (!_guardPersist(op)) return;
     try {
       await persist();
     } on Object catch (error) {
@@ -668,7 +673,7 @@ class CapabilityHostState extends State<CapabilityHost>
         'maxRestarts': '${seed.mount.maxRestarts}',
       });
       if (!recoverable) return;
-      await _superviseFailedPersist(scope, op, error);
+      await _superviseFailedPersist(op, error);
     }
   }
 
@@ -676,17 +681,13 @@ class CapabilityHostState extends State<CapabilityHost>
   /// failure lands somewhere durable and bounded. A throw HERE is the genuinely
   /// unrecoverable case — the store is gone, nothing can be recorded — so it
   /// flares under its own name and stops. No third write, no recursion.
-  Future<void> _superviseFailedPersist(
-    TreeDependencyScope scope,
-    String op,
-    Object error,
-  ) async {
+  Future<void> _superviseFailedPersist(String op, Object error) async {
     try {
+      if (!_guardPersist(op)) return;
       // The ONE site that knows this `failed` is a dropped STORE WRITE rather
       // than failed work — the tg-7ux conflation the record's `failure_class`
       // splits (§2.3).
       await _persistFailureClassed(
-        scope,
         'persist "$op" failed: $error',
         failureClass: StepFailureClass.storeUnavailable,
       );
@@ -775,8 +776,8 @@ class CapabilityHostState extends State<CapabilityHost>
     );
   }
 
-  Future<void> _persistStarted(TreeDependencyScope scope) async {
-    if (!scope.isCurrent || !context.mounted) return;
+  Future<void> _persistStarted() async {
+    if (!_guardPersist('started')) return;
     // LOUD-or-GONE (Decided item 5, R3): every process-backed capability
     // MUST have a mounted lease vendor — the vendor, not this write, owns
     // `grid.lease.*`. Belt-and-braces: the routing fork
@@ -823,11 +824,8 @@ class CapabilityHostState extends State<CapabilityHost>
   /// chokepoint update — so a dependent reads it pull-free (D-5), exactly like a
   /// job's completion payload. A null payload writes only the state (no result
   /// keys — a plain up-signal, today's behavior).
-  Future<void> _persistReady(
-    TreeDependencyScope scope, [
-    Map<String, String>? payload,
-  ]) async {
-    if (!scope.isCurrent || !context.mounted) return;
+  Future<void> _persistReady([Map<String, String>? payload]) async {
+    if (!_guardPersist('ready')) return;
     final timing = _terminalTiming();
     await _ctx!.writer.update(
       _stepBeadId,
@@ -854,11 +852,8 @@ class CapabilityHostState extends State<CapabilityHost>
   /// A clean completion — the terminal `state=complete` merged with the optional
   /// result [payload] into ONE chokepoint update (the grade/pr_url lands
   /// atomically alongside the cursor advance — A1/D-5).
-  Future<void> _persistComplete(
-    TreeDependencyScope scope,
-    Map<String, String>? payload,
-  ) async {
-    if (!scope.isCurrent || !context.mounted) return;
+  Future<void> _persistComplete(Map<String, String>? payload) async {
+    if (!_guardPersist('complete')) return;
     final timing = _terminalTiming();
     await _ctx!.writer.update(
       _stepBeadId,
@@ -895,10 +890,8 @@ class CapabilityHostState extends State<CapabilityHost>
   /// The optional-positional [reason] survives so the
   /// `Future<void> Function(String)` tear-off at [_persistEscalate] still
   /// satisfies its seam.
-  Future<void> _persistFailure(
-    TreeDependencyScope scope, [
-    String reason = '',
-  ]) => _persistFailureClassed(scope, reason);
+  Future<void> _persistFailure([String reason = '']) =>
+      _persistFailureClassed(reason);
 
   /// The retained output head for this incarnation's provider address.
   String _exitOutputHead() => _ctx!.provider.exitOutputOf(
@@ -907,12 +900,11 @@ class CapabilityHostState extends State<CapabilityHost>
 
   /// Classifies a reported failure from its kind plus this host's own evidence.
   Future<void> _persistReportedFailure(
-    TreeDependencyScope scope,
     String reason, {
     required CapabilityFailureKind kind,
     required bool kindDeclared,
   }) async {
-    if (!scope.isCurrent || !context.mounted) return;
+    if (!_guardPersist('failure')) return;
     final timing = _terminalTiming();
     final startedAt = timing.startedAt;
     final ranFor = startedAt == null
@@ -925,7 +917,6 @@ class CapabilityHostState extends State<CapabilityHost>
     );
     if (failureClass != StepFailureClass.infra) {
       await _persistFailureClassed(
-        scope,
         reason,
         kind: kind,
         failureClass: failureClass,
@@ -947,7 +938,6 @@ class CapabilityHostState extends State<CapabilityHost>
       'underlying': truncateReason(reason),
     });
     await _persistFailureClassed(
-      scope,
       harnessThrottleReason(
         since: since,
         silentExits: silentExits,
@@ -964,13 +954,12 @@ class CapabilityHostState extends State<CapabilityHost>
   /// A non-result class parks at a gate at exhaustion instead of leaving an
   /// unwatched failure; `work` keeps the latch-and-escalate path.
   Future<void> _persistFailureClassed(
-    TreeDependencyScope scope,
     String reason, {
     CapabilityFailureKind kind = CapabilityFailureKind.work,
     StepFailureClass failureClass = StepFailureClass.work,
     ({DateTime? startedAt, DateTime finishedAt, int? durationMs})? timing,
   }) async {
-    if (!scope.isCurrent || !context.mounted) return;
+    if (!_guardPersist('failure')) return;
     final retry = resolveRetryPolicy(
       declared: seed.capability.supervisionPolicy(_args!),
       kind: kind,
@@ -984,7 +973,6 @@ class CapabilityHostState extends State<CapabilityHost>
     final stamps = timing ?? _terminalTiming();
     if (exhausted && retry.onExhaustion == ExhaustionBehavior.parkAtGate) {
       await _persistExhaustionGate(
-        scope: scope,
         reason: reason,
         failureClass: failureClass,
         attempts: next,
@@ -1033,7 +1021,6 @@ class CapabilityHostState extends State<CapabilityHost>
   /// Parks an exhausted NON-RESULT failure through the shared gate primitive so
   /// the round remains reworkable.
   Future<void> _persistExhaustionGate({
-    required TreeDependencyScope scope,
     required String reason,
     required StepFailureClass failureClass,
     required int attempts,
@@ -1074,8 +1061,8 @@ class CapabilityHostState extends State<CapabilityHost>
       failureReason: reason,
       timing: timing,
     ),
-    isActive: () => scope.isCurrent && context.mounted,
-    failToSupervision: (reason) => _persistFailure(scope, reason),
+    isActive: () => _persistIsActive,
+    failToSupervision: _persistFailure,
     emitFlare: _emitFlare,
     recorder: _recorder,
     stepRound: _stepRound,
@@ -1084,8 +1071,7 @@ class CapabilityHostState extends State<CapabilityHost>
   );
 
   /// Supersedes this route node's obsolete human gate before completing it.
-  Future<void> _persistAdvancedCompletion(
-    TreeDependencyScope scope, {
+  Future<void> _persistAdvancedCompletion({
     required Map<String, String> completionPayload,
     required Map<String, String> advanceBasis,
   }) async {
@@ -1093,7 +1079,7 @@ class CapabilityHostState extends State<CapabilityHost>
       sessionId: _sessionId,
       nodePath: _nodePath,
     );
-    await _persistComplete(scope, completionPayload);
+    await _persistComplete(completionPayload);
     for (final receipt in receipts) {
       if (receipt.cause != GateCloseCause.supersededByAdvance) continue;
       _emitFlare('gate.supersededByAdvance', {
@@ -1103,6 +1089,9 @@ class CapabilityHostState extends State<CapabilityHost>
       });
     }
   }
+
+  ({Bead? bead, Workspace? workspace}) _deliveryValues() =>
+      (bead: context.read<Bead>(), workspace: context.read<Workspace>());
 
   /// ADVANCE (M5 D-4a): move the cursor forward. At the ROOT circuit's TERMINAL
   /// step this ACTUATES the substation's bound [DeliveryMethod] and merges its
@@ -1119,11 +1108,8 @@ class CapabilityHostState extends State<CapabilityHost>
   /// (bounded restart → the breaker → SessionScope's escalation). Silently
   /// completing un-delivered work is exactly the "stranded on a branch" failure
   /// this unification exists to kill.
-  Future<void> _persistAdvance(
-    TreeDependencyScope scope,
-    Map<String, String>? payload,
-  ) async {
-    if (!scope.isCurrent || !context.mounted) return;
+  Future<void> _persistAdvance(Map<String, String>? payload) async {
+    if (!_guardPersist('advance')) return;
     final routePayload = <String, String>{
       ...?payload,
       ResultKeys.routeVerdict: kRouteVerdictAdvance,
@@ -1138,26 +1124,24 @@ class CapabilityHostState extends State<CapabilityHost>
     if (!terminal || method == null) {
       if (terminal) _emitFlare('deliver.unarmed', const {});
       await _persistAdvancedCompletion(
-        scope,
         completionPayload: routePayload,
         advanceBasis: routePayload,
       );
       return;
     }
-    if (!context.mounted) return;
+    if (!_guardPersist('advance')) return;
     // The ambient values, read SYNCHRONOUSLY at entry with the `read<T>()`
     // EFFECT verb (this runs off `build`, does not subscribe the branch, and is
     // guarded above) and handed to the method as VALUES, so a long push/PR
     // round-trip cannot race an unmount into a thrown tree lookup (ADR-0013
     // items 1/4).
-    final workBead = context.read<Bead>();
-    final workspace = context.read<Workspace>();
+    final (:bead, :workspace) = _deliveryValues();
+    final workBead = bead;
     if (workBead == null || workspace == null) {
       // LOUD (ADR-0008 Decision 3): a delivery method bound under a tree that
       // mounts no work bead / no workspace is a MIS-COMPOSITION — never a silent
       // no-op that strands the work.
       await _persistFailure(
-        scope,
         'delivery "${method.id}" needs an ambient Bead + Workspace '
         '(WorkBead/SessionScope provide them) — none found at $_nodePath',
       );
@@ -1175,14 +1159,13 @@ class CapabilityHostState extends State<CapabilityHost>
         ),
       );
     } on Object catch (e) {
-      await _persistFailure(scope, 'delivery "${method.id}" threw: $e');
+      await _persistFailure('delivery "${method.id}" threw: $e');
       return;
     }
-    if (!scope.isCurrent || !context.mounted) return;
+    if (!_guardPersist('advance')) return;
     switch (outcome) {
       case Ok(payload: final receipt):
         await _persistAdvancedCompletion(
-          scope,
           completionPayload: {
             ...routePayload,
             ...?receipt,
@@ -1192,7 +1175,7 @@ class CapabilityHostState extends State<CapabilityHost>
         );
         _emitFlare('step.delivered', {'method': method.id});
       case Failed(:final reason):
-        await _persistFailure(scope, 'delivery "${method.id}" failed: $reason');
+        await _persistFailure('delivery "${method.id}" failed: $reason');
     }
   }
 
@@ -1208,32 +1191,31 @@ class CapabilityHostState extends State<CapabilityHost>
   ///
   /// DISTINCT from `SessionScope`'s breaker-exhaustion escalation (D-5), which is
   /// supervision's, not routing's, and is untouched.
-  Future<void> _persistEscalate(TreeDependencyScope scope, String reason) =>
-      persistRaisedEscalation(
-        station: _ctx!,
-        services: _services,
-        request: EscalationRequest(
-          beadId: _beadId,
-          sessionId: _sessionId,
-          nodePath: _nodePath,
-          reason: reason,
-          rewindCount: seed.mount.node.rewindCount,
-        ),
-        stepBeadId: _stepBeadId,
-        gatedMetadata: {
-          ..._moleculeMetadata(StepState.gated),
-          ...nodeResultMetadata(_nodePath, const {
-            ResultKeys.routeVerdict: kRouteVerdictEscalate,
-          }),
-        },
-        isActive: () => scope.isCurrent && context.mounted,
-        failToSupervision: (reason) => _persistFailure(scope, reason),
-        emitFlare: _emitFlare,
-        recorder: _recorder,
-        stepRound: _stepRound,
-        incarnation: seed.mount.node.restartCount,
-        attemptId: _attemptId,
-      );
+  Future<void> _persistEscalate(String reason) => persistRaisedEscalation(
+    station: _ctx!,
+    services: _services,
+    request: EscalationRequest(
+      beadId: _beadId,
+      sessionId: _sessionId,
+      nodePath: _nodePath,
+      reason: reason,
+      rewindCount: seed.mount.node.rewindCount,
+    ),
+    stepBeadId: _stepBeadId,
+    gatedMetadata: {
+      ..._moleculeMetadata(StepState.gated),
+      ...nodeResultMetadata(_nodePath, const {
+        ResultKeys.routeVerdict: kRouteVerdictEscalate,
+      }),
+    },
+    isActive: () => _persistIsActive,
+    failToSupervision: _persistFailure,
+    emitFlare: _emitFlare,
+    recorder: _recorder,
+    stepRound: _stepRound,
+    incarnation: seed.mount.node.restartCount,
+    attemptId: _attemptId,
+  );
 
   /// The [AllocationRewound] report's dispatch — a REFUSAL, always (Decided
   /// item 7 / `DESIGN-tg-pm6.md` §8/§11): backward motion on the molecule
@@ -1244,13 +1226,8 @@ class CapabilityHostState extends State<CapabilityHost>
   /// path's exact behavior; the flat model's write cascade (`_persistRewind`)
   /// retired with the flat cursor (tg-eli phase 2), leaving the refusal as
   /// the only behavior.
-  Future<void> _persistRewindReport(
-    TreeDependencyScope scope,
-    Set<String> stepIds,
-    String reason,
-  ) async {
+  Future<void> _persistRewindReport(Set<String> stepIds, String reason) async {
     await _persistFailure(
-      scope,
       'AllocationRewound reached a molecule-mode step at $_nodePath — '
       'backward motion is derived there (R4); this circuit must not report '
       'a rewind decision',

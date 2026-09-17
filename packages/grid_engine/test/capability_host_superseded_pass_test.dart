@@ -19,6 +19,7 @@
 // ignore_for_file: invalid_use_of_protected_member
 import 'dart:async';
 
+import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/src/molecule/bead_path_key.dart';
@@ -78,6 +79,24 @@ class _RecordingTransport implements ExplorationTransport {
   @override
   void flare(String name, Map<String, String> data) =>
       flares.add((name: name, data: data));
+}
+
+/// A delivery seam that lets the test supersede the dependency pass while the
+/// terminal route is waiting on its external push/PR round-trip.
+final class _BlockingDeliveryMethod implements DeliveryMethod {
+  @override
+  String get id => 'blocking-delivery';
+
+  final entered = Completer<void>();
+  final release = Completer<StepOutcome>();
+  final requests = <DeliveryRequest>[];
+
+  @override
+  Future<StepOutcome> deliver(DeliveryRequest request) {
+    requests.add(request);
+    entered.complete();
+    return release.future;
+  }
 }
 
 Future<void> _pump() async {
@@ -147,25 +166,28 @@ _host(ServiceBundle services) {
         onState: (state) => registryState = state,
         child: InheritedSeed<ServiceBundle>(
           value: services,
-          child: InheritedSeed<Workspace>(
-            value: testWorkspace('tg-1'),
-            child: InheritedSeed<InheritedCircuit>(
-              value: _moleculeCircuit,
-              child: const InheritedSeed<ProcessLeaseVendor>(
-                value: _realVendor,
-                child: CapabilityHost(
-                  capability: _CompletingCap(),
-                  mount: StepMount(
-                    step: CapabilityStep(
-                      stepId: 'agent',
-                      capabilityId: 'agent',
+          child: InheritedSeed<Bead>(
+            value: bead('tg-1'),
+            child: InheritedSeed<Workspace>(
+              value: testWorkspace('tg-1'),
+              child: InheritedSeed<InheritedCircuit>(
+                value: _moleculeCircuit,
+                child: const InheritedSeed<ProcessLeaseVendor>(
+                  value: _realVendor,
+                  child: CapabilityHost(
+                    capability: _CompletingCap(),
+                    mount: StepMount(
+                      step: CapabilityStep(
+                        stepId: 'agent',
+                        capabilityId: 'agent',
+                      ),
+                      nodePath: 'tg-1/agent',
+                      circuit: _circuit,
+                      circuitPath: 'tg-1',
+                      session: SessionHandle('tgdog-s'),
+                      node: NodeCursor(),
+                      key: ValueKey('tg-1/agent#0.0'),
                     ),
-                    nodePath: 'tg-1/agent',
-                    circuit: _circuit,
-                    circuitPath: 'tg-1',
-                    session: SessionHandle('tgdog-s'),
-                    node: NodeCursor(),
-                    key: ValueKey('tg-1/agent#0.0'),
                   ),
                 ),
               ),
@@ -248,6 +270,64 @@ void main() {
             updates.length - 1,
           )[MoleculeStepKeys.state],
           'complete',
+        );
+      });
+
+      test('a terminal delivery that spans a later dependency pass still '
+          'persists complete once', () async {
+        final delivery = _BlockingDeliveryMethod();
+        final transport = _RecordingTransport();
+        final h = _host(
+          ServiceBundle(delivery: delivery, transport: transport),
+        );
+        addTearDown(() {
+          if (!delivery.release.isCompleted) {
+            delivery.release.complete(const Failed('test teardown'));
+          }
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/agent');
+        final hostBranch = _hostBranch(h.root);
+        final state =
+            (hostBranch as StatefulBranch).state as CapabilityHostState;
+
+        state.deliverReportForTest(const AllocationAdvanced({'grade': 'pass'}));
+        await delivery.entered.future;
+
+        h.registryState.rebuild();
+        h.owner.flush();
+        await _pump();
+
+        expect(_hostBranch(h.root), same(hostBranch));
+        expect(hostBranch.mounted, isTrue);
+
+        delivery.release.complete(
+          const Ok({'pr_url': 'https://example.test/pr/469'}),
+        );
+        await _pump();
+
+        expect(delivery.requests, hasLength(1));
+        final updates = h.fakes.runner.callsFor('update');
+        expect(updates, hasLength(1));
+        expect(updates.single[1], _stepBeadId);
+        expect(
+          h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
+          'complete',
+        );
+        expect(
+          transport.flares.where((flare) => flare.name == 'step.complete'),
+          hasLength(1),
+        );
+        expect(
+          transport.flares.where((flare) => flare.name == 'step.reportDropped'),
+          isEmpty,
+        );
+        expect(
+          transport.flares.where(
+            (flare) => flare.name == 'step.persistDropped',
+          ),
+          isEmpty,
         );
       });
 
