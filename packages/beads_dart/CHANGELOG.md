@@ -1,3 +1,9 @@
+## 0.3.0-dev.4
+
+ - **FIX**(beads_dart): bind state bd writes to the owned proxy (#477).
+ - **FIX**(cli): read effective external project config (#471).
+ - **FEAT**(station): prune closed session graphs on schedule (#474).
+
 ## 0.3.0-dev.3
 
 - `WorkingSetProbeSource._tick` ignores probe completions that land after `dispose` (#466). The

@@ -1,3 +1,9 @@
+## 0.6.0-dev.4
+
+ - **FIX**(rework): close session and gates before rekey and report receipts (#479).
+ - **FIX**(cli): read effective external project config (#471).
+ - **FEAT**(admission): expose the live admission ceiling (#475).
+
 ## 0.6.0-dev.3
 
 - Breaking: `UnlinkCommand` and `runUnlink` are removed from the public surface, and the

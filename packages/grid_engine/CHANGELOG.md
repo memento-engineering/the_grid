@@ -1,3 +1,14 @@
+## 0.4.0-dev.10
+
+ - **FIX**(trajectory): retire liveness-lost sessions (#480).
+ - **FIX**(rework): close session and gates before rekey and report receipts (#479).
+ - **FIX**(trajectory): supervise stale P6 tick passes (#476).
+ - **FIX**(admission): release abandoned pre-session reservations (#473).
+ - **FIX**(cli): read effective external project config (#471).
+ - **FEAT**(trajectory): add G2 molecule graph posture and edge delta folding (#478).
+ - **FEAT**(admission): expose the live admission ceiling (#475).
+ - **FEAT**(station): prune closed session graphs on schedule (#474).
+
 ## 0.4.0-dev.9
 
 - Allocation reports are qualified against the host's CURRENT dependency pass, not the pass that

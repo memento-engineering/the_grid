@@ -1,3 +1,9 @@
+## 0.2.1-dev.4
+
+ - **FIX**(trajectory): widen the w6 drain tolerance to 0.25 (#481).
+ - **FIX**(trajectory): join respec verdicts across sessions (#472).
+ - **FEAT**(trajectory): add G2 molecule graph posture and edge delta folding (#478).
+
 ## 0.2.1-dev.3
 
 - `traj certify` prints `p2_miss_retired_round_total` on each epoch's reported line (#454) and
