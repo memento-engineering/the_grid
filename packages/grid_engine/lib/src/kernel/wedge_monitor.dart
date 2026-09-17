@@ -5,9 +5,11 @@
 /// (ADR-0008 D9: a NON-BLOCKING signal emitted at a transition — never a gate,
 /// which would halt the loop) through the reserved emit-only
 /// [ExplorationTransport] (D-8), the SAME sink `session.mintFailed` /
-/// `gate.rearmFailed` / `work.throttled` already use. It fires on the RISING
-/// EDGE — exactly once per episode, never once per poll — which is what makes it
-/// LOUD and NOT the spammy per-poll gate-open signal.
+/// `gate.rearmFailed` / `work.throttled` already use. [kWedgedFlare] fires on
+/// the RISING EDGE — exactly once per episode, never once per poll — while
+/// [kWedgeChangedFlare] names each distinct in-episode count-tuple transition.
+/// This keeps the episode signal LOUD without making it a spammy per-poll
+/// gate-open signal.
 ///
 /// It owns its own re-arming one-shot Timer through the injected
 /// `scheduleTimer` seam (the same seam `StationDriver` carries), because a
@@ -16,16 +18,23 @@
 /// snapshot through the injected `latest` getter (derailment-invariant 1 /
 /// ADR-0008 D-H rule 2 — `StationJoinBridge.latest` is what the bridge last
 /// PUSHED, not a sync read of the notifier's reactive state).
+///
+/// The narrow `the_grid#admission-authority-boundary` decision was checked for
+/// this kernel surface and does not constrain this observer: it grants no
+/// attempt and mints no durable transition. [pollSnapshot] only derives a value
+/// from the injected snapshot and emits through an observability sink.
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
 import '../domain/joined_snapshot.dart';
 import '../domain/wedge.dart';
 import '../sdk/capability.dart';
 
-/// Samples the station's forward progress on a timer and flares a SUSTAINED
-/// stall exactly once per episode. Owned + driven by `StationDriver`.
+/// Samples the station's forward progress on a timer, flares a SUSTAINED stall
+/// once per episode, and reports distinct in-episode tuple changes. Owned and
+/// driven by `StationDriver`.
 class WedgeMonitor {
   /// Creates a monitor over the producer-side [latest] join.
   ///
@@ -114,18 +123,35 @@ class WedgeMonitor {
       _state = Stalling(since: since, sample: sample);
       return _state;
     }
-    final wasWedged = _state.isWedged;
+    final previousWedgedSample = switch (_state) {
+      Wedged(:final sample) => sample,
+      _ => null,
+    };
     _state = Wedged(since: since, sample: sample);
     // The RISING EDGE only: a wedged station polled 20 more times flares ONCE,
     // not 20 times (LOUD, never spammy — the whole point of tg-jwh).
-    if (!wasWedged) _flare(kWedgedFlare, since: since, sample: sample);
+    if (previousWedgedSample == null) {
+      _flare(kWedgedFlare, since: since, sample: sample);
+    } else if (_tupleChanged(previousWedgedSample, sample)) {
+      _flare(
+        kWedgeChangedFlare,
+        since: since,
+        sample: sample,
+        previousSample: previousWedgedSample,
+      );
+    }
     return _state;
   }
 
   /// Emits the fire-and-continue flare (D9) through the emit-only transport. A
   /// throwing transport NEVER breaks the poll — the same swallow convention as
   /// `WorkList._reportThrottled` and `SessionScope._flareMint`.
-  void _flare(String name, {DateTime? since, required WedgeSample sample}) {
+  void _flare(
+    String name, {
+    DateTime? since,
+    required WedgeSample sample,
+    WedgeSample? previousSample,
+  }) {
     try {
       _transport?.flare(name, {
         if (since != null) 'since': since.toIso8601String(),
@@ -134,6 +160,13 @@ class WedgeMonitor {
         'running': '${sample.running}',
         'gated': '${sample.gated}',
         'cooling': '${sample.cooling}',
+        if (previousSample != null) ...{
+          'frozenSessionIds': jsonEncode(sample.frozenSessionIds),
+          'previousLive': '${previousSample.live}',
+          'previousRunning': '${previousSample.running}',
+          'previousGated': '${previousSample.gated}',
+          'previousCooling': '${previousSample.cooling}',
+        },
       });
     } catch (_) {
       // A throwing transport never breaks the station's own poll — swallow.
@@ -164,3 +197,9 @@ class WedgeMonitor {
     _cancelTimer();
   }
 }
+
+bool _tupleChanged(WedgeSample previous, WedgeSample current) =>
+    previous.live != current.live ||
+    previous.running != current.running ||
+    previous.gated != current.gated ||
+    previous.cooling != current.cooling;
