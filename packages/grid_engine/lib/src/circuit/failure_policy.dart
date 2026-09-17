@@ -82,14 +82,18 @@ ResolvedRetry resolveRetryPolicy({
   );
 }
 
-/// The gate reason written when a NON-RESULT class spends its budget.
+/// The gate reason written when a non-gradeable failure spends its budget.
 String nonResultGateReason({
   required StepFailureClass failureClass,
   required String sessionId,
   required String nodePath,
   required int attempts,
   required String reason,
-}) =>
-    '${failureClass.wire} exhausted: $attempts attempt(s) produced no usable '
-    'result — session $sessionId, step $nodePath'
-    '${reason.isEmpty ? '' : ' — $reason'}';
+}) {
+  final prefix = failureClass == StepFailureClass.storeUnavailable
+      ? 'persist-exhausted'
+      : '${failureClass.wire} exhausted';
+  return '$prefix: $attempts attempt(s) produced no usable result — '
+      'session $sessionId, step $nodePath'
+      '${reason.isEmpty ? '' : ' — $reason'}';
+}
