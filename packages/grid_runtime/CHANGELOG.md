@@ -1,3 +1,9 @@
+## 0.2.1-dev.6
+
+ - **FIX**(trajectory): retire liveness-lost sessions (#480).
+ - **FEAT**(trajectory): add G2 molecule graph posture and edge delta folding (#478).
+ - **FEAT**(station): prune closed session graphs on schedule (#474).
+
 ## 0.2.1-dev.5
 
 - `StationBeadWriter.closeOpenGatesForNodeAdvance` and `GateCloseCause.supersededByAdvance` (#468):

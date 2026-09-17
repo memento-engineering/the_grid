@@ -1,3 +1,13 @@
+## 0.4.0-dev.5
+
+ - **FIX**(trajectory): retire liveness-lost sessions (#480).
+ - **FIX**(rework): close session and gates before rekey and report receipts (#479).
+ - **FIX**(beads_dart): bind state bd writes to the owned proxy (#477).
+ - **FIX**(trajectory): supervise stale P6 tick passes (#476).
+ - **FEAT**(trajectory): add G2 molecule graph posture and edge delta folding (#478).
+ - **FEAT**(admission): expose the live admission ceiling (#475).
+ - **FEAT**(station): prune closed session graphs on schedule (#474).
+
 ## 0.4.0-dev.4
 
 - The work assembly's ledger-closure probe distinguishes a snapshot that LACKS a session bead
