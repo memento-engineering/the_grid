@@ -266,8 +266,10 @@ Future<int> runGateResolve({
     case StationCommandCompleted():
       write('grid gate resolve — closed gate $gateId.');
       return 0;
-    case StationCommandRefused(:final message) ||
-        StationCommandUnavailable(:final message):
+    case StationCommandRefused(:final message):
+      write('grid gate resolve: $message');
+      return 64;
+    case StationCommandUnavailable(:final message):
       writeErr('grid gate resolve: $message');
       return 64;
   }
