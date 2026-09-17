@@ -1878,7 +1878,15 @@ class SessionScopeState extends State<SessionScope>
       switch (result) {
         case Acked():
           // Settled OK: clear the guard. The store's `gated`→`pending` flip
-          // stops D-7 from re-firing and frees a future gate cycle.
+          // stops D-7 from re-firing and frees a future gate cycle. The prior
+          // derived escalation set the terminal latch while it parked this
+          // node; only an ACKED re-arm can reopen terminal scheduling for the
+          // resumed circuit. `the_grid#admission-authority-in-process-cut`
+          // remains intact: "SessionScope asks the same object
+          // [StationAdmissionAuthority] for attempt transitions while
+          // retaining tree-owned circuit and step execution." This latch
+          // reset does not touch that admission-authority cut.
+          _terminalScheduled = false;
           _rearming.remove(nodePath);
         case Dropped() || Suppressed():
           // Cut re-gates this node, so its in-flight guard remains the storm
