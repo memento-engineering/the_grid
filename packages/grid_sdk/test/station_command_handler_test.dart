@@ -2424,7 +2424,7 @@ Bead _resultStep(
   },
 );
 
-/// tg-xh5d WHAT #2, the OTHER producer: the station SHIPS a work bead an
+/// tg-xh5d WHAT #2, the OTHER producer: the station publishes a work bead an
 /// operator closed BY HAND, the next time it observes the close.
 void _shipObserverGroup() {
   group('post-flush capability-export settle', () {
@@ -2442,7 +2442,7 @@ void _shipObserverGroup() {
       metadata: const {'rig': 'tg'},
     );
 
-    test('a hand-closed export-labelled bead ships once, through the '
+    test('a hand-closed export-labelled bead publishes once, through the '
         'writer\'s own path', () async {
       final closed = exporter(
         'tg-9',
@@ -2460,10 +2460,17 @@ void _shipObserverGroup() {
 
       await handler.settleCapabilityExports();
 
-      expect(workRunner.calls.where((call) => call.first == 'ship'), [
-        ['ship', 'tg-9', '--json', '--actor', 'grid-controller'],
-        ['ship', 'release-gate', '--json', '--actor', 'grid-controller'],
-      ]);
+      final updates = workRunner.calls.where((call) => call.first == 'update');
+      expect(updates, hasLength(1));
+      expect(
+        updates.single,
+        containsAllInOrder([
+          '--add-label',
+          'provides:tg-9',
+          '--add-label',
+          'provides:release-gate',
+        ]),
+      );
       expect(
         workRunner.calls.where((call) => call.first == 'close'),
         isEmpty,
@@ -2471,11 +2478,11 @@ void _shipObserverGroup() {
       );
 
       // RISING EDGE: the store has not re-read yet, so the same snapshot is
-      // observed again. A flush must not re-spawn the ship.
+      // observed again. A flush must not repeat the publication.
       await handler.settleCapabilityExports();
       expect(
-        workRunner.calls.where((call) => call.first == 'ship'),
-        hasLength(2),
+        workRunner.calls.where((call) => call.first == 'update'),
+        hasLength(1),
       );
     });
 
@@ -2535,7 +2542,7 @@ void _shipObserverGroup() {
       await handler.settleCapabilityExports();
 
       expect(
-        workRunner.calls.where((call) => call.first == 'ship'),
+        workRunner.calls.where((call) => call.first == 'update'),
         hasLength(2),
         reason: 'the edge fell and rose again',
       );
@@ -2553,6 +2560,123 @@ void _shipObserverGroup() {
       await handler.settleCapabilityExports();
 
       expect(workRunner.calls, isEmpty);
+    });
+
+    test(
+      'a row-named bare close is healed once, clears, and re-arms',
+      () async {
+        final consumer = exporter('tg-1', status: BeadStatus.open);
+        final target = Bead(
+          id: 'pow-9',
+          issueType: IssueType.task,
+          status: BeadStatus.closed,
+          metadata: const {'rig': 'power_station'},
+        );
+        final providedTarget = target.copyWith(
+          labels: const ['provides:pow-9'],
+        );
+        const rows = [
+          BeadDependency(
+            issueId: 'tg-1',
+            dependsOnId: 'external:power_station:pow-9',
+          ),
+          BeadDependency(
+            issueId: 'tg-2',
+            dependsOnId: 'external:power_station:pow-9',
+          ),
+        ];
+        final consumerSource = _Source(
+          _snapshot([
+            consumer,
+            exporter('tg-2', status: BeadStatus.open),
+          ], dependencies: rows),
+        );
+        final targetSource = _Source(_snapshot([target]));
+        final targetRunner = _RecordingRunner(exportBeads: [target]);
+        final flares = <({String name, Map<String, String> data})>[];
+        final targetStore = WorkCommandStore(
+          substation: 'power_station',
+          root: '/power',
+          source: targetSource,
+          refresh: () async {},
+          writer: StationBeadWriter(
+            bd: BdCliService(targetRunner),
+            reader: targetRunner,
+            ownership: BeadOwnershipPredicate(const {'pow'}),
+            onFlare: (name, data) => flares.add((name: name, data: data)),
+          ),
+        );
+        final handler = _handler(
+          state: _Source(_snapshot(const [])),
+          work: consumerSource,
+          stateRunner: _RecordingRunner(),
+          workRunner: _RecordingRunner(),
+          additionalWorkStores: {'power_station': targetStore},
+        );
+
+        await handler.settleCapabilityExports();
+        await handler.settleCapabilityExports();
+
+        final firstUpdates = targetRunner.calls
+            .where((call) => call.first == 'update')
+            .toList(growable: false);
+        expect(firstUpdates, hasLength(1), reason: 'stale snapshots suppress');
+        expect(
+          firstUpdates.single,
+          containsAllInOrder(['--add-label', 'provides:pow-9']),
+        );
+        expect(flares, hasLength(1), reason: 'multiple consumers deduplicate');
+        expect(flares.single.name, 'external.shipped');
+        expect(flares.single.data, {'bead': 'pow-9', 'capabilities': 'pow-9'});
+
+        targetSource.push(_snapshot([providedTarget]));
+        await handler.settleCapabilityExports();
+        targetSource.push(_snapshot([target]));
+        await handler.settleCapabilityExports();
+
+        expect(
+          targetRunner.calls.where((call) => call.first == 'update'),
+          hasLength(2),
+          reason: 'a refreshed provided snapshot clears the rising edge',
+        );
+        expect(flares, hasLength(2));
+      },
+    );
+
+    test('a closed target no external row names is not published', () async {
+      final target = Bead(
+        id: 'pow-9',
+        issueType: IssueType.task,
+        status: BeadStatus.closed,
+        metadata: const {'rig': 'power_station'},
+      );
+      final targetRunner = _RecordingRunner(exportBeads: [target]);
+      final flares = <({String name, Map<String, String> data})>[];
+      final handler = _handler(
+        state: _Source(_snapshot(const [])),
+        work: _Source(_snapshot(const [])),
+        stateRunner: _RecordingRunner(),
+        workRunner: _RecordingRunner(),
+        additionalWorkStores: {
+          'power_station': WorkCommandStore(
+            substation: 'power_station',
+            root: '/power',
+            source: _Source(_snapshot([target])),
+            refresh: () async {},
+            writer: StationBeadWriter(
+              bd: BdCliService(targetRunner),
+              reader: targetRunner,
+              ownership: BeadOwnershipPredicate(const {'pow'}),
+              onFlare: (name, data) => flares.add((name: name, data: data)),
+            ),
+          ),
+        },
+      );
+
+      await handler.settleCapabilityExports();
+
+      expect(targetRunner.calls, isEmpty);
+      expect(flares, isEmpty);
     });
   });
 }
@@ -2631,6 +2755,7 @@ StationCommandHandler _handler({
   Set<String> stateWriterOwnership = const {'tg', 'tgdog'},
   Set<String> workWriterOwnership = const {'tg'},
   String workIdentity = 'tg',
+  Map<String, WorkCommandStore> additionalWorkStores = const {},
   StationTrajectoryRecorder? recorder,
   TrajectoryStepSnapshot Function()? stepSnapshot,
   int Function(String sessionId)? headEpochForSession,
@@ -2665,6 +2790,7 @@ StationCommandHandler _handler({
         ownership: BeadOwnershipPredicate(workWriterOwnership),
       ),
     ),
+    ...additionalWorkStores,
   },
 );
 
@@ -2703,9 +2829,12 @@ final class _ThrowingSink implements TrajectoryRecordSink {
   }) => throw StateError('sink refused');
 }
 
-GraphSnapshot _snapshot(Iterable<Bead> beads) => GraphSnapshot.fromParts(
+GraphSnapshot _snapshot(
+  Iterable<Bead> beads, {
+  Iterable<BeadDependency> dependencies = const [],
+}) => GraphSnapshot.fromParts(
   beads: beads,
-  dependencies: const [],
+  dependencies: dependencies,
   readyIds: const [],
   capturedAt: DateTime(2026),
 );

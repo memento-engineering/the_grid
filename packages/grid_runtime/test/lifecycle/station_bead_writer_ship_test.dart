@@ -1,6 +1,5 @@
-// tg-xh5d (`the_grid#capability-edges-are-bd-native-and-link-is-sugar`): the
-// chokepoint SHIPS every capability a closing bead exports — one `bd ship`
-// per `export:<capability>` label, and nothing when it carries none.
+import 'dart:io';
+
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
@@ -40,7 +39,7 @@ void main() {
   });
 
   test(
-    'close ships exactly one capability per export: label, after the close',
+    'core close publishes own id plus explicit exports in one atomic update',
     () async {
       runner.exportBeads = [
         _work(
@@ -51,28 +50,43 @@ void main() {
 
       await writer().close('tgdog-1', reason: 'done');
 
-      expect(runner.callsFor('ship'), [
-        ['ship', 'tgdog-1', '--json', '--actor', 'grid-controller'],
-        ['ship', 'release-gate', '--json', '--actor', 'grid-controller'],
-      ]);
-      final verbs = [for (final call in runner.calls) call.first];
+      final update = runner.callsFor('update').single;
       expect(
-        verbs.indexOf('close') < verbs.indexOf('ship'),
-        isTrue,
-        reason: 'bd ship validates that the exporting bead is CLOSED',
+        update,
+        containsAllInOrder([
+          '--status',
+          'closed',
+          '--set-metadata',
+          startsWith('closed_at='),
+          '--add-label',
+          'provides:tgdog-1',
+          '--add-label',
+          'provides:release-gate',
+        ]),
       );
+      expect(runner.callsFor('close'), isEmpty);
+      expect(runner.callsFor('ship'), isEmpty);
+      expect(flares.single.name, 'external.shipped');
       expect(flares.single.data['capabilities'], 'tgdog-1,release-gate');
     },
   );
 
-  test('a bead carrying no export: label spawns no ship at all', () async {
-    runner.exportBeads = [_work('tgdog-1')];
+  test(
+    'core close publishes its own id without an explicit export label',
+    () async {
+      runner.exportBeads = [_work('tgdog-1')];
 
-    await writer().close('tgdog-1');
+      await writer().close('tgdog-1');
 
-    expect(runner.callsFor('ship'), isEmpty);
-    expect(flares, isEmpty);
-  });
+      expect(
+        runner.callsFor('update').single,
+        containsAllInOrder(['--add-label', 'provides:tgdog-1']),
+      );
+      expect(runner.callsFor('close'), isEmpty);
+      expect(runner.callsFor('ship'), isEmpty);
+      expect(flares.single.data['capabilities'], 'tgdog-1');
+    },
+  );
 
   test('shipExports is driven by the bead STATE, so a hand-closed bead ships '
       'through the same path', () async {
@@ -88,7 +102,11 @@ void main() {
 
     expect(shipped, ['tgdog-1']);
     expect(runner.callsFor('close'), isEmpty);
-    expect(runner.callsFor('ship'), hasLength(1));
+    expect(
+      runner.callsFor('update').single,
+      containsAllInOrder(['--add-label', 'provides:tgdog-1']),
+    );
+    expect(flares.single.name, 'external.shipped');
   });
 
   test('a capability the bead ALREADY provides is not re-shipped — the '
@@ -106,10 +124,37 @@ void main() {
     ];
 
     expect(await writer().shipExports('tgdog-1'), ['release-gate']);
-    expect(runner.callsFor('ship'), [
-      ['ship', 'release-gate', '--json', '--actor', 'grid-controller'],
-    ]);
+    expect(
+      runner.callsFor('update').single,
+      containsAllInOrder(['--add-label', 'provides:release-gate']),
+    );
   });
+
+  test(
+    'explicit healer input is stable-deduplicated and needs no export label',
+    () async {
+      runner.exportBeads = [_work('tgdog-1', status: BeadStatus.closed)];
+
+      expect(
+        await writer().shipExports('tgdog-1', const [
+          'tgdog-1',
+          'release-gate',
+          'tgdog-1',
+        ]),
+        ['tgdog-1', 'release-gate'],
+      );
+      expect(
+        runner.callsFor('update').single,
+        containsAllInOrder([
+          '--add-label',
+          'provides:tgdog-1',
+          '--add-label',
+          'provides:release-gate',
+        ]),
+      );
+      expect(flares.single.data['capabilities'], 'tgdog-1,release-gate');
+    },
+  );
 
   test('a fully shipped bead spawns no process at all', () async {
     runner.exportBeads = [
@@ -121,9 +166,20 @@ void main() {
     ];
 
     expect(await writer().shipExports('tgdog-1'), isEmpty);
-    expect(runner.callsFor('ship'), isEmpty);
+    expect(runner.callsFor('update'), isEmpty);
     expect(flares, isEmpty);
   });
+
+  test(
+    'an open bead is not published even with explicit healer input',
+    () async {
+      runner.exportBeads = [_work('tgdog-1')];
+
+      expect(await writer().shipExports('tgdog-1', const ['tgdog-1']), isEmpty);
+      expect(runner.callsFor('update'), isEmpty);
+      expect(flares, isEmpty);
+    },
+  );
 
   test(
     'shipExports is fail-closed on ownership and silent on an absent bead',
@@ -133,7 +189,30 @@ void main() {
         throwsA(isA<OwnershipRefused>()),
       );
       expect(await writer().shipExports('tgdog-missing'), isEmpty);
-      expect(runner.callsFor('ship'), isEmpty);
+      expect(runner.callsFor('update'), isEmpty);
     },
   );
+
+  test('a throwing external.shipped sink cannot fail publication', () async {
+    runner.exportBeads = [_work('tgdog-1', status: BeadStatus.closed)];
+    final protectedWriter = StationBeadWriter(
+      bd: bd,
+      reader: runner,
+      ownership: BeadOwnershipPredicate({'tgdog'}),
+      onFlare: (_, __) => throw StateError('sink unavailable'),
+    );
+
+    expect(await protectedWriter.shipExports('tgdog-1', const ['tgdog-1']), [
+      'tgdog-1',
+    ]);
+    expect(runner.callsFor('update'), hasLength(1));
+  });
+
+  test('the writer never calls the proxied-mode-refused bd ship verb', () {
+    final source = File(
+      'lib/src/lifecycle/station_bead_writer.dart',
+    ).readAsStringSync();
+
+    expect(source, isNot(contains('_bd.ship(')));
+  });
 }

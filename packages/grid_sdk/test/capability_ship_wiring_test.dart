@@ -1,9 +1,8 @@
-// tg-xh5d WHAT #2 — the ship-on-close capability needs a PRODUCER in the
+// tg-xh5d WHAT #2 — publish-on-close needs a PRODUCER in the
 // resident, not only a writer method with a unit test. Two rails carry it:
-// `StationBeadWriter.close` ships whatever the station itself closes, and the
-// post-flush settle ships whatever an OPERATOR closed by hand. Unwired, an
-// `external:` row authored by `link` blocks its consumer forever unless a
-// human runs `bd ship` — the frontier half ships inert.
+// `StationBeadWriter.close` publishes whatever the station itself closes, and
+// the post-flush settle publishes what an OPERATOR closed by hand. Unwired, an
+// `external:` row authored by `link` blocks its consumer forever.
 import 'dart:io';
 
 import 'package:test/test.dart';
@@ -25,7 +24,7 @@ void main() {
       afterFlush,
       contains('_handler.settleCapabilityExports'),
       reason:
-          'a bead an operator closed by hand ships the next time the station '
+          'a bead an operator closed by hand publishes when the station '
           'observes the close, and a flush is that observation',
     );
     expect(
@@ -35,9 +34,8 @@ void main() {
     );
   });
 
-  // tg-xh5d RULING 2026-09-13 (3): the ship observer STANDS, suppressed under
-  // --dry-run. `bd ship` publishes a capability to every other store's
-  // frontier, which is exactly the class of outcome a dry run withholds.
+  // tg-xh5d RULING 2026-09-13 (3): publication remains suppressed under
+  // --dry-run because it changes every other store's frontier.
   test('the capability settle is suppressed under --dry-run', () {
     final src = File('lib/src/work/work_assembly.dart').readAsStringSync();
     final settle = src.substring(
@@ -64,27 +62,50 @@ void main() {
     );
   });
 
-  test('the settle ships through the work store WRITER, not a second path', () {
-    final src = File(
-      'lib/src/command/station_command_handler.dart',
-    ).readAsStringSync();
-    final settle = src.substring(
-      src.indexOf('Future<void> _settleCapabilityExports()'),
-      src.indexOf('Future<GridCommandResult> call('),
-    );
+  test(
+    'the settle publishes through the work store WRITER, not a second path',
+    () {
+      final src = File(
+        'lib/src/command/station_command_handler.dart',
+      ).readAsStringSync();
+      final settle = src.substring(
+        src.indexOf('Future<void> _settleCapabilityExports()'),
+        src.indexOf('Future<GridCommandResult> call('),
+      );
 
-    expect(settle, contains('unshippedExports('));
-    expect(
-      settle,
-      contains('store.writer.shipExports('),
-      reason:
-          'one ship path: the chokepoint that ships on close ships on '
-          'observation too',
-    );
-    expect(
-      settle,
-      isNot(contains('.ship(')),
-      reason: 'the handler must not spell `bd ship` itself',
-    );
+      expect(settle, contains('unshippedExports('));
+      expect(settle, contains('healableExternalDepTargets('));
+      expect(
+        settle,
+        contains('store.writer.shipExports('),
+        reason:
+            'one ship path: the chokepoint that ships on close ships on '
+            'observation too',
+      );
+      expect(
+        settle,
+        isNot(contains('.ship(')),
+        reason: 'the handler must not spell `bd ship` itself',
+      );
+    },
+  );
+
+  test('the bridge owns no external-dependency healer or publication path', () {
+    for (final path in const [
+      '../grid_engine/lib/src/bridge/federated_snapshot_source.dart',
+      'lib/src/work/work_assembly.dart',
+    ]) {
+      final src = File(path).readAsStringSync();
+      for (final forbidden in const [
+        'ExternalDepHeal',
+        'providesLabel(',
+        '--add-label',
+        '.addLabels(',
+        '.shipExports(',
+        'external.shipped',
+      ]) {
+        expect(src, isNot(contains(forbidden)), reason: '$path: $forbidden');
+      }
+    }
   });
 }

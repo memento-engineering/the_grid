@@ -454,12 +454,14 @@ void main() {
     test('an external row holds its consumer out of ready until the target '
         'store closes an issue carrying provides:<capability>', () async {
       final loud = <String>[];
+      final bridgeFlares = <String>[];
       final grid = FakeSnapshotSource();
       final power = FakeSnapshotSource();
-      final union = FederatedSnapshotSource({
-        'the_grid': grid,
-        'power_station': power,
-      }, onUnresolvedExternalDep: loud.add);
+      final union = FederatedSnapshotSource(
+        {'the_grid': grid, 'power_station': power},
+        onUnresolvedExternalDep: loud.add,
+        onFlare: (name, _) => bridgeFlares.add(name),
+      );
       addTearDown(union.dispose);
 
       const dep = BeadDependency(
@@ -483,6 +485,11 @@ void main() {
         reason: 'pow-9 is open and unshipped',
       );
       expect(loud, isEmpty, reason: 'an unshipped prerequisite is not a fault');
+      expect(
+        bridgeFlares,
+        isEmpty,
+        reason: 'the hold is reported only by the admission authority',
+      );
 
       // CLOSED but not shipped still blocks — the capability is the fact,
       // not the bead's status.
@@ -513,6 +520,7 @@ void main() {
       await settle();
       expect(union.current!.readyIds, contains('tg-1'));
       expect(loud, isEmpty);
+      expect(bridgeFlares, isEmpty);
     });
 
     test('a provides: label on an OPEN bead does NOT ship the capability '

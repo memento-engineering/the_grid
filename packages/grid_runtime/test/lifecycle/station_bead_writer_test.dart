@@ -738,6 +738,7 @@ void main() {
     });
 
     test('close issues `bd close <id> --reason`', () async {
+      runner.exportBeads = [_session('tgdog-sess1')];
       await writer().close('tgdog-sess1', reason: 'session ended');
       final closes = runner.callsFor('close');
       expect(closes, hasLength(1));
@@ -745,6 +746,50 @@ void main() {
       expect(closes.single, containsAllInOrder(['--reason', 'session ended']));
       expect(closes.single, containsAllInOrder(['--actor', 'grid-controller']));
     });
+
+    test(
+      'every station-owned work-close intent uses the atomic core seam',
+      () async {
+        for (final intent in const [
+          'landing-ready',
+          'work-terminal',
+          'vended-operator',
+        ]) {
+          runner = RecordingBdRunner();
+          bd = BdCliService(runner);
+          runner.exportBeads = [
+            Bead(
+              id: 'tgdog-$intent',
+              issueType: IssueType.task,
+              status: BeadStatus.open,
+              labels: const ['export:release-gate', 'export:release-gate'],
+              metadata: const {StationBeadWriter.rigKey: 'tgdog'},
+            ),
+          ];
+
+          await writer().close('tgdog-$intent', reason: intent);
+
+          final updates = runner.callsFor('update');
+          expect(updates, hasLength(1), reason: intent);
+          expect(
+            updates.single,
+            containsAllInOrder([
+              '--status',
+              'closed',
+              '--set-metadata',
+              startsWith('closed_at='),
+              '--add-label',
+              'provides:tgdog-$intent',
+              '--add-label',
+              'provides:release-gate',
+            ]),
+            reason: intent,
+          );
+          expect(runner.callsFor('close'), isEmpty, reason: intent);
+          expect(runner.callsFor('ship'), isEmpty, reason: intent);
+        }
+      },
+    );
 
     test(
       'an owned-rig-MARKER bead (no owned prefix) is still writable',
@@ -816,6 +861,7 @@ void main() {
 
     test('close stamps closed_at (ISO-8601 UTC) BEFORE the bd close (one '
         'serialized chain link)', () async {
+      runner.exportBeads = [_session('tgdog-sess1')];
       await clockedWriter().close('tgdog-sess1', reason: 'done');
       // The closed_at merge update.
       final meta =

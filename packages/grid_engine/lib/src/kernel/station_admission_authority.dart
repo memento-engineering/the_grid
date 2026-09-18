@@ -7,6 +7,7 @@ import '../bridge/trust_guard.dart';
 import '../diagnostics/state_store_deadline.dart';
 import '../domain/joined_snapshot.dart';
 import '../domain/linked_sessions.dart';
+import '../domain/external_dep.dart';
 import '../domain/mount_attempt.dart';
 import '../domain/mount_eligibility.dart';
 import '../domain/rework.dart';
@@ -939,6 +940,7 @@ final class StationAdmissionAuthority {
         BeadOwnershipPredicate(config.ownedSubstations),
         snapshot.sessionsByWorkBead,
       ),
+      externalDepOpenTargetClause(snapshot.graph),
       mountAttemptClause(snapshot.mountAttemptsByWorkBead),
       // THE WORKTREE-OUTSTANDING BARRIER (cut-wiring §W2.4 W2-B), composed at
       // BOTH `composeMountEligibility` sites so the authority and the offline

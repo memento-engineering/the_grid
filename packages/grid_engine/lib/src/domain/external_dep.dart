@@ -1,5 +1,8 @@
 import 'package:beads_dart/beads_dart.dart';
 
+import 'eligibility_basis_revision.dart';
+import 'mount_eligibility.dart';
+
 /// The frontier's reading of bd's NATIVE cross-project dependency rows
 /// (`the_grid#the-grid-is-a-beads-controller`, tg-xh5d).
 ///
@@ -51,6 +54,107 @@ class ExternalDepVerdict {
   /// owns the rising edge, because only it knows what it reported last pass).
   final List<ExternalDepRefusal> refusals;
 }
+
+final class _ExternalDepTarget {
+  const _ExternalDepTarget({
+    required this.consumerId,
+    required this.ref,
+    required this.target,
+  });
+
+  final String consumerId;
+  final ExternalDepRef ref;
+  final Bead target;
+}
+
+Iterable<_ExternalDepTarget> _externalDepTargets(
+  Iterable<BeadDependency> dependencies,
+  Bead? Function(ExternalDepRef ref) targetFor,
+) sync* {
+  for (final dependency in dependencies) {
+    if (!dependency.type.affectsBlocking) continue;
+    final ref = ExternalDepRef.parse(dependency.dependsOnId);
+    if (ref == null) continue;
+    final target = targetFor(ref);
+    if (target == null || target.id != ref.capability) continue;
+    yield _ExternalDepTarget(
+      consumerId: dependency.issueId,
+      ref: ref,
+      target: target,
+    );
+  }
+}
+
+/// The row-named bare closes the admission pass can heal.
+///
+/// Only an id-shaped blocking row qualifies: its capability must exactly name
+/// a core bead in the referenced member store, that bead must be CLOSED, and
+/// it must still omit `provides:<its-own-id>`. Named capabilities, missing
+/// projects or targets, open/non-core targets, already-provided targets and
+/// non-blocking rows are deliberately absent. Results are unique and sorted by
+/// their external wire spelling so the settle rail writes deterministically.
+List<ExternalDepRef> healableExternalDepTargets(
+  Map<String, GraphSnapshot> snapshotsByProject,
+) {
+  final byWire = <String, ExternalDepRef>{};
+  for (final snapshot in snapshotsByProject.values) {
+    for (final row in _externalDepTargets(
+      snapshot.dependencies,
+      (ref) => snapshotsByProject[ref.project]?.beadsById[ref.capability],
+    )) {
+      final target = row.target;
+      if (!target.issueType.isCore ||
+          !target.isClosed ||
+          target.labels.contains(providesLabel(target.id))) {
+        continue;
+      }
+      byWire[row.ref.wire] = row.ref;
+    }
+  }
+  final refs = byWire.values.toList(growable: false)
+    ..sort((left, right) => left.wire.compareTo(right.wire));
+  return refs;
+}
+
+/// Makes an otherwise invisible stamped exact-id hold an eligibility refusal.
+///
+/// A named capability has no exact target bead in the joined graph and keeps
+/// its ordinary silent-until-shipped behaviour. A CLOSED exact target is also
+/// eligible at this clause: the unchanged external-dependency frontier keeps
+/// the consumer out of `readyIds` until the settle rail writes `provides:` and
+/// a refreshed snapshot observes it.
+MountEligibilityPredicate externalDepOpenTargetClause(GraphSnapshot graph) =>
+    (consumer) {
+      final approval = consumer.metadata[kEligibilityApprovalKey];
+      if (approval is! String || approval.isEmpty) {
+        return const MountEligibilityDecision.eligible();
+      }
+      final openTargets = <String>{};
+      for (final row in _externalDepTargets(
+        graph.dependencies,
+        (ref) => graph.beadsById[ref.capability],
+      )) {
+        if (row.consumerId == consumer.id &&
+            row.target.status == BeadStatus.open) {
+          openTargets.add('${row.ref.project}:${row.ref.capability}');
+        }
+      }
+      if (openTargets.isEmpty) {
+        return const MountEligibilityDecision.eligible();
+      }
+      final ordered = openTargets.toList()..sort();
+      return MountEligibilityDecision.refused(
+        clause: 'external-unshipped: ${ordered.first} (target open)',
+      );
+    };
+
+/// Whether [consumer] is stamped and held by an exact-id OPEN external target.
+///
+/// This is intentionally only a reading of [externalDepOpenTargetClause], so
+/// WorkList participation and the canonical mount-eligibility policy cannot
+/// drift into two definitions of the hold.
+bool hasStampedOpenExternalTargetHold(GraphSnapshot graph, Bead consumer) =>
+    externalDepOpenTargetClause(graph)(consumer) is MountRefused;
 
 /// Applies every blocking `external:` row in [dependencies] to [candidates].
 ///
