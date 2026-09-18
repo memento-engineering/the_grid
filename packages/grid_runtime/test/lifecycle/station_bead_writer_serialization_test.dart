@@ -11,6 +11,7 @@
 // tg-eli phase 2). Zero I/O — pure fakes.
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
@@ -167,6 +168,16 @@ const _pourPlan = GraphApplyPlan(
   commitMessage: 'serialization test',
   nodes: <GraphNode>[GraphNode(key: 'root', title: 'Root', type: 'task')],
 );
+
+Future<String> _stationBeadWriterSource() async {
+  final sourceUri = await Isolate.resolvePackageUri(
+    Uri.parse('package:grid_runtime/src/lifecycle/station_bead_writer.dart'),
+  );
+  if (sourceUri == null) {
+    throw StateError('Could not resolve the StationBeadWriter source URI');
+  }
+  return File.fromUri(sourceUri).readAsString();
+}
 
 Future<Map<String, String>> _pour(StationBeadWriter writer, String sessionId) =>
     writer.createMolecule(
@@ -375,9 +386,7 @@ void main() {
 
         expect(runnerA.started, hasLength(1));
         expect(runnerB.started, hasLength(1));
-        final source = File(
-          'lib/src/lifecycle/station_bead_writer.dart',
-        ).readAsStringSync();
+        final source = await _stationBeadWriterSource();
         expect(source, contains('Future<void>? _storePourTail;'));
         expect(source, isNot(contains("import 'dart:io';")));
         expect(source, isNot(contains('DoltQueryService')));
