@@ -18,6 +18,7 @@
 //
 // ignore_for_file: invalid_use_of_protected_member
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
@@ -99,6 +100,97 @@ final class _BlockingDeliveryMethod implements DeliveryMethod {
   }
 }
 
+final class _PersistAttemptBarrier {
+  final entered = Completer<void>();
+  final release = Completer<void>();
+}
+
+/// Records every bd call and pauses each `state=complete` update so a test can
+/// land another tree pass (or teardown) inside the persist's async gap.
+final class _TimeoutCompleteRunner extends RecordingBdRunner {
+  _TimeoutCompleteRunner({
+    required this.timeoutAttempts,
+    required int completionAttempts,
+  }) : barriers = List.generate(
+         completionAttempts,
+         (_) => _PersistAttemptBarrier(),
+       ),
+       super(createdId: 'tgdog-gate1');
+
+  final int timeoutAttempts;
+  final List<_PersistAttemptBarrier> barriers;
+  final List<int> timedOutCompletionAttempts = [];
+  final List<int> landedCompletionAttempts = [];
+  int _nextCompletionAttempt = 0;
+
+  static String? _stateOf(List<String> args) {
+    for (var i = 0; i + 1 < args.length; i++) {
+      if (args[i] == '--set-metadata') {
+        final pair = args[i + 1];
+        final prefix = '${MoleculeStepKeys.state}=';
+        if (pair.startsWith(prefix)) return pair.substring(prefix.length);
+      }
+      if (args[i] == '--metadata') {
+        final metadata = jsonDecode(args[i + 1]) as Map<String, dynamic>;
+        return metadata[MoleculeStepKeys.state]?.toString();
+      }
+    }
+    return null;
+  }
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    final result = await super.run(args, timeout: timeout, stdin: stdin);
+    if (_stateOf(args) != StepState.complete.name) return result;
+
+    final attempt = _nextCompletionAttempt++;
+    if (attempt >= barriers.length) {
+      throw StateError('unexpected completion attempt ${attempt + 1}');
+    }
+    final barrier = barriers[attempt];
+    barrier.entered.complete();
+    await barrier.release.future;
+    if (attempt < timeoutAttempts) {
+      timedOutCompletionAttempts.add(attempt);
+      throw BdTimeoutException(
+        command: args,
+        timeout: const Duration(seconds: 10),
+      );
+    }
+    landedCompletionAttempts.add(attempt);
+    return result;
+  }
+}
+
+/// A passive effect: the test drives each advance explicitly through the real
+/// Host report sink, so no automatic terminal report races the persist probe.
+final class _ManualAdvanceCapability extends Capability {
+  const _ManualAdvanceCapability();
+
+  @override
+  Allocation createAllocation(AllocationInputs inputs) =>
+      _ManualAdvanceAllocation(inputs);
+}
+
+final class _ManualAdvanceAllocation extends Allocation {
+  _ManualAdvanceAllocation(super.inputs);
+
+  @override
+  Future<void> startOrAdopt(TreeContext treeContext) async {
+    state = AllocationState.live;
+  }
+
+  @override
+  Future<void> dispose() async {
+    inputs.args.cancel.cancel();
+    state = AllocationState.gone;
+  }
+}
+
 Future<void> _pump() async {
   for (var i = 0; i < 5; i++) {
     await Future<void>.delayed(Duration.zero);
@@ -112,11 +204,13 @@ Future<void> _pump() async {
 final class _MutableCapabilityRegistry extends StatefulSeed {
   const _MutableCapabilityRegistry({
     required this.initial,
+    required this.replacementFactory,
     required this.onState,
     required this.child,
   });
 
   final CapabilityRegistry initial;
+  final CapabilityRegistry Function() replacementFactory;
   final void Function(_MutableCapabilityRegistryState state) onState;
   final Seed child;
 
@@ -139,13 +233,55 @@ final class _MutableCapabilityRegistryState
   /// reference type with no `==` override and genesis_tree's
   /// `InheritedSeed.updateShouldNotify` is `value != oldSeed.value`, so a
   /// fresh instance reliably re-runs the host's dependency pass.
-  void rebuild() => setState(
-    () => _value = RecordingCapabilityRegistry(clock: DateTime(2026)),
-  );
+  void rebuild() => setState(() => _value = seed.replacementFactory());
 
   @override
   Seed build(TreeContext context) =>
       InheritedSeed<CapabilityRegistry>(value: _value, child: seed.child);
+}
+
+/// Owns the observed cursor and rebuilds the real [CircuitScope] from each
+/// persisted step-bead projection, exactly as the live join does.
+final class _PersistCursorHarness extends StatefulSeed {
+  const _PersistCursorHarness({required this.onState});
+
+  final void Function(_PersistCursorHarnessState state) onState;
+
+  @override
+  State<_PersistCursorHarness> createState() => _PersistCursorHarnessState();
+}
+
+final class _PersistCursorHarnessState extends State<_PersistCursorHarness> {
+  CircuitCursor _cursor = const {};
+
+  @override
+  void initState() => seed.onState(this);
+
+  NodeCursor projectUpdate(Map<String, dynamic> metadata) {
+    final projected = projectMoleculeCursor([
+      Bead(
+        id: _stepBeadId,
+        issueType: GridIssueTypes.step,
+        metadata: {MoleculeStepKeys.path: 'tg-1/agent', ...metadata},
+      ),
+    ]);
+    final node = projected.cursor['tg-1/agent']!;
+    setState(() => _cursor = projected.cursor);
+    return node;
+  }
+
+  @override
+  Seed build(TreeContext context) => InheritedSeed<SessionHandle>(
+    value: const SessionHandle('tgdog-s'),
+    child: InheritedSeed<InheritedCircuit>(
+      value: InheritedCircuit(
+        root: BeadPathKey(const ['tg-1', 'tgdog-s', _stepBeadId]),
+        beadIdByNodePath: const {'tg-1/agent': _stepBeadId},
+        cursor: _cursor,
+      ),
+      child: CircuitScope(circuit: _circuit, cursor: _cursor, nodePath: 'tg-1'),
+    ),
+  );
 }
 
 ({
@@ -163,6 +299,8 @@ _host(ServiceBundle services) {
       value: fakes.ctx,
       child: _MutableCapabilityRegistry(
         initial: RecordingCapabilityRegistry(clock: DateTime(2026)),
+        replacementFactory: () =>
+            RecordingCapabilityRegistry(clock: DateTime(2026)),
         onState: (state) => registryState = state,
         child: InheritedSeed<ServiceBundle>(
           value: services,
@@ -200,6 +338,86 @@ _host(ServiceBundle services) {
   return (owner: owner, root: root, fakes: fakes, registryState: registryState);
 }
 
+Fakes _fakesWithRunner(_TimeoutCompleteRunner runner) {
+  final provider = FakeRuntimeProvider();
+  final git = RecordingGitRunner();
+  final pr = FakePrOpener();
+  final writer = StationBeadWriter(
+    bd: BdCliService(runner),
+    reader: runner,
+    ownership: BeadOwnershipPredicate(const {stateSubstation}),
+  );
+  return (
+    ctx: StationServices(
+      provider: provider,
+      writer: writer,
+      stateSubstation: stateSubstation,
+    ),
+    runner: runner,
+    provider: provider,
+    git: git,
+    pr: pr,
+  );
+}
+
+({
+  TreeOwner owner,
+  Branch root,
+  Fakes fakes,
+  _RecordingTransport transport,
+  _MutableCapabilityRegistryState registryState,
+  _PersistCursorHarnessState cursorState,
+})
+_persistHost(
+  _TimeoutCompleteRunner runner, {
+  required DateTime Function() clock,
+}) {
+  const capability = _ManualAdvanceCapability();
+  CapabilityRegistry registry() => DefaultCapabilityRegistry(
+    capabilities: const {'agent': capability},
+    circuits: {_circuit.id: _circuit},
+    clock: clock,
+  );
+
+  final fakes = _fakesWithRunner(runner);
+  final transport = _RecordingTransport();
+  final owner = TreeOwner();
+  late _MutableCapabilityRegistryState registryState;
+  late _PersistCursorHarnessState cursorState;
+  final root = owner.mountRoot(
+    ProviderScope(
+      child: InheritedSeed<StationServices>(
+        value: fakes.ctx,
+        child: _MutableCapabilityRegistry(
+          initial: registry(),
+          replacementFactory: registry,
+          onState: (state) => registryState = state,
+          child: InheritedSeed<ServiceBundle>(
+            value: ServiceBundle(transport: transport),
+            child: InheritedSeed<Bead>(
+              value: bead('tg-1'),
+              child: InheritedSeed<Workspace>(
+                value: testWorkspace('tg-1'),
+                child: _PersistCursorHarness(
+                  onState: (state) => cursorState = state,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  return (
+    owner: owner,
+    root: root,
+    fakes: fakes,
+    transport: transport,
+    registryState: registryState,
+    cursorState: cursorState,
+  );
+}
+
 Branch _hostBranch(Branch root) {
   Branch? found;
   void walk(Branch b) {
@@ -209,6 +427,42 @@ Branch _hostBranch(Branch root) {
 
   walk(root);
   return found!;
+}
+
+List<Branch> _hostBranches(Branch root) {
+  final found = <Branch>[];
+  void walk(Branch branch) {
+    if (branch.seed is CapabilityHost) found.add(branch);
+    branch.visitChildren(walk);
+  }
+
+  walk(root);
+  return found;
+}
+
+List<Map<String, dynamic>> _stepUpdates(
+  RecordingBdRunner runner,
+  StepState state,
+) {
+  final updates = runner.workUpdates;
+  final found = <Map<String, dynamic>>[];
+  for (var i = 0; i < updates.length; i++) {
+    if (updates[i].length < 2 || updates[i][1] != _stepBeadId) continue;
+    final metadata = runner.metadataOfUpdate(i);
+    if (metadata[MoleculeStepKeys.state] == state.name) found.add(metadata);
+  }
+  return found;
+}
+
+Future<void> _waitUntil(
+  bool Function() predicate, {
+  String reason = 'condition did not become true',
+}) async {
+  for (var i = 0; i < 100; i++) {
+    if (predicate()) return;
+    await Future<void>.delayed(Duration.zero);
+  }
+  fail(reason);
 }
 
 /// Emits `SessionStarted` for [name] then pumps — the handshake
@@ -354,4 +608,221 @@ void main() {
       });
     },
   );
+
+  group('persist-timeout recovery across dependency passes', () {
+    test('a timed-out advance survives a superseding pass, persists restart 1, '
+        'and completes on the next pass', () async {
+      var now = DateTime.utc(2026, 9, 17);
+      final runner = _TimeoutCompleteRunner(
+        timeoutAttempts: 1,
+        completionAttempts: 2,
+      );
+      final h = _persistHost(runner, clock: () => now);
+      addTearDown(() {
+        h.owner.dispose();
+        h.fakes.ctx.dispose();
+        unawaited(h.fakes.provider.close());
+      });
+      await _pump();
+
+      final firstHost = _hostBranch(h.root);
+      final firstState =
+          (firstHost as StatefulBranch).state as CapabilityHostState;
+      firstState.deliverReportForTest(
+        const AllocationAdvanced({'grade': 'pass'}),
+      );
+      await runner.barriers[0].entered.future;
+
+      // Supersede the pass that reported the advance while its store write is
+      // still pending. The host stays mounted and receives a fresh scope.
+      h.registryState.rebuild();
+      h.owner.flush();
+      await _pump();
+      expect(_hostBranch(h.root), same(firstHost));
+
+      runner.barriers[0].release.complete();
+      await _waitUntil(
+        () => _stepUpdates(runner, StepState.failed).isNotEmpty,
+        reason: 'the timeout recovery write never landed',
+      );
+
+      final failed = _stepUpdates(runner, StepState.failed).single;
+      expect(failed[MoleculeStepKeys.restartCount], '1');
+      expect(failed[MoleculeStepKeys.cooldownUntil], isNotNull);
+      expect(runner.timedOutCompletionAttempts, [0]);
+      expect(
+        h.transport.flares.where(
+          (flare) => flare.name == 'step.persistDropped',
+        ),
+        isEmpty,
+      );
+
+      final cooldown = DateTime.parse(
+        '${failed[MoleculeStepKeys.cooldownUntil]}',
+      );
+      now = cooldown.add(const Duration(milliseconds: 1));
+      final recovered = h.cursorState.projectUpdate(failed);
+      expect(recovered.restartCount, 1);
+      expect(recovered.cooldownUntil, cooldown);
+      h.owner.flush();
+      await _pump();
+
+      final retriedHost = _hostBranch(h.root);
+      expect(retriedHost, isNot(same(firstHost)));
+      final retriedState =
+          (retriedHost as StatefulBranch).state as CapabilityHostState;
+      retriedState.deliverReportForTest(
+        const AllocationAdvanced({'grade': 'pass'}),
+      );
+      await runner.barriers[1].entered.future;
+      runner.barriers[1].release.complete();
+      await _waitUntil(
+        () => h.transport.flares.any((flare) => flare.name == 'step.complete'),
+        reason: 'the re-armed advance never completed',
+      );
+
+      expect(runner.landedCompletionAttempts, [1]);
+      expect(_stepUpdates(runner, StepState.complete), hasLength(2));
+      expect(
+        h.transport.flares.where((flare) => flare.name == 'step.persistFailed'),
+        hasLength(1),
+      );
+      expect(
+        h.transport.flares.where((flare) => flare.name == 'step.complete'),
+        hasLength(1),
+      );
+    });
+
+    test('maxRestarts timed-out advances park one persist-exhausted gate and '
+        'stop', () async {
+      var now = DateTime.utc(2026, 9, 17);
+      final runner = _TimeoutCompleteRunner(
+        timeoutAttempts: 3,
+        completionAttempts: 3,
+      );
+      final h = _persistHost(runner, clock: () => now);
+      addTearDown(() {
+        h.owner.dispose();
+        h.fakes.ctx.dispose();
+        unawaited(h.fakes.provider.close());
+      });
+      await _pump();
+
+      for (var attempt = 0; attempt < 3; attempt++) {
+        final host = _hostBranch(h.root);
+        final state = (host as StatefulBranch).state as CapabilityHostState;
+        state.deliverReportForTest(const AllocationAdvanced({'grade': 'pass'}));
+        await runner.barriers[attempt].entered.future;
+
+        h.registryState.rebuild();
+        h.owner.flush();
+        await _pump();
+        expect(_hostBranch(h.root), same(host));
+
+        runner.barriers[attempt].release.complete();
+        if (attempt < 2) {
+          await _waitUntil(
+            () => _stepUpdates(runner, StepState.failed).length == attempt + 1,
+            reason: 'restart ${attempt + 1} was not persisted',
+          );
+          final failed = _stepUpdates(runner, StepState.failed).last;
+          expect(failed[MoleculeStepKeys.restartCount], '${attempt + 1}');
+          final cooldown = DateTime.parse(
+            '${failed[MoleculeStepKeys.cooldownUntil]}',
+          );
+          now = cooldown.add(const Duration(milliseconds: 1));
+          h.cursorState.projectUpdate(failed);
+          h.owner.flush();
+          await _pump();
+        }
+      }
+
+      await _waitUntil(
+        () => h.transport.flares.any((flare) => flare.name == 'step.gated'),
+        reason: 'restart exhaustion never opened a gate',
+      );
+
+      final gated = _stepUpdates(runner, StepState.gated).single;
+      expect(gated[MoleculeStepKeys.restartCount], '3');
+      expect(gated.containsKey(MoleculeStepKeys.cooldownUntil), isFalse);
+      expect(runner.callsFor('create'), hasLength(1));
+      expect(runner.callsFor('close'), isEmpty, reason: 'session stays open');
+
+      final gateUpdate = runner.workUpdates.indexWhere(
+        (call) => call.length > 1 && call[1] == 'tgdog-gate1',
+      );
+      expect(gateUpdate, isNot(-1));
+      final gateMetadata = runner.metadataOfUpdate(gateUpdate);
+      expect(gateMetadata['blocks'], 'tgdog-s');
+      expect(gateMetadata['node'], 'tg-1/agent');
+      expect(gateMetadata['reason'], startsWith('persist-exhausted:'));
+      expect(
+        h.transport.flares.where((flare) => flare.name == 'step.gated'),
+        hasLength(1),
+      );
+
+      h.cursorState.projectUpdate(gated);
+      h.owner.flush();
+      await _pump();
+      expect(_hostBranches(h.root), isEmpty);
+
+      final callCount = runner.calls.length;
+      final flareCount = h.transport.flares.length;
+      h.registryState.rebuild();
+      h.owner.flush();
+      await _pump();
+      expect(runner.calls, hasLength(callCount));
+      expect(h.transport.flares, hasLength(flareCount));
+      expect(
+        h.transport.flares.where((flare) => flare.name == 'step.persistFailed'),
+        hasLength(3),
+      );
+    });
+
+    test('true teardown drops persist recovery loudly', () async {
+      final runner = _TimeoutCompleteRunner(
+        timeoutAttempts: 1,
+        completionAttempts: 1,
+      );
+      final h = _persistHost(runner, clock: () => DateTime.utc(2026, 9, 17));
+      var disposed = false;
+      addTearDown(() {
+        if (!disposed) h.owner.dispose();
+        h.fakes.ctx.dispose();
+        unawaited(h.fakes.provider.close());
+      });
+      await _pump();
+
+      final state =
+          (_hostBranch(h.root) as StatefulBranch).state as CapabilityHostState;
+      state.deliverReportForTest(const AllocationAdvanced({'grade': 'pass'}));
+      await runner.barriers[0].entered.future;
+
+      h.owner.dispose();
+      disposed = true;
+      runner.barriers[0].release.complete();
+      await _waitUntil(
+        () => h.transport.flares.any(
+          (flare) => flare.name == 'step.persistDropped',
+        ),
+        reason: 'teardown did not surface the recovery drop',
+      );
+
+      final dropped = h.transport.flares
+          .where((flare) => flare.name == 'step.persistDropped')
+          .single;
+      expect(dropped.data['op'], 'recover');
+      expect(dropped.data['mounted'], 'false');
+      expect(dropped.data['scopeCurrent'], 'false');
+      expect(_stepUpdates(runner, StepState.failed), isEmpty);
+      expect(_stepUpdates(runner, StepState.gated), isEmpty);
+      expect(runner.callsFor('create'), isEmpty);
+      expect(
+        h.transport.flares.where(
+          (flare) => flare.name == 'step.persistRecoveryFailed',
+        ),
+        isEmpty,
+      );
+    });
+  });
 }

@@ -683,7 +683,7 @@ class CapabilityHostState extends State<CapabilityHost>
   /// flares under its own name and stops. No third write, no recursion.
   Future<void> _superviseFailedPersist(String op, Object error) async {
     try {
-      if (!_guardPersist(op)) return;
+      if (!_guardPersist('recover')) return;
       // The ONE site that knows this `failed` is a dropped STORE WRITE rather
       // than failed work — the tg-7ux conflation the record's `failure_class`
       // splits (§2.3).
@@ -951,8 +951,8 @@ class CapabilityHostState extends State<CapabilityHost>
   }
 
   /// Persists a supervised failure using the resolved per-kind schedule.
-  /// A non-result class parks at a gate at exhaustion instead of leaving an
-  /// unwatched failure; `work` keeps the latch-and-escalate path.
+  /// A non-gradeable failure parks at a gate at exhaustion instead of leaving
+  /// an unwatched failure; substantive `work` keeps the latch-and-escalate path.
   Future<void> _persistFailureClassed(
     String reason, {
     CapabilityFailureKind kind = CapabilityFailureKind.work,
@@ -971,7 +971,14 @@ class CapabilityHostState extends State<CapabilityHost>
     final exhausted = next >= retry.maxRestarts;
     final failureReason = reason.isEmpty ? null : reason;
     final stamps = timing ?? _terminalTiming();
-    if (exhausted && retry.onExhaustion == ExhaustionBehavior.parkAtGate) {
+    // A dropped state-store write produced no gradeable work. Keep the
+    // capability's declared WORK budget/backoff above, but never let that
+    // classification's default latch strand an open session after the store
+    // recovery budget is spent.
+    final parksAtExhaustion =
+        failureClass == StepFailureClass.storeUnavailable ||
+        retry.onExhaustion == ExhaustionBehavior.parkAtGate;
+    if (exhausted && parksAtExhaustion) {
       await _persistExhaustionGate(
         reason: reason,
         failureClass: failureClass,
@@ -1018,8 +1025,8 @@ class CapabilityHostState extends State<CapabilityHost>
     _emitFlare('step.failed', {'failureClass': failureClass.wire});
   }
 
-  /// Parks an exhausted NON-RESULT failure through the shared gate primitive so
-  /// the round remains reworkable.
+  /// Parks an exhausted non-gradeable failure through the shared gate primitive
+  /// so the round remains reworkable.
   Future<void> _persistExhaustionGate({
     required String reason,
     required StepFailureClass failureClass,
