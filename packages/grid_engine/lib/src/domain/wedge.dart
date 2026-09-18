@@ -5,7 +5,8 @@
 /// a threshold. It is DISTINCT from a routine gate-open: one gate with work
 /// still flowing elsewhere is [WedgeState.flowing]; a momentary between-stages
 /// gap is [Stalling]; only a sustained TOTAL stall is [Wedged], and only that
-/// flares (`station.wedged`, ADR-0008 D9's flare primitive).
+/// flares (`station.wedged` on entry and `station.wedgeChanged` when its count
+/// tuple changes, ADR-0008 D9's flare primitive).
 ///
 /// The derivation is PURE and STATION-SIDE: it reads the producer-side
 /// [JoinedSnapshot] the join bridge last pushed (never a pipeline subscription —
@@ -54,6 +55,12 @@ const kDefaultWedgePollInterval = Duration(seconds: 30);
 /// loop). Named like its siblings `session.mintFailed` / `work.throttled`.
 const kWedgedFlare = 'station.wedged';
 
+/// The flare emitted once when the progress-count tuple changes inside one
+/// sustained wedge episode. [kWedgedFlare] remains the episode's rising edge;
+/// this signal makes later growth or contraction actionable without counting
+/// it as another episode.
+const kWedgeChangedFlare = 'station.wedgeChanged';
+
 /// The flare emitted ONCE on the falling edge — forward progress resumed.
 const kUnwedgedFlare = 'station.unwedged';
 
@@ -81,6 +88,10 @@ abstract class WedgeSample with _$WedgeSample {
     /// FUTURE — a supervised restart is SCHEDULED (ADR-0008 D7's restorable
     /// backoff), so the grid IS making forward progress.
     @Default(0) int cooling,
+
+    /// Sorted ids of live sessions with neither a running node nor a future
+    /// cooldown. Null ids from synthetic projections are omitted.
+    @Default(<String>[]) List<String> frozenSessionIds,
   }) = _WedgeSample;
 
   const WedgeSample._();
@@ -195,6 +206,7 @@ WedgeSample sampleWedge(JoinedSnapshot snapshot, {required DateTime now}) {
   var running = 0;
   var gated = 0;
   var cooling = 0;
+  final frozenSessionIds = <String>[];
   for (final session in snapshot.sessionsByWorkBead.values) {
     // A paused session is deliberately not being driven and cannot contribute
     // running work or mask a real station wedge.
@@ -247,11 +259,17 @@ WedgeSample sampleWedge(JoinedSnapshot snapshot, {required DateTime now}) {
     if (isRunning) running++;
     if (isCooling) cooling++;
     if (isGated && !isRunning) gated++;
+    final sessionId = session.sessionId;
+    if (!isRunning && !isCooling && sessionId != null) {
+      frozenSessionIds.add(sessionId);
+    }
   }
+  frozenSessionIds.sort();
   return WedgeSample(
     live: live,
     running: running,
     gated: gated,
     cooling: cooling,
+    frozenSessionIds: frozenSessionIds,
   );
 }

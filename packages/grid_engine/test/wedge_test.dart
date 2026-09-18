@@ -30,6 +30,38 @@ void main() {
       expect(sample.reason, contains('ALL 2'));
     });
 
+    test('sampleWedge exposes sorted frozen session ids', () {
+      final sample = sampleWedge(
+        _join({
+          'work-z': _gated(workBeadId: 'work-z', sessionId: 'tgdog-s-z'),
+          'work-running': _running(
+            workBeadId: 'work-running',
+            sessionId: 'tgdog-s-running',
+          ),
+          'work-cooling': _cooling(
+            workBeadId: 'work-cooling',
+            sessionId: 'tgdog-s-cooling',
+            until: t0.add(const Duration(minutes: 1)),
+          ),
+          'work-paused': _gated(
+            workBeadId: 'work-paused',
+            sessionId: 'tgdog-s-paused',
+            pauseState: SessionPauseState.paused,
+          ),
+          'work-terminal': _gated(
+            workBeadId: 'work-terminal',
+            sessionId: 'tgdog-s-terminal',
+            terminal: true,
+          ),
+          'work-a': _pending(workBeadId: 'work-a', sessionId: 'tgdog-s-a'),
+          'work-null': _pending(workBeadId: 'work-null', sessionId: null),
+        }),
+        now: t0,
+      );
+
+      expect(sample.frozenSessionIds, ['tgdog-s-a', 'tgdog-s-z']);
+    });
+
     test('ONE gate while other work runs → NOT stalled (a routine gate-open is '
         'not a wedge)', () {
       final sample = sampleWedge(
@@ -243,6 +275,55 @@ void main() {
       },
     );
 
+    test('wedge changes inside one episode', () {
+      sessions = {
+        'tg-1': _running(workBeadId: 'tg-1', sessionId: 'tgdog-s1'),
+        'tg-2': _running(workBeadId: 'tg-2', sessionId: 'tgdog-s2'),
+      };
+      monitor.start();
+      expect(monitor.state, isA<Flowing>());
+
+      sessions = {
+        'tg-1': _gated(workBeadId: 'tg-1', sessionId: 'tgdog-s1'),
+        'tg-2': _gated(workBeadId: 'tg-2', sessionId: 'tgdog-s2'),
+      };
+      monitor.poll();
+      clock.advance(const Duration(minutes: 10));
+      timers.fireAll();
+      expect(transport.names, ['station.wedged']);
+
+      sessions['tg-3'] = _gated(workBeadId: 'tg-3', sessionId: 'tgdog-s3');
+      monitor.poll();
+      monitor.poll();
+
+      sessions['tg-1'] = _completedWithRunningSuccessor(
+        workBeadId: 'tg-1',
+        sessionId: 'tgdog-s1',
+      );
+      monitor.poll();
+
+      expect(transport.names, [
+        'station.wedged',
+        'station.wedgeChanged',
+        'station.unwedged',
+      ]);
+      expect(transport.flares[1].data, {
+        'since': t0.toIso8601String(),
+        'reason':
+            'ALL 3 live session(s) parked at a gate; 0 running, 0 cooling '
+            'down — no forward progress',
+        'live': '3',
+        'running': '0',
+        'gated': '3',
+        'cooling': '0',
+        'frozenSessionIds': '["tgdog-s1","tgdog-s2","tgdog-s3"]',
+        'previousLive': '2',
+        'previousRunning': '0',
+        'previousGated': '2',
+        'previousCooling': '0',
+      });
+    });
+
     test(
       'any running session clears the wedge (one station.unwedged), and a NEW '
       'episode flares again',
@@ -386,28 +467,73 @@ Bead _step(
   },
 );
 
-SessionProjection _molecule(List<Bead> steps, {bool terminal = false}) =>
-    SessionProjection(
-      workBeadId: 'tg-x',
-      sessionId: 'tgdog-x',
-      isTerminal: terminal,
-      isMolecule: true,
-      moleculeBeads: steps,
-    );
+SessionProjection _molecule(
+  List<Bead> steps, {
+  String workBeadId = 'tg-x',
+  String? sessionId = 'tgdog-x',
+  SessionPauseState pauseState = SessionPauseState.none,
+  bool terminal = false,
+}) => SessionProjection(
+  workBeadId: workBeadId,
+  sessionId: sessionId,
+  pauseState: pauseState,
+  isTerminal: terminal,
+  isMolecule: true,
+  moleculeBeads: steps,
+);
 
-SessionProjection _gated({bool terminal = false}) => _molecule([
-  _step('tg-x/spec_review', state: StepState.gated),
-], terminal: terminal);
+SessionProjection _gated({
+  String workBeadId = 'tg-x',
+  String? sessionId = 'tgdog-x',
+  SessionPauseState pauseState = SessionPauseState.none,
+  bool terminal = false,
+}) => _molecule(
+  [_step('$workBeadId/spec_review', state: StepState.gated)],
+  workBeadId: workBeadId,
+  sessionId: sessionId,
+  pauseState: pauseState,
+  terminal: terminal,
+);
 
-SessionProjection _running() =>
-    _molecule([_step('tg-x/build', state: StepState.running)]);
+SessionProjection _running({
+  String workBeadId = 'tg-x',
+  String? sessionId = 'tgdog-x',
+}) => _molecule(
+  [_step('$workBeadId/build', state: StepState.running)],
+  workBeadId: workBeadId,
+  sessionId: sessionId,
+);
 
-SessionProjection _pending() =>
-    _molecule([_step('tg-x/build', state: StepState.pending)]);
+SessionProjection _pending({
+  String workBeadId = 'tg-x',
+  String? sessionId = 'tgdog-x',
+}) => _molecule(
+  [_step('$workBeadId/build', state: StepState.pending)],
+  workBeadId: workBeadId,
+  sessionId: sessionId,
+);
 
-SessionProjection _cooling({required DateTime until}) => _molecule([
-  _step('tg-x/build', state: StepState.failed, cooldownUntil: until),
-]);
+SessionProjection _cooling({
+  required DateTime until,
+  String workBeadId = 'tg-x',
+  String? sessionId = 'tgdog-x',
+}) => _molecule(
+  [_step('$workBeadId/build', state: StepState.failed, cooldownUntil: until)],
+  workBeadId: workBeadId,
+  sessionId: sessionId,
+);
+
+SessionProjection _completedWithRunningSuccessor({
+  required String workBeadId,
+  required String sessionId,
+}) => _molecule(
+  [
+    _step('$workBeadId/spec_review', state: StepState.complete),
+    _step('$workBeadId/build', state: StepState.running),
+  ],
+  workBeadId: workBeadId,
+  sessionId: sessionId,
+);
 
 /// A hand-driven clock (Fakes, not mocks).
 class _FakeClock {
