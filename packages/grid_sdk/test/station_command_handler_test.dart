@@ -1309,7 +1309,20 @@ void main() {
               const Bead(
                 id: 'tgdog-session',
                 issueType: GridIssueTypes.session,
-                metadata: {'rig': 'tgdog'},
+                metadata: {
+                  'rig': 'tgdog',
+                  SessionBeadKeys.model: kSessionModelMolecule,
+                },
+              ),
+              const Bead(
+                id: 'tgdog-route-step',
+                issueType: GridIssueTypes.step,
+                metadata: {
+                  'rig': 'tgdog',
+                  MoleculeStepKeys.session: 'tgdog-session',
+                  MoleculeStepKeys.path: 'route/committee',
+                  MoleculeStepKeys.state: 'gated',
+                },
               ),
             ]),
           ),
@@ -1433,6 +1446,119 @@ void main() {
           ),
         ),
         GateCloseCause.unclassified,
+      );
+    });
+
+    test('resolve preflight couples gate close to a clearing ruling', () async {
+      const session = Bead(
+        id: 'tgdog-session',
+        issueType: GridIssueTypes.session,
+        metadata: {
+          'rig': 'tgdog',
+          SessionBeadKeys.model: kSessionModelMolecule,
+        },
+      );
+      const gate = Bead(
+        id: 'tgdog-gate',
+        issueType: GridIssueTypes.gate,
+        metadata: {
+          'node': 'tg-1/review/route',
+          'blocks': 'tgdog-session',
+          'rig': 'tgdog',
+        },
+      );
+      final ownF = Bead(
+        id: 'tgdog-route-step',
+        issueType: GridIssueTypes.step,
+        metadata: {
+          'rig': 'tgdog',
+          MoleculeStepKeys.session: 'tgdog-session',
+          MoleculeStepKeys.path: 'tg-1/review/route',
+          MoleculeStepKeys.state: StepState.gated.name,
+          ...nodeResultMetadata('tg-1/review/route', const {
+            ResultKeys.grade: 'F',
+          }),
+        },
+      );
+      final ownRunner = _RecordingRunner();
+      final ownResult = await _handler(
+        state: _Source(_snapshot([gate, session, ownF])),
+        work: _Source(_snapshot(const [])),
+        stateRunner: ownRunner,
+        workRunner: _RecordingRunner(),
+      )(const GridCommandRequest.resolveGate(gateId: 'tgdog-gate'));
+      expect(
+        ownResult,
+        isA<GridCommandRefused>()
+            .having((result) => result.code, 'code', 'feeding_grade_f')
+            .having(
+              (result) => result.message,
+              'message',
+              allOf(
+                contains('tgdog-session'),
+                contains('tg-1/review/route'),
+                contains('--grade tg-1/review/route=A'),
+                contains('--rationale'),
+                contains('grid rework'),
+              ),
+            ),
+      );
+      expect(ownRunner.calls, isEmpty);
+
+      final feedingF = Bead(
+        id: 'tgdog-validation-step',
+        issueType: GridIssueTypes.step,
+        metadata: {
+          'rig': 'tgdog',
+          MoleculeStepKeys.session: 'tgdog-session',
+          MoleculeStepKeys.path: 'tg-1/review/code-validation',
+          MoleculeStepKeys.state: StepState.complete.name,
+          ...nodeResultMetadata('tg-1/review/code-validation', const {
+            ResultKeys.grade: 'F',
+          }),
+        },
+      );
+      final feedingRunner = _RecordingRunner();
+      final feedingResult =
+          await _handler(
+            state: _Source(_snapshot([gate, session, ownF, feedingF])),
+            work: _Source(_snapshot(const [])),
+            stateRunner: feedingRunner,
+            workRunner: _RecordingRunner(),
+          )(
+            const GridCommandRequest.resolveGate(
+              gateId: 'tgdog-gate',
+              grades: {'route': 'A', 'code-validation': 'A'},
+              rationale: 'operator cleared both invalidating lanes',
+            ),
+          );
+      expect(feedingResult, isA<GridCommandCompleted>());
+
+      final mutations = feedingRunner.calls
+          .where((call) => !call.contains('--help'))
+          .toList(growable: false);
+      expect(
+        mutations.map((call) => (call.first, call[1])).toList(),
+        const [
+          ('update', 'tgdog-session'),
+          ('update', 'tgdog-session'),
+          ('update', 'tgdog-gate'),
+          ('update', 'tgdog-gate'),
+          ('close', 'tgdog-gate'),
+        ],
+        reason: 'every clearing ruling must precede the guarded gate close',
+      );
+      expect(
+        mutations[0].join(' '),
+        contains('grid.result.tg_h1_sreview_sroute.grade=A'),
+      );
+      expect(
+        mutations[1].join(' '),
+        contains('grid.result.tg_h1_sreview_scode_hvalidation.grade=A'),
+      );
+      expect(
+        mutations[2].join(' '),
+        contains('grid.gate.close_cause=adjudicated'),
       );
     });
 
@@ -2002,7 +2128,7 @@ void main() {
       ),
     );
     test(
-      'unruled feeding F remains',
+      'unreachable live gate scope refuses without a write',
       () => refused(
         snapshot: _snapshot([
           const Bead(
@@ -2017,15 +2143,14 @@ void main() {
           const Bead(
             id: 'tgdog-session',
             issueType: GridIssueTypes.session,
-            metadata: {'rig': 'tgdog', 'grid.result.route/critic.grade': 'F'},
+            metadata: {
+              'rig': 'tgdog',
+              SessionBeadKeys.model: kSessionModelMolecule,
+            },
           ),
         ]),
-        request: const GridCommandRequest.resolveGate(
-          gateId: 'tgdog-gate',
-          grades: {'reviewer': 'A'},
-          rationale: 'override reviewer only',
-        ),
-        code: 'feeding_grade_f',
+        request: const GridCommandRequest.resolveGate(gateId: 'tgdog-gate'),
+        code: 'gate_resume_unavailable',
       ),
     );
     test(
@@ -2044,7 +2169,20 @@ void main() {
           const Bead(
             id: 'tgdog-session',
             issueType: GridIssueTypes.session,
-            metadata: {'rig': 'tgdog'},
+            metadata: {
+              'rig': 'tgdog',
+              SessionBeadKeys.model: kSessionModelMolecule,
+            },
+          ),
+          const Bead(
+            id: 'tgdog-route-step',
+            issueType: GridIssueTypes.step,
+            metadata: {
+              'rig': 'tgdog',
+              MoleculeStepKeys.session: 'tgdog-session',
+              MoleculeStepKeys.path: 'route/committee',
+              MoleculeStepKeys.state: 'gated',
+            },
           ),
         ]),
         request: const GridCommandRequest.resolveGate(

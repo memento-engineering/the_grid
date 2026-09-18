@@ -291,18 +291,49 @@ void main() {
       expect(client.calls, 0);
     });
 
-    test('resident resolve refusal is loud', () async {
+    test('unreachable session refusal is printed on stdout', () async {
+      final output = <String>[];
+      final errors = <String>[];
+      final client = FakeClient(
+        const StationCommandRefused(
+          'Session "tranquility-9ivu4" has no reachable live scope for gated '
+          'node "pow-oggr/review/route"; use grid rework instead.',
+        ),
+      );
+      expect(
+        await runGateResolve(
+          gridRoot: '/grid',
+          gateId: 'g-1',
+          client: client,
+          out: output.add,
+          err: errors.add,
+        ),
+        64,
+      );
+      expect(output, hasLength(1));
+      expect(output.single, contains('tranquility-9ivu4'));
+      expect(output.single, contains('grid rework'));
+      expect(errors, isEmpty);
+      expect(client.calls, 1);
+    });
+
+    test('resident unavailable stays on stderr', () async {
+      final output = <String>[];
       final errors = <String>[];
       expect(
         await runGateResolve(
           gridRoot: '/grid',
           gateId: 'g-1',
-          client: FakeClient(const StationCommandRefused('no gate g-1')),
+          client: FakeClient(
+            const StationCommandUnavailable('station.lock is absent'),
+          ),
+          out: output.add,
           err: errors.add,
         ),
         64,
       );
-      expect(errors.single, contains('no gate g-1'));
+      expect(output, isEmpty);
+      expect(errors.single, contains('station.lock is absent'));
     });
   });
 

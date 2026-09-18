@@ -27,6 +27,12 @@ import 'dart:async';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/src/molecule/live_frontier.dart'
+    show derivedEscalation;
+import 'package:grid_engine/src/molecule/molecule_codec.dart'
+    show activeStepBeadsByPath, supersedesDepthByPath;
+import 'package:grid_engine/src/molecule/molecule_schema.dart'
+    show kValidatesParam;
 import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
@@ -54,13 +60,16 @@ GraphSnapshot _work(List<Bead> beads, Set<String> ready, {int tick = 0}) =>
       capturedAt: DateTime.fromMillisecondsSinceEpoch(tick),
     );
 
-GraphSnapshot _state(List<Bead> beads, {int tick = 0}) =>
-    GraphSnapshot.fromParts(
-      beads: beads,
-      dependencies: const [],
-      readyIds: const [],
-      capturedAt: DateTime.fromMillisecondsSinceEpoch(tick),
-    );
+GraphSnapshot _state(
+  List<Bead> beads, {
+  List<BeadDependency> dependencies = const [],
+  int tick = 0,
+}) => GraphSnapshot.fromParts(
+  beads: beads,
+  dependencies: dependencies,
+  readyIds: const [],
+  capturedAt: DateTime.fromMillisecondsSinceEpoch(tick),
+);
 
 /// A MOLECULE session bead (tg-eli phase 2: the flat cursor model is
 /// retired), linked to [workBead] — its OWN parked state lives on a
@@ -202,6 +211,30 @@ final class _DroppedAckSink implements TrajectoryAckRecordSink {
   }
 }
 
+final class _AckedSink implements TrajectoryAckRecordSink {
+  @override
+  bool get accepting => true;
+
+  @override
+  void enqueue(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+  }) {}
+
+  @override
+  Future<TrajectoryAppendResult> appendAcked(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+    required bool decisionBearing,
+  }) async => const TrajectoryAppendResult.acked();
+}
+
 class _RulingAwareRoute extends RouteCapability {
   const _RulingAwareRoute(this.lane, this.log);
 
@@ -239,6 +272,112 @@ class _RulingAwareRegistry implements CapabilityRegistry {
   @override
   DateTime now() => DateTime(2026);
 }
+
+const _reviewResumeRoot = Circuit(
+  id: 'resume-root',
+  terminalStepId: 'later',
+  steps: [
+    SubCircuitStep(stepId: 'review', circuitId: 'resume-review'),
+    CapabilityStep(
+      stepId: 'deliver',
+      capabilityId: 'deliver',
+      dependsOn: {'review'},
+    ),
+    SubCircuitStep(stepId: 'later', circuitId: 'later-review'),
+  ],
+);
+
+const _reviewResumeCircuit = Circuit(
+  id: 'resume-review',
+  terminalStepId: 'critic',
+  steps: [
+    CapabilityStep(stepId: 'route', capabilityId: 'route'),
+    CapabilityStep(
+      stepId: 'critic',
+      capabilityId: 'critic',
+      dependsOn: {'route'},
+      params: {kValidatesParam: 'route'},
+    ),
+  ],
+);
+
+const _laterReviewCircuit = Circuit(
+  id: 'later-review',
+  terminalStepId: 'later-route',
+  steps: [
+    CapabilityStep(stepId: 'target', capabilityId: 'target'),
+    CapabilityStep(
+      stepId: 'later-route',
+      capabilityId: 'later-route',
+      dependsOn: {'target'},
+      params: {kValidatesParam: 'target'},
+    ),
+  ],
+);
+
+class _ResumeRoute extends RouteCapability {
+  int runs = 0;
+
+  @override
+  Future<RouteVerdict> route(TreeContext context, StepArgs args) async {
+    runs += 1;
+    final siblings =
+        context.getInheritedSeedOfExactType<SiblingView>() ??
+        const SiblingView();
+    final ruling = siblings.resultOf('tg-1/review/critic');
+    return ruling[ResultKeys.grade] == 'A'
+        ? Advance({
+            ResultKeys.grade: 'A',
+            ResultKeys.transport:
+                ruling[ResultKeys.transport] ?? kOperatorRulingTransport,
+          })
+        : const Escalate('critic still invalidates review route');
+  }
+}
+
+class _CountingSuccess extends ServiceCapability {
+  int runs = 0;
+
+  @override
+  Future<StepOutcome> run(TreeContext context, StepArgs args) async {
+    runs += 1;
+    return const Ok();
+  }
+}
+
+class _ResumeRegistry implements CapabilityRegistry {
+  _ResumeRegistry({required this.route, required this.deliver});
+
+  final _ResumeRoute route;
+  final _CountingSuccess deliver;
+
+  @override
+  Circuit? circuit(String circuitId) => switch (circuitId) {
+    'resume-review' => _reviewResumeCircuit,
+    'later-review' => _laterReviewCircuit,
+    _ => null,
+  };
+
+  @override
+  Seed host(StepMount mount) => switch (mount.step.capabilityId) {
+    'route' => CapabilityHost(capability: route, mount: mount, key: mount.key),
+    'deliver' => CapabilityHost(
+      capability: deliver,
+      mount: mount,
+      key: mount.key,
+    ),
+    _ => const Idle(),
+  };
+
+  @override
+  DateTime now() => DateTime(2026);
+}
+
+BeadDependency _supersedes(String successor, String prior) => BeadDependency(
+  issueId: successor,
+  dependsOnId: prior,
+  type: DependencyType.supersedes,
+);
 
 /// A [BdRunner] that FAILS the first [failUpdates] `update` calls (throwing, as
 /// a live `bd` blip would) then succeeds — so a test can drive a DROPPED re-arm
@@ -286,6 +425,7 @@ StationServices _ctxOver(BdRunner runner) => StationServices(
   required CapabilityRegistry registry,
   ServiceBundle services = const ServiceBundle(),
   TrajectoryRecorderScope? trajectoryScope,
+  SessionResolver? circuitResolver,
 }) {
   final owner = TreeOwner();
   final root = owner.mountRoot(
@@ -297,7 +437,7 @@ StationServices _ctxOver(BdRunner runner) => StationServices(
           child: InheritedSeed<CapabilityRegistry>(
             value: registry,
             child: InheritedSeed<SessionResolver>(
-              value: CircuitResolver((_) => _code),
+              value: circuitResolver ?? CircuitResolver((_) => _code),
               child: InheritedSeed<TrajectoryRecorderScope>(
                 value: trajectoryScope ?? TrajectoryRecorderScope.disabled,
                 child: Station([
@@ -577,6 +717,300 @@ void main() {
           isEmpty,
         );
         expect(runner.callsFor('create'), isEmpty);
+      },
+    );
+
+    test(
+      'resolved derivation gate re-arms before terminal scheduling resumes',
+      () async {
+        const sessionId = 'tgdog-s';
+        const routePath = 'tg-1/review/route';
+        const criticPath = 'tg-1/review/critic';
+        const deliverPath = 'tg-1/deliver';
+        const laterTargetPath = 'tg-1/later/target';
+        const laterRoutePath = 'tg-1/later/later-route';
+        final dependencies = <BeadDependency>[
+          _supersedes('tgdog-review-route-1', 'tgdog-review-route-0'),
+          _supersedes('tgdog-review-route-2', 'tgdog-review-route-1'),
+          _supersedes('tgdog-review-route-3', 'tgdog-review-route-2'),
+          _supersedes('tgdog-review-critic-1', 'tgdog-review-critic-0'),
+          _supersedes('tgdog-review-critic-2', 'tgdog-review-critic-1'),
+          _supersedes('tgdog-review-critic-3', 'tgdog-review-critic-2'),
+          _supersedes('tgdog-later-target-1', 'tgdog-later-target-0'),
+          _supersedes('tgdog-later-target-2', 'tgdog-later-target-1'),
+          _supersedes('tgdog-later-target-3', 'tgdog-later-target-2'),
+          _supersedes('tgdog-later-route-1', 'tgdog-later-route-0'),
+          _supersedes('tgdog-later-route-2', 'tgdog-later-route-1'),
+          _supersedes('tgdog-later-route-3', 'tgdog-later-route-2'),
+        ];
+        final ruling = operatorRulingMetadata(
+          criticPath,
+          grade: 'A',
+          rationale: 'operator accepted the pre-existing finding',
+          evidenceSession: sessionId,
+        );
+
+        List<Bead> stateBeads({
+          required bool gateClosed,
+          Map<String, String> sessionResults = const {},
+          StepState routeState = StepState.gated,
+          Map<String, String> routeResults = const {},
+          StepState laterRouteState = StepState.pending,
+          Map<String, String> laterRouteResults = const {},
+        }) => [
+          _gatedSession(sessionId, workBead: 'tg-1', results: sessionResults),
+          _stepBead(
+            'tgdog-review-root',
+            sessionId: sessionId,
+            path: 'tg-1/review',
+            state: StepState.pending,
+          ),
+          for (var generation = 0; generation < kMaxReworkRounds; generation++)
+            _stepBead(
+              'tgdog-review-route-$generation',
+              sessionId: sessionId,
+              path: routePath,
+              state: StepState.complete,
+              results: const {ResultKeys.grade: 'B'},
+            ),
+          _stepBead(
+            'tgdog-review-route-3',
+            sessionId: sessionId,
+            path: routePath,
+            state: routeState,
+            results: routeResults,
+          ),
+          for (var generation = 0; generation < kMaxReworkRounds; generation++)
+            _stepBead(
+              'tgdog-review-critic-$generation',
+              sessionId: sessionId,
+              path: criticPath,
+              state: StepState.complete,
+              results: const {ResultKeys.grade: 'B'},
+            ),
+          _stepBead(
+            'tgdog-review-critic-3',
+            sessionId: sessionId,
+            path: criticPath,
+            state: StepState.complete,
+            results: const {ResultKeys.grade: 'F'},
+          ),
+          _stepBead(
+            'tgdog-deliver-step',
+            sessionId: sessionId,
+            path: deliverPath,
+            state: StepState.pending,
+          ),
+          _stepBead(
+            'tgdog-later-root',
+            sessionId: sessionId,
+            path: 'tg-1/later',
+            state: StepState.pending,
+          ),
+          for (var generation = 0; generation < kMaxReworkRounds; generation++)
+            _stepBead(
+              'tgdog-later-target-$generation',
+              sessionId: sessionId,
+              path: laterTargetPath,
+              state: StepState.complete,
+              results: const {ResultKeys.grade: 'B'},
+            ),
+          _stepBead(
+            'tgdog-later-target-3',
+            sessionId: sessionId,
+            path: laterTargetPath,
+            state: StepState.complete,
+          ),
+          for (var generation = 0; generation < kMaxReworkRounds; generation++)
+            _stepBead(
+              'tgdog-later-route-$generation',
+              sessionId: sessionId,
+              path: laterRoutePath,
+              state: StepState.complete,
+              results: const {ResultKeys.grade: 'B'},
+            ),
+          _stepBead(
+            'tgdog-later-route-3',
+            sessionId: sessionId,
+            path: laterRoutePath,
+            state: laterRouteState,
+            results: laterRouteResults,
+          ),
+          Bead(
+            id: 'tgdog-review-gate',
+            issueType: GridIssueTypes.gate,
+            status: gateClosed ? BeadStatus.closed : BeadStatus.open,
+            metadata: const {
+              'rig': stateSubstation,
+              'blocks': sessionId,
+              'node': routePath,
+            },
+          ),
+        ];
+
+        final runner = RecordingBdRunner(createdId: 'derived-gate');
+        final ctx = _ctxOver(runner);
+        final route = _ResumeRoute();
+        final deliver = _CountingSuccess();
+        final registry = _ResumeRegistry(route: route, deliver: deliver);
+        final work = FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'}));
+        final state = FakeSnapshotSource(
+          _state(stateBeads(gateClosed: false), dependencies: dependencies),
+        );
+        final bridge = StationJoinBridge(work: work, state: state)..start();
+        addTearDown(bridge.dispose);
+        final mounted = _mountFull(
+          joined: bridge.notifier,
+          ctx: ctx,
+          registry: registry,
+          circuitResolver: CircuitResolver((_) => _reviewResumeRoot),
+          trajectoryScope: TrajectoryRecorderScope(
+            StationTrajectoryRecorder(
+              sink: _AckedSink(),
+              substationPrefixes: const {'tgdog'},
+              clock: () => DateTime(2026),
+            ),
+          ),
+        );
+        addTearDown(mounted.owner.dispose);
+
+        Future<void> settle() async {
+          await _pump();
+          mounted.owner.flush();
+          await _pump();
+        }
+
+        int pendingRouteWrites() {
+          var count = 0;
+          for (
+            var index = 0;
+            index < runner.callsFor('update').length;
+            index++
+          ) {
+            final call = runner.callsFor('update')[index];
+            if (call.length > 1 &&
+                call[1] == 'tgdog-review-route-3' &&
+                runner.metadataOfUpdate(index)[MoleculeStepKeys.state] ==
+                    StepState.pending.name) {
+              count += 1;
+            }
+          }
+          return count;
+        }
+
+        int gateCreates() => runner
+            .callsFor('create')
+            .where(
+              (call) =>
+                  call.contains('--type') &&
+                  call.contains(GridIssueTypes.gate.wire),
+            )
+            .length;
+
+        await settle();
+        final firstCycleGateCreates = gateCreates();
+        expect(firstCycleGateCreates, greaterThanOrEqualTo(1));
+        expect(pendingRouteWrites(), 0);
+
+        state.push(
+          _state(
+            stateBeads(gateClosed: true),
+            dependencies: dependencies,
+            tick: 1,
+          ),
+        );
+        await settle();
+        expect(
+          pendingRouteWrites(),
+          0,
+          reason: 'a closed gate alone remains held by the critic F stamp',
+        );
+
+        state.push(
+          _state(
+            stateBeads(gateClosed: true, sessionResults: ruling),
+            dependencies: dependencies,
+            tick: 2,
+          ),
+        );
+        await settle();
+        expect(pendingRouteWrites(), 1);
+
+        final secondCycleBeads = stateBeads(
+          gateClosed: true,
+          sessionResults: ruling,
+          routeState: StepState.pending,
+          laterRouteState: StepState.complete,
+          laterRouteResults: const {ResultKeys.grade: 'F'},
+        );
+        final projected = projectMoleculeCursor(
+          secondCycleBeads,
+          dependencies: dependencies,
+        );
+        final activeResults = <String, Map<String, String>>{};
+        for (final step in activeStepBeadsByPath(
+          secondCycleBeads,
+          dependencies,
+        ).values) {
+          activeResults.addAll(projectCircuitResults(step));
+        }
+        expect(
+          derivedEscalation(
+            _reviewResumeRoot,
+            projected.cursor,
+            mergeOperatorRulings(
+              activeResults,
+              projectCircuitResults(secondCycleBeads.first),
+            ),
+            'tg-1',
+            circuitById: registry.circuit,
+            supersedesDepthByPath: supersedesDepthByPath(
+              secondCycleBeads,
+              dependencies,
+            ),
+            spentReworkRoundsByPath: supersedesVerdictCountByPath(
+              secondCycleBeads,
+              dependencies,
+            ),
+          )?.path,
+          laterTargetPath,
+        );
+        state.push(
+          _state(secondCycleBeads, dependencies: dependencies, tick: 3),
+        );
+        await settle();
+        expect(route.runs, 1);
+        expect(
+          gateCreates(),
+          greaterThan(firstCycleGateCreates),
+          reason:
+              'the acknowledged re-arm clears the terminal latch so a later '
+              'derived escalation can mint its own gate',
+        );
+
+        state.push(
+          _state(
+            stateBeads(
+              gateClosed: true,
+              sessionResults: ruling,
+              routeState: StepState.complete,
+              routeResults: const {
+                ResultKeys.grade: 'A',
+                ResultKeys.transport: kOperatorRulingTransport,
+              },
+              laterRouteState: StepState.complete,
+              laterRouteResults: const {ResultKeys.grade: 'F'},
+            ),
+            dependencies: dependencies,
+            tick: 4,
+          ),
+        );
+        await settle();
+        expect(
+          deliver.runs,
+          1,
+          reason: 'deliver starts on the second post-ruling state tick',
+        );
       },
     );
 
