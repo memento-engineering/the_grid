@@ -7,6 +7,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'bead_board.dart';
 import 'bead_round.dart';
 import 'command_operation.dart';
+import 'work_bead_keys.dart';
 import '../roster/roster_outcome.dart';
 import '../roster/substation_roster.dart';
 import '../work/work_assembly.dart' show SubstationWorkSpec;
@@ -1420,36 +1421,164 @@ final class StationCommandHandler implements GridCommandHandler {
       return _refused('ownership_refused', error.toString());
     }
 
-    // A resident-internal caller can issue this command inside the current
-    // projection/flush turn. Publish both durable mutation rails now: the
-    // state re-key lets the join retire beadId#rN, while the work refresh
-    // supplies the post-decision ready snapshot required to mint its successor.
-    await Future.wait(<Future<void>>[_refreshState(), workStore.refresh()]);
+    // Subscribe BEFORE reading `current`: the rail is non-replaying and may
+    // publish synchronously during either refresh. This ordering closes both
+    // gaps (publish-before-listen and publish-between-read-and-listen) without
+    // adding a second state accessor or mint path.
+    GraphSnapshot? latestState;
+    final successorObserved = Completer<void>();
+    void observeState(GraphSnapshot snapshot) {
+      latestState = snapshot;
+      if (_openReworkSuccessors(
+            snapshot,
+            beadId: beadId,
+            retiredSessionId: session.id,
+          ).isNotEmpty &&
+          !successorObserved.isCompleted) {
+        successorObserved.complete();
+      }
+    }
 
-    return GridCommandResult.completed(
-      message: reapFailure == null
-          ? 'Rework round $round retired session "${session.id}".'
-          : 'Rework round $round retired session "${session.id}" — but its '
-                'molecule reap FAILED (open step beads remain; sweep them): '
-                '$reapFailure',
-      value: {
-        'operation': 'grid/rework',
-        'beadId': beadId,
-        'sessionId': session.id,
-        'round': round,
-        'closedSession': {'sessionId': session.id, 'reason': 'reworked'},
-        'closedGates': [
-          for (final receipt in closedGates)
-            {
-              'gateId': receipt.gateId,
-              'sessionId': receipt.sessionId,
-              'cause': receipt.cause.wireValue,
-            },
-        ],
-        if (reapFailure != null) 'reapFailure': reapFailure,
-      },
+    final stateSubscription = _stateSource.snapshots.listen(
+      observeState,
+      onError: (Object _, StackTrace __) {},
     );
+    latestState = _stateSource.current;
+    try {
+      // A resident-internal caller can issue this command inside the current
+      // projection/flush turn. Publish both durable mutation rails now: the
+      // state re-key lets the join retire beadId#rN, while the work refresh
+      // supplies the post-decision ready snapshot required to mint its
+      // successor.
+      await Future.wait(<Future<void>>[_refreshState(), workStore.refresh()]);
+      latestState = _stateSource.current ?? latestState;
+
+      final refreshedWork = workStore.source.current;
+      final refreshedWorkBead = refreshedWork?.bead(beadId);
+      final approvalRev = refreshedWorkBead == null
+          ? null
+          : beadMetadataText(refreshedWorkBead, WorkBeadKeys.approvedRev);
+      if (approvalRev == null) {
+        return _reworkSuccessorUnobserved(
+          predecessorId: session.id,
+          retiredKey: reworkKeyFor(beadId, round),
+          detail: 'the refreshed filing has no current approval revision',
+        );
+      }
+
+      List<Bead> successors() => _openReworkSuccessors(
+        latestState,
+        beadId: beadId,
+        retiredSessionId: session.id,
+      );
+
+      var observedSuccessors = successors();
+      // A43/A47/A48: ready + no live session IS the governor's pending bin.
+      // It is a successful rework outcome, not a missing mint and not a reason
+      // to wait out the engine's freshness grace. Admission may legitimately
+      // be later than that grace when slots are full or an earlier candidate
+      // wins.
+      final pendingAdmission =
+          observedSuccessors.isEmpty &&
+          refreshedWork!.readyIds.contains(beadId);
+      if (observedSuccessors.isEmpty && !pendingAdmission) {
+        // Outside the pending bin, give an already-started mint the engine's
+        // own freshness window to surface. The deadline is evidence-only: it
+        // never retries or mutates the already-retired predecessor.
+        await successorObserved.future.timeout(
+          SessionScopeState.freshMintSnapshotGrace,
+          onTimeout: () {},
+        );
+        latestState = _stateSource.current ?? latestState;
+        observedSuccessors = successors();
+      }
+      if (observedSuccessors.length > 1) {
+        return _reworkSuccessorUnobserved(
+          predecessorId: session.id,
+          retiredKey: reworkKeyFor(beadId, round),
+          detail:
+              '${observedSuccessors.length} open successor sessions were '
+              'observed for "$beadId"',
+        );
+      }
+      if (observedSuccessors.isEmpty && !pendingAdmission) {
+        return _reworkSuccessorUnobserved(
+          predecessorId: session.id,
+          retiredKey: reworkKeyFor(beadId, round),
+          detail: 'no open successor or pending-admission verdict was observed',
+        );
+      }
+
+      final successor = observedSuccessors.singleOrNull;
+      return GridCommandResult.completed(
+        message: reapFailure == null
+            ? 'Rework round $round retired session "${session.id}".'
+            : 'Rework round $round retired session "${session.id}" — but its '
+                  'molecule reap FAILED (open step beads remain; sweep them): '
+                  '$reapFailure',
+        value: {
+          'operation': 'grid/rework',
+          'beadId': beadId,
+          'sessionId': session.id,
+          'round': round,
+          'closedSession': {
+            'sessionId': session.id,
+            'reason': 'reworked',
+            'disposition': 'voided',
+          },
+          'closedGates': [
+            for (final receipt in closedGates)
+              {
+                'gateId': receipt.gateId,
+                'sessionId': receipt.sessionId,
+                'cause': receipt.cause.wireValue,
+              },
+          ],
+          if (successor != null)
+            'successorSession': {
+              'sessionId': successor.id,
+              'workBeadId': beadId,
+              'approvalRev': approvalRev,
+            }
+          else
+            'pendingAdmission': {
+              'workBeadId': beadId,
+              'approvalRev': approvalRev,
+            },
+          if (reapFailure != null) 'reapFailure': reapFailure,
+        },
+      );
+    } finally {
+      await stateSubscription.cancel();
+    }
   }
+
+  static List<Bead> _openReworkSuccessors(
+    GraphSnapshot? snapshot, {
+    required String beadId,
+    required String retiredSessionId,
+  }) => snapshot == null
+      ? const []
+      : snapshot.beads
+            .where(
+              (bead) =>
+                  bead.id != retiredSessionId &&
+                  bead.issueType == GridIssueTypes.session &&
+                  !bead.isClosed &&
+                  linkedWorkBeadKeyOf(projectSession(bead)) == beadId,
+            )
+            .toList(growable: false);
+
+  static GridCommandResult _reworkSuccessorUnobserved({
+    required String predecessorId,
+    required String retiredKey,
+    required String detail,
+  }) => _refused(
+    'rework_successor_unobserved',
+    'Session "$predecessorId" is already voided and re-keyed to '
+        '"$retiredKey", but $detail. Do not run rework again; inspect '
+        'resident admission and session state.',
+  );
 
   /// The row `JoinedSnapshot` would publish for [linked], resolved through the
   /// engine's own `orderLinkedSessions` over `projectSession`.

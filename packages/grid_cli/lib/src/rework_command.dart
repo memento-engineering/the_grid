@@ -113,29 +113,62 @@ class ReworkCommand extends Command<int> {
     );
     switch (result) {
       case StationCommandCompleted(:final value):
-        final closedSession = switch (value['closedSession']) {
-          final Map<Object?, Object?> row => row.cast<String, Object?>(),
-          _ => const <String, Object?>{},
-        };
-        if (closedSession case {
-          'sessionId': final Object sessionId,
-          'reason': final Object reason,
-        }) {
-          stdout.writeln('grid rework — closed session $sessionId ($reason).');
+        final beadId = args.rest.single;
+        final closedSession = _stringMap(value['closedSession']);
+        final sessionId = _nonEmptyText(closedSession?['sessionId']);
+        final closedGates = _gateReceipts(value['closedGates']);
+        final successorSession = _stringMap(value['successorSession']);
+        final successorId = _nonEmptyText(successorSession?['sessionId']);
+        final successorWorkBeadId = _nonEmptyText(
+          successorSession?['workBeadId'],
+        );
+        final successorApprovalRev = _nonEmptyText(
+          successorSession?['approvalRev'],
+        );
+        final pendingAdmission = _stringMap(value['pendingAdmission']);
+        final pendingWorkBeadId = _nonEmptyText(
+          pendingAdmission?['workBeadId'],
+        );
+        final pendingApprovalRev = _nonEmptyText(
+          pendingAdmission?['approvalRev'],
+        );
+        final hasSuccessor =
+            successorId != null &&
+            successorWorkBeadId == beadId &&
+            successorApprovalRev != null;
+        final hasPending =
+            pendingWorkBeadId == beadId && pendingApprovalRev != null;
+        final completeReceipt =
+            sessionId != null &&
+            closedSession?['reason'] == 'reworked' &&
+            closedSession?['disposition'] == 'voided' &&
+            closedGates != null &&
+            hasSuccessor != hasPending &&
+            (value['successorSession'] == null || hasSuccessor) &&
+            (value['pendingAdmission'] == null || hasPending);
+        if (!completeReceipt) {
+          stderr.writeln(
+            'grid rework: resident completed without a complete retirement receipt.',
+          );
+          return 64;
         }
-        final closedGates =
-            <Map<String, Object?>>[
-              if (value['closedGates'] case final List<Object?> rows)
-                for (final row in rows.whereType<Map<Object?, Object?>>())
-                  row.cast<String, Object?>(),
-            ]..sort(
-              (left, right) =>
-                  '${left['gateId']}'.compareTo('${right['gateId']}'),
-            );
+
+        stdout.writeln('grid rework — voided session $sessionId (reworked).');
         for (final gate in closedGates) {
           stdout.writeln(
             'grid rework — closed gate ${gate['gateId']} '
             '(${gate['cause']}).',
+          );
+        }
+        if (hasSuccessor) {
+          stdout.writeln(
+            'grid rework — minted session $successorId for $beadId at '
+            'approval $successorApprovalRev.',
+          );
+        } else {
+          stdout.writeln(
+            'grid rework — successor pending admission for $beadId at '
+            'approval $pendingApprovalRev.',
           );
         }
         return 0;
@@ -145,4 +178,31 @@ class ReworkCommand extends Command<int> {
         return 64;
     }
   }
+}
+
+Map<String, Object?>? _stringMap(Object? value) => switch (value) {
+  final Map<Object?, Object?> row => row.cast<String, Object?>(),
+  _ => null,
+};
+
+String? _nonEmptyText(Object? value) =>
+    value is String && value.trim().isNotEmpty ? value : null;
+
+List<Map<String, Object?>>? _gateReceipts(Object? value) {
+  if (value is! List<Object?>) return null;
+  final receipts = <Map<String, Object?>>[];
+  for (final value in value) {
+    final receipt = _stringMap(value);
+    if (receipt == null ||
+        _nonEmptyText(receipt['gateId']) == null ||
+        _nonEmptyText(receipt['sessionId']) == null ||
+        receipt['cause'] != 'superseded-round') {
+      return null;
+    }
+    receipts.add(receipt);
+  }
+  receipts.sort(
+    (left, right) => '${left['gateId']}'.compareTo('${right['gateId']}'),
+  );
+  return receipts;
 }

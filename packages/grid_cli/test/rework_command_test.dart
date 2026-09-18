@@ -42,7 +42,11 @@ void main() {
     final result = await runCaptured(
       FakeClient(
         const StationCommandCompleted({
-          'closedSession': {'sessionId': 'tgdog-session', 'reason': 'reworked'},
+          'closedSession': {
+            'sessionId': 'tgdog-session',
+            'reason': 'reworked',
+            'disposition': 'voided',
+          },
           'closedGates': [
             {
               'gateId': 'tgdog-gate',
@@ -50,6 +54,11 @@ void main() {
               'cause': 'superseded-round',
             },
           ],
+          'successorSession': {
+            'sessionId': 'tgdog-successor',
+            'workBeadId': 'work-1',
+            'approvalRev': 'approved-rev',
+          },
         }),
       ),
     );
@@ -57,11 +66,69 @@ void main() {
     expect(result.code, 0);
     expect(
       result.stdout,
-      'grid rework — closed session tgdog-session (reworked).\n'
-      'grid rework — closed gate tgdog-gate (superseded-round).\n',
+      'grid rework — voided session tgdog-session (reworked).\n'
+      'grid rework — closed gate tgdog-gate (superseded-round).\n'
+      'grid rework — minted session tgdog-successor for work-1 at approval '
+      'approved-rev.\n',
     );
     expect(result.stderr, isEmpty);
   });
+
+  test(
+    'reports a governor-queued successor as successful pending admission',
+    () async {
+      final result = await runCaptured(
+        FakeClient(
+          const StationCommandCompleted({
+            'closedSession': {
+              'sessionId': 'tgdog-session',
+              'reason': 'reworked',
+              'disposition': 'voided',
+            },
+            'closedGates': [],
+            'pendingAdmission': {
+              'workBeadId': 'work-1',
+              'approvalRev': 'approved-rev',
+            },
+          }),
+        ),
+      );
+
+      expect(result.code, 0);
+      expect(
+        result.stdout,
+        'grid rework — voided session tgdog-session (reworked).\n'
+        'grid rework — successor pending admission for work-1 at approval '
+        'approved-rev.\n',
+      );
+      expect(result.stderr, isEmpty);
+    },
+  );
+
+  test(
+    'refuses an incomplete completed response without partial stdout',
+    () async {
+      final result = await runCaptured(
+        FakeClient(
+          const StationCommandCompleted({
+            'closedSession': {
+              'sessionId': 'tgdog-session',
+              'reason': 'reworked',
+              'disposition': 'voided',
+            },
+            'closedGates': [],
+          }),
+        ),
+      );
+
+      expect(result.code, 64);
+      expect(result.stdout, isEmpty);
+      expect(
+        result.stderr,
+        'grid rework: resident completed without a complete retirement receipt.\n',
+      );
+    },
+  );
 
   test('reports a resident close refusal on stderr only', () async {
     final result = await runCaptured(
@@ -82,7 +149,7 @@ void main() {
   });
 
   test('sends all authorization fields through resident door', () async {
-    final client = FakeClient(const StationCommandCompleted({}));
+    final client = FakeClient(_mintedCompleted());
     expect(
       await runner(client).run([
         'rework',
@@ -111,7 +178,7 @@ void main() {
     addTearDown(() => temp.delete(recursive: true));
     final file = File('${temp.path}/note.txt');
     await file.writeAsString(fixture, encoding: utf8, flush: true);
-    final client = FakeClient(const StationCommandCompleted({}));
+    final client = FakeClient(_mintedCompleted());
 
     expect(
       await runner(client).run([
@@ -128,7 +195,7 @@ void main() {
   });
 
   test('--note and --note-file refuse before dispatch', () async {
-    final client = FakeClient(const StationCommandCompleted({}));
+    final client = FakeClient(_mintedCompleted());
     expect(
       await runner(client).run(const [
         'rework',
@@ -166,7 +233,7 @@ void main() {
       ['rework', 'work-1'],
       ['rework', 'work-1', '--grid-root', 'relative'],
     ]) {
-      final client = FakeClient(const StationCommandCompleted({}));
+      final client = FakeClient(_mintedCompleted());
       expect(await runner(client).run(args), 64);
       expect(client.calls, 0);
     }
@@ -185,12 +252,26 @@ void main() {
         'Nico',
       ],
     ]) {
-      final client = FakeClient(const StationCommandCompleted({}));
+      final client = FakeClient(_mintedCompleted());
       expect(await runner(client).run(args), 64);
       expect(client.calls, 0);
     }
   });
 }
+
+StationCommandCompleted _mintedCompleted() => const StationCommandCompleted({
+  'closedSession': {
+    'sessionId': 'tgdog-session',
+    'reason': 'reworked',
+    'disposition': 'voided',
+  },
+  'closedGates': [],
+  'successorSession': {
+    'sessionId': 'tgdog-successor',
+    'workBeadId': 'work-1',
+    'approvalRev': 'approved-rev',
+  },
+});
 
 final class FakeClient extends StationCommandClient {
   FakeClient(this.result);

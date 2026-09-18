@@ -579,10 +579,19 @@ void main() {
       },
     );
 
-    test(
-      'clearRoundAuthoredSpec preserves an unstamped spec byte-for-byte and flares',
-      () async {
-        const original = Bead(
+    test('clearRoundAuthoredSpec preserves empty and non-empty unstamped prose '
+        'byte-for-byte and flares', () async {
+      for (final original in const [
+        Bead(
+          id: 'tgdog-work1',
+          status: BeadStatus.open,
+          assignee: 'governor',
+          description: 'hand-written description',
+          design: '',
+          acceptanceCriteria: '',
+          metadata: {'unrelated': 'empty'},
+        ),
+        Bead(
           id: 'tgdog-work1',
           status: BeadStatus.open,
           assignee: 'governor',
@@ -590,21 +599,29 @@ void main() {
           design: 'hand-written design',
           acceptanceCriteria: 'hand-written acceptance',
           notes: 'hand-written notes',
-          metadata: {'unrelated': 'value'},
-        );
-        runner.exportBeads = const [original];
+          metadata: {'unrelated': 'non-empty'},
+        ),
+      ]) {
+        runner.exportBeads = [original];
 
         await writer().clearRoundAuthoredSpec('tgdog-work1');
 
-        expect(runner.callsFor('export'), isEmpty);
-        expect(runner.callsFor('update'), isEmpty);
         expect(runner.exportBeads.single, original);
-        expect(flares, hasLength(1));
-        expect(flares.single.name, 'rework.specPreserved');
-        expect(flares.single.data, {'beadId': 'tgdog-work1'});
-        expect(runner.neverCalledShow, isTrue);
-      },
-    );
+      }
+
+      expect(runner.callsFor('export'), isEmpty);
+      expect(runner.callsFor('update'), isEmpty);
+      expect(flares, hasLength(2));
+      expect(
+        flares,
+        everyElement(
+          isA<({Map<String, String> data, String name})>()
+              .having((flare) => flare.name, 'name', 'rework.specPreserved')
+              .having((flare) => flare.data, 'data', {'beadId': 'tgdog-work1'}),
+        ),
+      );
+      expect(runner.neverCalledShow, isTrue);
+    });
 
     test(
       'clearRoundAuthoredSpec clears only specify-authored spec atomically',

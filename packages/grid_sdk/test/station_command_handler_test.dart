@@ -348,11 +348,12 @@ void main() {
           acceptanceCriteria: 'operator acceptance',
           metadata: {
             'rig': 'tg',
+            WorkBeadKeys.approvedRev: 'approved-rev',
             StationBeadWriter.specAuthorKey: StationBeadWriter.operatorAuthor,
           },
         );
         final workRunner = _RecordingRunner(exportBeads: [operatorWorkBead]);
-        final work = _Source(_snapshot([operatorWorkBead]));
+        final work = _Source(_workSnapshotWithBead(operatorWorkBead));
         final handler = _handler(
           state: _Source(
             _snapshot([
@@ -483,6 +484,7 @@ void main() {
           expect(value['closedSession'], {
             'sessionId': entry.sessionId,
             'reason': 'reworked',
+            'disposition': 'voided',
           });
           expect(value['closedGates'], [
             {
@@ -524,6 +526,239 @@ void main() {
           );
           expect(noteWrite.join(' '), contains('carry critique'));
         }
+      },
+    );
+
+    test(
+      'readiness rework retires identically for empty and operator prose and '
+      'returns the observed successor',
+      () async {
+        for (final fixture in <({String acceptance, String design})>[
+          (design: '', acceptance: ''),
+          (design: 'operator design', acceptance: 'operator acceptance'),
+        ]) {
+          final workBead = Bead(
+            id: 'tg-1',
+            issueType: IssueType.task,
+            design: fixture.design,
+            acceptanceCriteria: fixture.acceptance,
+            metadata: {
+              'rig': 'tg',
+              WorkBeadKeys.approvedRev: 'approved-rev',
+              if (fixture.design.isNotEmpty)
+                StationBeadWriter.specAuthorKey:
+                    StationBeadWriter.operatorAuthor,
+            },
+          );
+          final predecessor = _session(
+            'tgdog-predecessor',
+            molecule: true,
+            open: true,
+          );
+          const gate = Bead(
+            id: 'tgdog-readiness-gate',
+            issueType: GridIssueTypes.gate,
+            metadata: {
+              'rig': 'tgdog',
+              'blocks': 'tgdog-predecessor',
+              'node': 'tg-1/spec_review/readiness-route',
+            },
+          );
+          const step = Bead(
+            id: 'tgdog-readiness-step',
+            issueType: GridIssueTypes.step,
+            metadata: {
+              'rig': 'tgdog',
+              MoleculeStepKeys.path: 'tg-1/spec_review/readiness-route',
+              MoleculeStepKeys.session: 'tgdog-predecessor',
+              MoleculeStepKeys.capability: 'readiness',
+              MoleculeStepKeys.state: 'gated',
+            },
+          );
+          final state = _Source(_snapshot([predecessor, gate, step]));
+          final work = _Source(_workSnapshotWithBead(workBead));
+          addTearDown(state.dispose);
+          addTearDown(work.dispose);
+          final stateRunner = _RecordingRunner(
+            exportBeads: [predecessor, gate, step],
+          )..openBeadsResult = const [gate];
+          final workRunner = _RecordingRunner(exportBeads: [workBead]);
+          var refreshes = 0;
+          final handler = _handler(
+            state: state,
+            work: work,
+            stateRunner: stateRunner,
+            workRunner: workRunner,
+            refreshState: () async {
+              refreshes++;
+              if (refreshes == 2) {
+                state.push(
+                  _snapshot([
+                    _session('tgdog-predecessor', workBead: 'tg-1#r1'),
+                    _session('tgdog-successor', open: true),
+                  ]),
+                );
+              }
+            },
+          );
+
+          final result = await handler(
+            const GridCommandRequest.rework(beadId: 'tg-1'),
+          );
+
+          expect(result, isA<GridCommandCompleted>());
+          final value = (result as GridCommandCompleted).value;
+          expect(value['closedSession'], {
+            'sessionId': 'tgdog-predecessor',
+            'reason': 'reworked',
+            'disposition': 'voided',
+          });
+          expect(value['successorSession'], {
+            'sessionId': 'tgdog-successor',
+            'workBeadId': 'tg-1',
+            'approvalRev': 'approved-rev',
+          });
+          expect(value['pendingAdmission'], isNull);
+          expect(
+            workRunner.calls.where(
+              (call) =>
+                  call.first == 'update' &&
+                  (call.contains('--design-file') ||
+                      call.contains('--acceptance')),
+            ),
+            isEmpty,
+          );
+          expect(workRunner.exportBeads.single, workBead);
+
+          final sessionClose = stateRunner.calls.indexWhere(
+            (call) => call.first == 'close' && call[1] == 'tgdog-predecessor',
+          );
+          final gateCause = stateRunner.calls.indexWhere(
+            (call) =>
+                call.first == 'update' &&
+                call[1] == 'tgdog-readiness-gate' &&
+                call.contains('grid.gate.close_cause=superseded-round'),
+          );
+          final rekey = stateRunner.calls.indexWhere(
+            (call) =>
+                call.first == 'update' &&
+                call[1] == 'tgdog-predecessor' &&
+                call.contains('work_bead=tg-1#r1'),
+          );
+          expect(sessionClose, greaterThanOrEqualTo(0));
+          expect(gateCause, greaterThan(sessionClose));
+          expect(rekey, greaterThan(gateCause));
+        }
+      },
+    );
+
+    test(
+      'a ready successor can remain pending admission after retirement',
+      () async {
+        final stateRunner = _RecordingRunner();
+        final state = _Source(_snapshot([_session('tgdog-predecessor')]));
+        final work = _Source(_workSnapshot());
+        addTearDown(state.dispose);
+        addTearDown(work.dispose);
+        var refreshes = 0;
+        final handler = _handler(
+          state: state,
+          work: work,
+          stateRunner: stateRunner,
+          workRunner: _RecordingRunner(),
+          refreshState: () async {
+            refreshes++;
+            if (refreshes == 2) {
+              state.push(
+                _snapshot([_session('tgdog-predecessor', workBead: 'tg-1#r1')]),
+              );
+            }
+          },
+        );
+
+        final result = await handler(
+          const GridCommandRequest.rework(beadId: 'tg-1'),
+        );
+
+        expect(result, isA<GridCommandCompleted>());
+        expect((result as GridCommandCompleted).value['pendingAdmission'], {
+          'workBeadId': 'tg-1',
+          'approvalRev': 'approved-rev',
+        });
+        expect(result.value['successorSession'], isNull);
+      },
+    );
+
+    test(
+      'an unready filing with no successor refuses after retirement',
+      () async {
+        final originalGrace = SessionScopeState.freshMintSnapshotGrace;
+        SessionScopeState.freshMintSnapshotGrace = const Duration(
+          milliseconds: 1,
+        );
+        addTearDown(
+          () => SessionScopeState.freshMintSnapshotGrace = originalGrace,
+        );
+        final stateRunner = _RecordingRunner();
+        final state = _Source(_snapshot([_session('tgdog-predecessor')]));
+        final work = _Source(
+          _workSnapshotWithBead(
+            const Bead(
+              id: 'tg-1',
+              issueType: IssueType.task,
+              metadata: {'rig': 'tg', WorkBeadKeys.approvedRev: 'approved-rev'},
+            ),
+            ready: false,
+          ),
+        );
+        addTearDown(state.dispose);
+        addTearDown(work.dispose);
+        var refreshes = 0;
+        final handler = _handler(
+          state: state,
+          work: work,
+          stateRunner: stateRunner,
+          workRunner: _RecordingRunner(),
+          refreshState: () async {
+            refreshes++;
+            if (refreshes == 2) {
+              state.push(
+                _snapshot([_session('tgdog-predecessor', workBead: 'tg-1#r1')]),
+              );
+            }
+          },
+        );
+
+        final result = await handler(
+          const GridCommandRequest.rework(beadId: 'tg-1'),
+        );
+
+        expect(
+          result,
+          isA<GridCommandRefused>()
+              .having(
+                (value) => value.code,
+                'code',
+                'rework_successor_unobserved',
+              )
+              .having(
+                (value) => value.message,
+                'message',
+                allOf(
+                  contains('tgdog-predecessor'),
+                  contains('already voided and re-keyed'),
+                  contains('Do not run rework again'),
+                ),
+              ),
+        );
+        expect(
+          _roundKeyUpdates(
+            stateRunner,
+            sessionId: 'tgdog-predecessor',
+            workBeadKey: 'tg-1#r1',
+          ),
+          hasLength(1),
+        );
       },
     );
 
@@ -600,13 +835,21 @@ void main() {
           ]),
         ),
         work: _Source(
-          _snapshot([
-            const Bead(
-              id: 'swift-infer-097',
-              issueType: IssueType.task,
-              metadata: {'rig': 'swift-infer'},
-            ),
-          ]),
+          GraphSnapshot.fromParts(
+            beads: const [
+              Bead(
+                id: 'swift-infer-097',
+                issueType: IssueType.task,
+                metadata: {
+                  'rig': 'swift-infer',
+                  WorkBeadKeys.approvedRev: 'approved-rev',
+                },
+              ),
+            ],
+            dependencies: const [],
+            readyIds: const {'swift-infer-097'},
+            capturedAt: DateTime(2026),
+          ),
         ),
         stateRunner: stateRunner,
         workRunner: workRunner,
@@ -743,15 +986,7 @@ void main() {
             ),
           ]),
         ),
-        work: _Source(
-          _snapshot([
-            const Bead(
-              id: 'tg-1',
-              issueType: IssueType.task,
-              metadata: {'rig': 'tg'},
-            ),
-          ]),
-        ),
+        work: _Source(_workSnapshot()),
         stateRunner: stateRunner,
         workRunner: workRunner,
       );
@@ -820,15 +1055,7 @@ void main() {
               ),
             ]),
           ),
-          work: _Source(
-            _snapshot([
-              const Bead(
-                id: 'tg-1',
-                issueType: IssueType.task,
-                metadata: {'rig': 'tg'},
-              ),
-            ]),
-          ),
+          work: _Source(_workSnapshot()),
           stateRunner: stateRunner,
           workRunner: workRunner,
         );
@@ -1073,15 +1300,7 @@ void main() {
             ),
           ]),
         ),
-        work: _Source(
-          _snapshot([
-            const Bead(
-              id: 'tg-1',
-              issueType: IssueType.task,
-              metadata: {'rig': 'tg'},
-            ),
-          ]),
-        ),
+        work: _Source(_workSnapshot()),
         stateRunner: stateRunner,
         workRunner: workRunner,
       );
@@ -2203,7 +2422,7 @@ void main() {
       const workBead = Bead(
         id: 'tg-1',
         issueType: IssueType.task,
-        metadata: {'rig': 'tg'},
+        metadata: {'rig': 'tg', WorkBeadKeys.approvedRev: 'approved-rev'},
       );
       final handler = _handler(
         state: _Source(
@@ -2216,7 +2435,7 @@ void main() {
             ),
           ]),
         ),
-        work: _Source(_snapshot(const [workBead])),
+        work: _Source(_workSnapshotWithBead(workBead)),
         stateRunner: stateRunner,
         workRunner: _RecordingRunner(exportBeads: const [workBead]),
         recorder: StationTrajectoryRecorder(sink: sink),
@@ -2297,15 +2516,7 @@ void main() {
             ),
           ]),
         ),
-        work: _Source(
-          _snapshot([
-            const Bead(
-              id: 'tg-1',
-              issueType: IssueType.task,
-              metadata: {'rig': 'tg'},
-            ),
-          ]),
-        ),
+        work: _Source(_workSnapshot()),
         stateRunner: _RecordingRunner(),
         workRunner: _RecordingRunner(),
         stepSnapshot: () => _StepSnapshot(rows, health: health),
@@ -2819,9 +3030,21 @@ void _shipObserverGroup() {
   });
 }
 
-GraphSnapshot _workSnapshot([String id = 'tg-1']) => _snapshot([
-  Bead(id: id, issueType: IssueType.task, metadata: const {'rig': 'tg'}),
-]);
+GraphSnapshot _workSnapshot([String id = 'tg-1']) => _workSnapshotWithBead(
+  Bead(
+    id: id,
+    issueType: IssueType.task,
+    metadata: const {'rig': 'tg', WorkBeadKeys.approvedRev: 'approved-rev'},
+  ),
+);
+
+GraphSnapshot _workSnapshotWithBead(Bead bead, {bool ready = true}) =>
+    GraphSnapshot.fromParts(
+      beads: [bead],
+      dependencies: const [],
+      readyIds: {if (ready) bead.id},
+      capturedAt: DateTime(2026),
+    );
 
 BdResult _beadResult(Bead bead) => BdResult(
   exitCode: 0,
