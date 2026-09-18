@@ -408,6 +408,8 @@ class BdCliService {
   /// `cmd/bd/update.go`). [notes] preserves replacement semantics and first
   /// proves the explicit target readable; replacing a non-empty field requires
   /// [allowNotesReplacement]. Neither path is transformed into the other.
+  /// [addLabels] emits one repeatable `--add-label` per value in caller order,
+  /// in the same row-locked update as status and metadata operations.
   Future<void> update(
     String id, {
 
@@ -429,6 +431,7 @@ class BdCliService {
     String? assignee,
     Map<String, String> mergeMetadata = const {},
     Iterable<String> unsetMetadata = const [],
+    Iterable<String> addLabels = const [],
     String? notes,
     String? appendNotes,
 
@@ -444,6 +447,7 @@ class BdCliService {
     if (notes != null && appendNotes != null && appendNotes.isNotEmpty) {
       throw ArgumentError('notes and appendNotes are mutually exclusive');
     }
+    final wantedLabels = addLabels.toList(growable: false);
     var expectedNotes = '';
     Directory? tempDir;
     String? stdinText;
@@ -479,6 +483,7 @@ class BdCliService {
         assignee: assignee,
         mergeMetadata: mergeMetadata,
         unsetMetadata: unsetMetadata,
+        addLabels: wantedLabels,
         notes: notes,
         appendNotes: appendNotes,
       );
@@ -541,6 +546,7 @@ class BdCliService {
             assignee: assignee,
             mergeMetadata: mergeMetadata,
             unsetMetadata: unsetMetadata,
+            addLabels: wantedLabels,
             notes: notes,
             appendNotes: appendNotes,
           ),
@@ -669,15 +675,7 @@ class BdCliService {
   Future<void> addLabels(String id, Iterable<String> labels) async {
     final wanted = labels.toList(growable: false);
     if (wanted.isEmpty) return;
-    for (final label in wanted) {
-      if (label.contains(',')) {
-        throw ArgumentError.value(
-          label,
-          'labels',
-          'bd separates labels with commas, so a label cannot contain one',
-        );
-      }
-    }
+    _refuseCommaLabels(wanted);
     await _runEnvelope(addLabelsArgs(id, wanted));
   }
 
@@ -972,36 +970,44 @@ class BdCliService {
     String? assignee,
     Map<String, String> mergeMetadata = const {},
     Iterable<String> unsetMetadata = const [],
+    Iterable<String> addLabels = const [],
     String? notes,
     String? appendNotes,
-  }) => [
-    'update',
-    id,
-    '--json',
-    ..._actorArgs,
-    if (ifAssignee != null) ...['--if-assignee', ifAssignee],
-    if (ifStatus != null) ...['--if-status', ifStatus.wire],
-    if (title != null) ...['--title', title],
-    if (status != null) ...['--status', status.wire],
-    if (priority != null) ...['--priority', '$priority'],
-    if (bodyFile != null) ...['--body-file', bodyFile],
-    if (designFile != null) ...['--design-file', designFile],
-    if (acceptanceCriteria != null) ...['--acceptance', acceptanceCriteria],
-    if (type != null) ...['--type', type.wire],
-    if (assignee != null) ...['--assignee', assignee],
-    // Server-side MergeMetadata overwrites named keys, preserves absent keys,
-    // and runs in the row-locked transaction. Empty map ⇒ omitted.
-    for (final entry in mergeMetadata.entries) ...[
-      '--set-metadata',
-      '${entry.key}=${entry.value}',
-    ],
-    for (final key in unsetMetadata) ...['--unset-metadata', key],
-    if (notes != null) ...['--notes', notes],
-    if (appendNotes != null && appendNotes.isNotEmpty) ...[
-      '--append-notes',
-      appendNotes,
-    ],
-  ];
+  }) {
+    final wantedLabels = addLabels is List<String>
+        ? addLabels
+        : addLabels.toList(growable: false);
+    _refuseCommaLabels(wantedLabels);
+    return [
+      'update',
+      id,
+      '--json',
+      ..._actorArgs,
+      if (ifAssignee != null) ...['--if-assignee', ifAssignee],
+      if (ifStatus != null) ...['--if-status', ifStatus.wire],
+      if (title != null) ...['--title', title],
+      if (status != null) ...['--status', status.wire],
+      if (priority != null) ...['--priority', '$priority'],
+      if (bodyFile != null) ...['--body-file', bodyFile],
+      if (designFile != null) ...['--design-file', designFile],
+      if (acceptanceCriteria != null) ...['--acceptance', acceptanceCriteria],
+      if (type != null) ...['--type', type.wire],
+      if (assignee != null) ...['--assignee', assignee],
+      // Server-side MergeMetadata overwrites named keys, preserves absent keys,
+      // and runs in the row-locked transaction. Empty map ⇒ omitted.
+      for (final entry in mergeMetadata.entries) ...[
+        '--set-metadata',
+        '${entry.key}=${entry.value}',
+      ],
+      for (final key in unsetMetadata) ...['--unset-metadata', key],
+      for (final label in wantedLabels) ...['--add-label', label],
+      if (notes != null) ...['--notes', notes],
+      if (appendNotes != null && appendNotes.isNotEmpty) ...[
+        '--append-notes',
+        appendNotes,
+      ],
+    ];
+  }
 
   List<String> closeArgs(String id, {String? reason}) => [
     'close',
@@ -1040,6 +1046,18 @@ class BdCliService {
     '--json',
     ..._actorArgs,
   ];
+
+  void _refuseCommaLabels(Iterable<String> labels) {
+    for (final label in labels) {
+      if (label.contains(',')) {
+        throw ArgumentError.value(
+          label,
+          'labels',
+          'bd separates labels with commas, so a label cannot contain one',
+        );
+      }
+    }
+  }
 
   /// `bd ship <capability> --json`. No `--force`: the grid ships a capability
   /// only when its exporting bead is genuinely closed, and lets bd refuse

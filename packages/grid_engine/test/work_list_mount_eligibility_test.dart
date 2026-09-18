@@ -87,6 +87,8 @@ final class _Harness {
     required this.joined,
     required this.bead,
     required this.runner,
+    required this.additionalBeads,
+    required this.dependencies,
   });
 
   final TreeOwner owner;
@@ -94,12 +96,16 @@ final class _Harness {
   final JoinedSnapshotNotifier joined;
   final Bead bead;
   final RecordingBdRunner runner;
+  final List<Bead> additionalBeads;
+  final List<BeadDependency> dependencies;
   var _second = 1;
 
   void pushAndFlush({
     Set<String>? readyIds,
     DateTime? stateCapturedAt,
     Map<String, SessionProjection> sessionsByWorkBead = const {},
+    List<Bead>? additionalBeads,
+    List<BeadDependency>? dependencies,
   }) {
     joined.push(
       _snapshot(
@@ -108,6 +114,8 @@ final class _Harness {
         readyIds: readyIds,
         stateCapturedAt: stateCapturedAt,
         sessionsByWorkBead: sessionsByWorkBead,
+        additionalBeads: additionalBeads ?? this.additionalBeads,
+        dependencies: dependencies ?? this.dependencies,
       ),
     );
     owner.flush();
@@ -125,11 +133,12 @@ JoinedSnapshot _snapshot(
   Set<String>? readyIds,
   DateTime? stateCapturedAt,
   List<Bead> additionalBeads = const [],
+  List<BeadDependency> dependencies = const [],
   Map<String, SessionProjection> sessionsByWorkBead = const {},
 }) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
     beads: [bead, ...additionalBeads],
-    dependencies: const [],
+    dependencies: dependencies,
     readyIds: readyIds ?? {bead.id},
     capturedAt: DateTime(2026, 1, 1, 0, 0, second),
   ),
@@ -162,6 +171,7 @@ _Harness _mountHarness({
   Set<String>? readyIds,
   DateTime? stateCapturedAt,
   List<Bead> additionalBeads = const [],
+  List<BeadDependency> dependencies = const [],
   Map<String, SessionProjection> sessionsByWorkBead = const {},
   SessionResolver? resolver,
   bool includeStationServices = true,
@@ -175,6 +185,7 @@ _Harness _mountHarness({
       readyIds: readyIds,
       stateCapturedAt: stateCapturedAt,
       additionalBeads: additionalBeads,
+      dependencies: dependencies,
       sessionsByWorkBead: sessionsByWorkBead,
     ),
   );
@@ -221,6 +232,8 @@ _Harness _mountHarness({
     joined: joined,
     bead: workBead,
     runner: fakes.runner,
+    additionalBeads: additionalBeads,
+    dependencies: dependencies,
   );
 }
 
@@ -480,6 +493,82 @@ void main() {
   });
 
   test(
+    'stamped exact-id external hold refuses once and restores only after provides',
+    () async {
+      const consumer = Bead(
+        id: 'tg-1',
+        issueType: IssueType.task,
+        status: BeadStatus.open,
+        metadata: {kEligibilityApprovalKey: '2026-09-18T00:00:00Z'},
+      );
+      const dependency = BeadDependency(
+        issueId: 'tg-1',
+        dependsOnId: 'external:power_station:pow-9',
+      );
+      const openTarget = Bead(
+        id: 'pow-9',
+        issueType: IssueType.task,
+        status: BeadStatus.open,
+      );
+      final transport = _RecordingTransport();
+      final harness = _mountHarness(
+        bead: consumer,
+        transport: transport,
+        readyIds: const {},
+        additionalBeads: const [openTarget],
+        dependencies: const [dependency],
+      );
+
+      expect(harness.workBeads(), isEmpty);
+      expect(transport.flares, hasLength(1));
+      expect(transport.flares.single.name, 'work.mountEligibilityRefused');
+      expect(transport.flares.single.data, {
+        'beadId': 'tg-1',
+        'clause': 'external-unshipped: power_station:pow-9 (target open)',
+      });
+
+      harness.pushAndFlush();
+      expect(transport.flares, hasLength(1), reason: 'no duplicate edge');
+
+      const closedUnprovided = Bead(
+        id: 'pow-9',
+        issueType: IssueType.task,
+        status: BeadStatus.closed,
+      );
+      harness.pushAndFlush(
+        readyIds: const {},
+        additionalBeads: const [closedUnprovided],
+      );
+      expect(
+        transport.flares,
+        hasLength(1),
+        reason: 'closed-but-unprovided remains outside ready, not restored',
+      );
+      expect(harness.workBeads(), isEmpty);
+
+      const closedProvided = Bead(
+        id: 'pow-9',
+        issueType: IssueType.task,
+        status: BeadStatus.closed,
+        labels: ['provides:pow-9'],
+      );
+      harness.pushAndFlush(
+        readyIds: const {'tg-1'},
+        additionalBeads: const [closedProvided],
+      );
+      await _settleAdmissions(harness);
+
+      expect(harness.workBeads().map((work) => work.bead.id), ['tg-1']);
+      expect(transport.flares, hasLength(2));
+      expect(transport.flares.last.name, 'work.mountEligibilityRestored');
+      expect(transport.flares.last.data, {
+        'beadId': 'tg-1',
+        'clause': 'external-unshipped: power_station:pow-9 (target open)',
+      });
+    },
+  );
+
+  test(
     'eligibility retry does not re-resolve unchanged mounted neighbors',
     () async {
       const neighbor = Bead(
@@ -647,6 +736,8 @@ void main() {
         joined: joined,
         bead: first,
         runner: fakes.runner,
+        additionalBeads: const [second],
+        dependencies: const [],
       ),
     );
 

@@ -807,6 +807,7 @@ void main() {
             'tg-7',
             ifAssignee: '',
             ifStatus: BeadStatus.open,
+            addLabels: const ['provides:tg-7', 'provides:release-gate'],
             onGuardDegraded: receipt,
           );
           await BdCliService(retrying).update(
@@ -821,8 +822,26 @@ void main() {
             retrying.calls[1],
             containsAll(['--if-assignee', '--if-status']),
           );
+          expect(
+            retrying.calls[1],
+            containsAllInOrder([
+              '--add-label',
+              'provides:tg-7',
+              '--add-label',
+              'provides:release-gate',
+            ]),
+          );
           expect(retrying.calls[2], isNot(contains('--if-assignee')));
           expect(retrying.calls[2], isNot(contains('--if-status')));
+          expect(
+            retrying.calls[2],
+            containsAllInOrder([
+              '--add-label',
+              'provides:tg-7',
+              '--add-label',
+              'provides:release-gate',
+            ]),
+          );
           expect(retrying.calls[3], isNot(contains('--if-assignee')));
           expect(retrying.calls[3], isNot(contains('--if-status')));
           expect(receipts, hasLength(1));
@@ -935,6 +954,53 @@ void main() {
         containsAllInOrder(['--set-metadata', 'attempt=3']),
       );
     });
+
+    test(
+      'update carries status, metadata, and ordered labels atomically',
+      () async {
+        await service.update(
+          'tg-7',
+          status: BeadStatus.closed,
+          mergeMetadata: const {'closed_at': '2026-09-18T00:00:00.000Z'},
+          addLabels: const ['provides:tg-7', 'provides:release-gate'],
+          appendNotes: 'done',
+          verifyTextRoundTrip: false,
+        );
+
+        expect(runner.calls.single, [
+          'update',
+          'tg-7',
+          '--json',
+          '--actor',
+          'grid-controller',
+          '--status',
+          'closed',
+          '--set-metadata',
+          'closed_at=2026-09-18T00:00:00.000Z',
+          '--add-label',
+          'provides:tg-7',
+          '--add-label',
+          'provides:release-gate',
+          '--append-notes',
+          'done',
+        ]);
+      },
+    );
+
+    test(
+      'update omits empty labels and refuses commas before a runner call',
+      () {
+        expect(
+          service.updateArgs('tg-7', addLabels: const []),
+          isNot(contains('--add-label')),
+        );
+        expect(
+          () => service.updateArgs('tg-7', addLabels: const ['provides:a,b']),
+          throwsA(isA<ArgumentError>()),
+        );
+        expect(runner.calls, isEmpty);
+      },
+    );
 
     test('text transport keeps body and design outside argv', () async {
       const body = 'body\r\n\ufeff\u200b\u00a0\t\n  ';

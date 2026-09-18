@@ -10,6 +10,7 @@ import '../diagnostics/diagnosable.dart';
 import '../diagnostics/state_store_deadline.dart';
 import '../domain/joined_snapshot.dart';
 import '../domain/linked_sessions.dart';
+import '../domain/external_dep.dart';
 import '../domain/mount_attempt.dart';
 import '../domain/mount_eligibility.dart';
 import '../domain/rework.dart';
@@ -246,6 +247,7 @@ class _WorkListState extends State<WorkList>
           : null;
       final participates =
           _snapshot.graph.readyIds.contains(bead.id) ||
+          hasStampedOpenExternalTargetHold(_snapshot.graph, bead) ||
           linked.isNotEmpty ||
           retired != null ||
           _mountedWorkBeadsById.containsKey(bead.id);
@@ -372,6 +374,7 @@ class _WorkListState extends State<WorkList>
         ownership,
         _snapshot.sessionsByWorkBead,
       ),
+      externalDepOpenTargetClause(_snapshot.graph),
       mountAttemptClause(_snapshot.mountAttemptsByWorkBead),
       // THE WORKTREE-OUTSTANDING BARRIER (cut-wiring §W2.4 W2-B), composed at
       // BOTH `composeMountEligibility` sites. Under shadow it runs in its

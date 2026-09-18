@@ -1336,6 +1336,7 @@ class StationBeadWriter {
     String? assignee,
     Map<String, String> mergeMetadata = const {},
     Iterable<String> unsetMetadata = const [],
+    Iterable<String> addLabels = const [],
     String? appendNotes,
   }) async {
     try {
@@ -1354,6 +1355,7 @@ class StationBeadWriter {
         assignee: assignee,
         mergeMetadata: mergeMetadata,
         unsetMetadata: unsetMetadata,
+        addLabels: addLabels,
         appendNotes: appendNotes,
         // ADR-0006 D2 / ADR-0001 D5: controller writes never issue bd show.
         // BdCliService still applies every pre-exec argv-text guard; only the
@@ -1379,7 +1381,7 @@ class StationBeadWriter {
     }
   }
 
-  /// `bd close` on a the_grid-owned session bead (terminal lifecycle).
+  /// Closes a the_grid-owned bead (terminal lifecycle).
   /// Fail-closed: refuses when [id]'s substation is not owned. Serialized per-id
   /// (D-1) so a close cannot race an in-flight cursor update on the same bead.
   ///
@@ -1387,64 +1389,123 @@ class StationBeadWriter {
   /// chain link, immediately before the `bd close`, so EVERY session close (the
   /// M3 actuator + the M4 `SessionScope`) records a terminal instant with no
   /// caller change. The stamp is a merge `update` (bd merges named keys; the
-  /// bead is still open here), then `bd close`, then [shipExports].
+  /// bead is still open here). A core work bead closes through ONE `bd update`
+  /// that also publishes its own id and explicit exports as `provides:`
+  /// labels. Non-core lifecycle beads retain `bd close --reason` and settle
+  /// any explicit exports after that close.
   Future<void> close(String id, {String? reason}) async {
     _assertOwned('close', id, const {});
     return _serialized(id, () async {
-      await _updateBead(
-        'close',
+      final bead = await _reader.beadById(
         id,
-        mergeMetadata: {closedAtKey: _clock().toUtc().toIso8601String()},
+        types: {...IssueType.coreTypes, ...GridIssueTypes.all},
       );
+      final closedAt = _clock().toUtc().toIso8601String();
+      if (bead?.issueType.isCore ?? false) {
+        final requested = _stableCapabilities([
+          id,
+          ...exportedCapabilities(bead!.labels),
+        ]);
+        final missing = _missingProvides(bead, requested);
+        await _updateBead(
+          'close',
+          id,
+          status: BeadStatus.closed,
+          mergeMetadata: {closedAtKey: closedAt},
+          addLabels: [
+            for (final capability in missing) providesLabel(capability),
+          ],
+        );
+        _flareShipped(id, missing);
+        return;
+      }
+      await _updateBead('close', id, mergeMetadata: {closedAtKey: closedAt});
       await _bd.close(id, reason: reason);
-      await _shipExports(id);
+      await _shipExports(
+        id,
+        null,
+        observedBead: bead?.copyWith(status: BeadStatus.closed),
+      );
     });
   }
 
-  /// SHIPS every capability [id] exports and does not yet provide — one
-  /// `bd ship <capability>` per owed `export:<capability>` label (tg-xh5d,
-  /// `the_grid#the-grid-is-a-beads-controller`).
+  /// Publishes the requested capabilities with one labelled `bd update`.
   ///
-  /// This is what publishes `provides:<capability>` and so unblocks every
-  /// external consumer whose `bd dep` row names it. The grid adds only the
-  /// TRIGGER — bd owns the label write and the closed-ness validation.
+  /// When [capabilities] is null, derives the bead's explicit `export:` values
+  /// as before. A supplied iterable is the admission pass's exact healing
+  /// request, which need not have an `export:` label when an id-shaped row
+  /// names a bare-closed bead.
   ///
   /// Reads the CURRENT bead, so it is driven by the bead's closed STATE rather
   /// than by a close event: calling it on a bead an operator closed BY HAND
-  /// ships exactly the same capabilities, which is how the station's
+  /// publishes exactly the same capabilities, which is how the station's
   /// post-flush observer (`StationCommandHandler.settleCapabilityExports`)
-  /// ships a hand-closed bead. Idempotent by the same reading: a capability
-  /// the bead already provides is shipped, so it spawns NO process, and a bead
-  /// carrying no `export:` label spawns none either.
+  /// heals a hand-closed bead. Idempotent by the same reading: an absent bead,
+  /// an open bead, an already-provided capability, and a bead carrying no
+  /// `export:` label on the derived path spawn NO process.
   ///
   /// Fail-closed on ownership, like every other write here, and serialized
   /// per-id (D-1) — except when called from [close], which already holds the
   /// chain link.
-  Future<List<String>> shipExports(String id) {
+  Future<List<String>> shipExports(
+    String id, [
+    Iterable<String>? capabilities,
+  ]) {
     _assertOwned('ship', id, const {});
-    return _serialized(id, () => _shipExports(id));
+    final requested = capabilities?.toList(growable: false);
+    return _serialized(id, () => _shipExports(id, requested));
   }
 
   /// [shipExports] without the ownership assert or the serialization, for a
   /// caller that already holds both.
-  Future<List<String>> _shipExports(String id) async {
-    final bead = await _reader.beadById(
-      id,
-      types: {...IssueType.coreTypes, ...GridIssueTypes.all},
+  Future<List<String>> _shipExports(
+    String id,
+    Iterable<String>? capabilities, {
+    Bead? observedBead,
+  }) async {
+    final bead =
+        observedBead ??
+        await _reader.beadById(
+          id,
+          types: {...IssueType.coreTypes, ...GridIssueTypes.all},
+        );
+    if (bead == null || !bead.isClosed) return const [];
+    final requested = _stableCapabilities(
+      capabilities ?? exportedCapabilities(bead.labels),
     );
-    if (bead == null) return const [];
-    final shipped = <String>[];
-    for (final capability in unshippedCapabilities(bead.labels)) {
-      await _bd.ship(capability);
-      shipped.add(capability);
-    }
-    if (shipped.isNotEmpty) {
-      _onFlare?.call('capability.shipped', {
-        'bead': id,
-        'capabilities': shipped.join(','),
-      });
-    }
-    return shipped;
+    final missing = _missingProvides(bead, requested);
+    if (missing.isEmpty) return const [];
+    await _updateBead(
+      'shipExports',
+      id,
+      addLabels: [for (final capability in missing) providesLabel(capability)],
+    );
+    _flareShipped(id, missing);
+    return missing;
+  }
+
+  List<String> _stableCapabilities(Iterable<String> capabilities) {
+    final seen = <String>{};
+    return [
+      for (final capability in capabilities)
+        if (seen.add(capability)) capability,
+    ];
+  }
+
+  List<String> _missingProvides(Bead bead, Iterable<String> capabilities) {
+    final provided = providedCapabilities(bead.labels).toSet();
+    return [
+      for (final capability in capabilities)
+        if (!provided.contains(capability)) capability,
+    ];
+  }
+
+  void _flareShipped(String id, List<String> capabilities) {
+    if (capabilities.isEmpty) return;
+    _flare('external.shipped', {
+      'bead': id,
+      'capabilities': capabilities.join(','),
+    });
   }
 
   /// A bead's CURRENT metadata via the safe snapshot read — the molecule
