@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart' show BeadsWorkspace;
@@ -6,14 +7,25 @@ import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 final class _Fixture {
-  _Fixture._(this.temp, this.gridHome, this.runtimeDir, this.databaseDir);
+  _Fixture._(
+    this.temp,
+    this.gridHome,
+    this.runtimeDir,
+    this.proxyRoot,
+    this.databaseDir,
+  );
 
   final Directory temp;
   final String gridHome;
   final String runtimeDir;
+  final String proxyRoot;
   final String databaseDir;
 
-  static _Fixture create({bool metadata = true, bool database = true}) {
+  static _Fixture create({
+    bool metadata = true,
+    bool database = true,
+    bool sidecarProxyRoot = false,
+  }) {
     final temp = Directory.systemTemp.createTempSync('state-store-gc-');
     final gridHome = p.join(temp.path, 'home');
     final runtimeDir = p.join(gridHome, '.grid');
@@ -24,9 +36,18 @@ final class _Fixture {
         '{"dolt_mode":"proxied-server","dolt_database":"tranquility"}',
       );
     }
-    final databaseDir = p.join(beadsDir, 'dolt', 'tranquility');
+    final proxyRoot = p.join(
+      beadsDir,
+      sidecarProxyRoot ? 'owned-proxy' : 'dolt',
+    );
+    if (sidecarProxyRoot) {
+      File(
+        p.join(beadsDir, 'proxied_server_client_info.json'),
+      ).writeAsStringSync('{"root_path":"owned-proxy"}');
+    }
+    final databaseDir = p.join(proxyRoot, 'tranquility');
     if (database) Directory(databaseDir).createSync(recursive: true);
-    return _Fixture._(temp, gridHome, runtimeDir, databaseDir);
+    return _Fixture._(temp, gridHome, runtimeDir, proxyRoot, databaseDir);
   }
 
   void dispose() => temp.deleteSync(recursive: true);
@@ -97,7 +118,7 @@ void main() {
       ].iterator;
       await StateStoreGc(
         readSize: (_) async =>
-            sizeRead++ == 0 ? kStateStoreGcThresholdBytes + 1 : 42,
+            sizeRead++ == 0 ? kStateStoreFlattenThresholdBytes : 42,
         now: () {
           times.moveNext();
           return times.current;
@@ -120,10 +141,189 @@ void main() {
       expect(output.single, contains('store=${fixture.databaseDir}'));
       expect(
         output.single,
-        contains('before_bytes=${kStateStoreGcThresholdBytes + 1}'),
+        contains('before_bytes=$kStateStoreFlattenThresholdBytes'),
       );
       expect(output.single, contains('after_bytes=42'));
       expect(output.single, contains('elapsed_ms=2345'));
+      expect(output.single, contains('flatten=skipped'));
+      expect(output.single, contains('flatten_reason=below_threshold'));
+      expect(
+        output.single,
+        contains('flatten_threshold_bytes=$kStateStoreFlattenThresholdBytes'),
+      );
+    },
+  );
+
+  test(
+    'oversized store flattens through an embedded facade before gc',
+    () async {
+      final fixture = _Fixture.create(sidecarProxyRoot: true);
+      addTearDown(fixture.dispose);
+      final metadataFile = File(
+        p.join(fixture.runtimeDir, '.beads', 'metadata.json'),
+      );
+      const sourceMetadata =
+          '{"dolt_mode":"proxied-server","dolt_database":"tranquility",'
+          '"prefix":"lunar","extra":{"kept":true}}';
+      metadataFile.writeAsStringSync(sourceMetadata);
+      for (final name in <String>[
+        'proxy.pid',
+        'proxy.lock',
+        'proxy-child.pid',
+        'proxy-child.lock',
+      ]) {
+        File(p.join(fixture.proxyRoot, name)).writeAsStringSync('stale');
+      }
+      final retained = File(p.join(fixture.proxyRoot, 'server.log'))
+        ..writeAsStringSync('keep');
+      final calls = <String>[];
+      final output = <String>[];
+      String? facadePath;
+      var reads = 0;
+
+      await StateStoreGc(
+        readSize: (path) async {
+          expect(path, fixture.databaseDir);
+          return reads++ == 0 ? kStateStoreFlattenThresholdBytes + 1 : 73;
+        },
+        runProcess: (executable, arguments, {required workingDirectory}) async {
+          calls.add('$executable ${arguments.join(' ')}');
+          if (arguments.first == 'flatten') {
+            facadePath = workingDirectory;
+            expect(
+              p.basename(workingDirectory),
+              startsWith('state-store-flatten-'),
+            );
+            final facadeBeads = p.join(workingDirectory, '.beads');
+            final facadeMetadata = jsonDecode(
+              File(p.join(facadeBeads, 'metadata.json')).readAsStringSync(),
+            );
+            expect(facadeMetadata, <String, Object?>{
+              'dolt_mode': 'embedded',
+              'dolt_database': 'tranquility',
+              'prefix': 'lunar',
+              'extra': <String, Object?>{'kept': true},
+            });
+            final embedded = Link(p.join(facadeBeads, 'embeddeddolt'));
+            expect(embedded.existsSync(), isTrue);
+            expect(
+              p.canonicalize(embedded.targetSync()),
+              p.canonicalize(fixture.proxyRoot),
+            );
+            expect(
+              <String>[
+                'proxy.pid',
+                'proxy.lock',
+                'proxy-child.pid',
+                'proxy-child.lock',
+              ].every(
+                (name) => !File(p.join(fixture.proxyRoot, name)).existsSync(),
+              ),
+              isTrue,
+            );
+            return _result(0, stdout: '{"success":true}');
+          }
+          if (arguments.first == 'info') {
+            _seedProxy(fixture.proxyRoot, port: 65101);
+          }
+          return _result(0);
+        },
+        out: output.add,
+      ).run(gridHome: fixture.gridHome);
+
+      expect(calls, <String>[
+        'bd dolt stop',
+        'bd flatten --force --json',
+        'dolt gc --full',
+        'bd info --json',
+      ]);
+      expect(facadePath, isNotNull);
+      expect(Directory(facadePath!).existsSync(), isFalse);
+      expect(metadataFile.readAsStringSync(), sourceMetadata);
+      expect(retained.readAsStringSync(), 'keep');
+      expect(output.single, contains('flatten=complete'));
+      expect(output.single, contains('after_bytes=73'));
+    },
+  );
+
+  test(
+    'flatten gc and restart errors accumulate in command order once',
+    () async {
+      final fixture = _Fixture.create();
+      addTearDown(fixture.dispose);
+      final errors = <String>[];
+      final calls = <String>[];
+
+      await StateStoreGc(
+        readSize: (_) async => kStateStoreFlattenThresholdBytes + 1,
+        runProcess: (executable, arguments, {required workingDirectory}) async {
+          calls.add('$executable ${arguments.join(' ')}');
+          return switch ((executable, arguments.first)) {
+            ('bd', 'flatten') => _result(
+              0,
+              stdout: '{"success":false,"error":"flatten refused"}',
+            ),
+            ('dolt', 'gc') => _result(9, stderr: 'gc failed'),
+            ('bd', 'info') => _result(11, stderr: 'restart failed'),
+            _ => _result(0),
+          };
+        },
+        err: errors.add,
+      ).run(gridHome: fixture.gridHome);
+
+      expect(calls, <String>[
+        'bd dolt stop',
+        'bd flatten --force --json',
+        'dolt gc --full',
+        'bd info --json',
+      ]);
+      expect(errors, hasLength(1));
+      final receipt = errors.single;
+      final flattenIndex = receipt.indexOf('did not report success');
+      final gcIndex = receipt.indexOf('gc failed');
+      final restartIndex = receipt.indexOf('restart failed');
+      expect(flattenIndex, greaterThanOrEqualTo(0));
+      expect(gcIndex, greaterThan(flattenIndex));
+      expect(restartIndex, greaterThan(gcIndex));
+    },
+  );
+
+  test(
+    'malformed zero-exit flatten response still restarts the proxy',
+    () async {
+      final fixture = _Fixture.create();
+      addTearDown(fixture.dispose);
+      final errors = <String>[];
+      final calls = <String>[];
+      String? facadePath;
+
+      await StateStoreGc(
+        readSize: (_) async => kStateStoreFlattenThresholdBytes + 1,
+        runProcess: (executable, arguments, {required workingDirectory}) async {
+          calls.add('$executable ${arguments.join(' ')}');
+          if (arguments.first == 'flatten') {
+            facadePath = workingDirectory;
+            return _result(0, stdout: 'not json');
+          }
+          if (arguments.first == 'info') {
+            _seedProxy(fixture.proxyRoot, port: 65102);
+          }
+          return _result(0);
+        },
+        err: errors.add,
+      ).run(gridHome: fixture.gridHome);
+
+      expect(calls, <String>[
+        'bd dolt stop',
+        'bd flatten --force --json',
+        'dolt gc --full',
+        'bd info --json',
+      ]);
+      expect(errors, hasLength(1));
+      expect(errors.single, contains('FormatException'));
+      expect(File(p.join(fixture.proxyRoot, 'proxy.pid')).existsSync(), isTrue);
+      expect(facadePath, isNotNull);
+      expect(Directory(facadePath!).existsSync(), isFalse);
     },
   );
 
@@ -231,11 +431,15 @@ void main() {
       readSize: (_) async => kStateStoreGcThresholdBytes + 1,
       runProcess: (_, __, {required workingDirectory}) async {
         calls++;
-        return calls == 1 ? _result(0) : _result(9, stderr: 'gc failed');
+        if (calls == 2) return _result(9, stderr: 'gc failed');
+        if (calls == 3) {
+          _seedProxy(fixture.proxyRoot, port: 65103);
+        }
+        return _result(0);
       },
       err: errors.add,
     ).run(gridHome: fixture.gridHome);
-    expect(calls, 2);
+    expect(calls, 3);
     expect(errors.single, contains('state-store gc FAILED'));
     expect(errors.single, contains('gc failed'));
   });

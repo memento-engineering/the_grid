@@ -7,6 +7,7 @@
  - **FEAT**(trajectory): add G2 molecule graph posture and edge delta folding (#478).
  - **FEAT**(admission): expose the live admission ceiling (#475).
  - **FEAT**(station): prune closed session graphs on schedule (#474).
+ - **FEAT**(maintenance): flatten oversized state stores before boot.
 
 ## 0.4.0-dev.4
 
