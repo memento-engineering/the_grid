@@ -1,3 +1,7 @@
+## 0.3.0-dev.5
+
+ - **FIX**(engine): publish closed external dependency targets (#494).
+
 ## 0.3.0-dev.4
 
  - **FIX**(beads_dart): bind state bd writes to the owned proxy (#477).

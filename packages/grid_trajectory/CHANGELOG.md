@@ -1,3 +1,7 @@
+## 0.2.1-dev.5
+
+ - **FIX**(trajectory): require complete shadow accounting (#485).
+
 ## 0.2.1-dev.4
 
  - **FIX**(trajectory): widen the w6 drain tolerance to 0.25 (#481).

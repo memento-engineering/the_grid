@@ -1,3 +1,7 @@
+## 0.2.1-dev.7
+
+ - **FIX**(engine): publish closed external dependency targets (#494).
+
 ## 0.2.1-dev.6
 
  - **FIX**(trajectory): retire liveness-lost sessions (#480).

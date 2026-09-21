@@ -1,3 +1,9 @@
+## 0.4.0-dev.6
+
+ - **FIX**(gate): resume blocked steps on gate resolve and acknowledged re-arm (#486).
+ - **FIX**(engine): publish closed external dependency targets (#494).
+ - **FEAT**(maintenance): flatten oversized state stores before boot (#489).
+
 ## 0.4.0-dev.5
 
  - **FIX**(trajectory): retire liveness-lost sessions (#480).

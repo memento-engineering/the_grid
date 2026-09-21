@@ -1,3 +1,7 @@
+## 0.6.0-dev.5
+
+ - **FIX**(gate): resume blocked steps on gate resolve and acknowledged re-arm (#486).
+
 ## 0.6.0-dev.4
 
  - **FIX**(rework): close session and gates before rekey and report receipts (#479).
