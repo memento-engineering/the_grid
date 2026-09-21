@@ -13,6 +13,24 @@ Bead closed(String id, {List<String> labels = const []}) => Bead(
   labels: labels,
 );
 
+GraphSnapshot snapshot(
+  Iterable<Bead> beads, {
+  Iterable<BeadDependency> dependencies = const [],
+  Iterable<String> readyIds = const [],
+}) => GraphSnapshot.fromParts(
+  beads: beads,
+  dependencies: dependencies,
+  readyIds: readyIds,
+  capturedAt: DateTime.utc(2026, 9, 18),
+);
+
+Bead stamped(String id) => Bead(
+  id: id,
+  issueType: IssueType.task,
+  status: BeadStatus.open,
+  metadata: const {kEligibilityApprovalKey: '2026-09-18T00:00:00Z'},
+);
+
 void main() {
   group('ExternalDepRef', () {
     test('parses the wire form and round-trips it', () {
@@ -210,6 +228,217 @@ void main() {
         isShipped: (_, _) => false,
       );
       expect(verdict.admitted, isEmpty);
+    });
+  });
+
+  group('healableExternalDepTargets', () {
+    const row = BeadDependency(
+      issueId: 'tg-1',
+      dependsOnId: 'external:power_station:pow-9',
+    );
+
+    Map<String, GraphSnapshot> federation({
+      required BeadDependency dependency,
+      Iterable<Bead> powerBeads = const [],
+      bool includePower = true,
+    }) => {
+      'the_grid': snapshot([stamped('tg-1')], dependencies: [dependency]),
+      if (includePower) 'power_station': snapshot(powerBeads),
+    };
+
+    test('classifies only an exact CLOSED unlabelled core target', () {
+      expect(
+        healableExternalDepTargets(
+          federation(dependency: row, powerBeads: [closed('pow-9')]),
+        ),
+        const [ExternalDepRef(project: 'power_station', capability: 'pow-9')],
+      );
+
+      final excluded = <String, Map<String, GraphSnapshot>>{
+        'missing project': federation(dependency: row, includePower: false),
+        'absent exact id': federation(
+          dependency: row,
+          powerBeads: [closed('pow-other')],
+        ),
+        'named capability': federation(
+          dependency: const BeadDependency(
+            issueId: 'tg-1',
+            dependsOnId: 'external:power_station:release-gate',
+          ),
+          powerBeads: [
+            closed('pow-container', labels: const ['export:release-gate']),
+          ],
+        ),
+        'open target': federation(dependency: row, powerBeads: [bead('pow-9')]),
+        'non-core target': federation(
+          dependency: row,
+          powerBeads: const [
+            Bead(
+              id: 'pow-9',
+              issueType: IssueType('session'),
+              status: BeadStatus.closed,
+            ),
+          ],
+        ),
+        'provided target': federation(
+          dependency: row,
+          powerBeads: [
+            closed('pow-9', labels: const ['provides:pow-9']),
+          ],
+        ),
+        'non-blocking row': federation(
+          dependency: const BeadDependency(
+            issueId: 'tg-1',
+            dependsOnId: 'external:power_station:pow-9',
+            type: DependencyType.related,
+          ),
+          powerBeads: [closed('pow-9')],
+        ),
+      };
+      for (final entry in excluded.entries) {
+        expect(
+          healableExternalDepTargets(entry.value),
+          isEmpty,
+          reason: entry.key,
+        );
+      }
+    });
+
+    test('deduplicates multiple consumers and returns lexical wire order', () {
+      final grid = snapshot(
+        [stamped('tg-1'), stamped('tg-2')],
+        dependencies: const [
+          BeadDependency(issueId: 'tg-1', dependsOnId: 'external:zeta:z-1'),
+          BeadDependency(issueId: 'tg-1', dependsOnId: 'external:alpha:a-1'),
+          BeadDependency(issueId: 'tg-2', dependsOnId: 'external:alpha:a-1'),
+        ],
+      );
+      expect(
+        healableExternalDepTargets({
+          'the_grid': grid,
+          'zeta': snapshot([closed('z-1')]),
+          'alpha': snapshot([closed('a-1')]),
+        }),
+        const [
+          ExternalDepRef(project: 'alpha', capability: 'a-1'),
+          ExternalDepRef(project: 'zeta', capability: 'z-1'),
+        ],
+      );
+    });
+  });
+
+  group('externalDepOpenTargetClause', () {
+    MountEligibilityDecision evaluate({
+      required Bead consumer,
+      required List<BeadDependency> dependencies,
+      required List<Bead> targets,
+    }) {
+      final graph = snapshot([
+        consumer,
+        ...targets,
+      ], dependencies: dependencies);
+      return externalDepOpenTargetClause(graph)(consumer);
+    }
+
+    test('refuses only stamped blocking rows with an exact OPEN target', () {
+      const row = BeadDependency(
+        issueId: 'tg-1',
+        dependsOnId: 'external:power_station:pow-9',
+      );
+      final approved = stamped('tg-1');
+
+      expect(
+        evaluate(
+          consumer: bead('tg-1'),
+          dependencies: const [row],
+          targets: [bead('pow-9')],
+        ),
+        const MountEligibilityDecision.eligible(),
+        reason: 'unstamped',
+      );
+      expect(
+        evaluate(
+          consumer: approved,
+          dependencies: const [
+            BeadDependency(
+              issueId: 'tg-1',
+              dependsOnId: 'external:power_station:pow-9',
+              type: DependencyType.related,
+            ),
+          ],
+          targets: [bead('pow-9')],
+        ),
+        const MountEligibilityDecision.eligible(),
+        reason: 'non-blocking',
+      );
+      expect(
+        evaluate(
+          consumer: approved,
+          dependencies: const [row],
+          targets: [bead('pow-9').copyWith(status: BeadStatus.inProgress)],
+        ),
+        const MountEligibilityDecision.eligible(),
+        reason: 'the visibility clause is intentionally exact-OPEN',
+      );
+
+      final graph = snapshot(
+        [approved, bead('pow-9')],
+        dependencies: const [row],
+      );
+      expect(
+        externalDepOpenTargetClause(graph)(approved),
+        const MountEligibilityDecision.refused(
+          clause: 'external-unshipped: power_station:pow-9 (target open)',
+        ),
+      );
+      expect(hasStampedOpenExternalTargetHold(graph, approved), isTrue);
+    });
+
+    test('orders multiple exact open targets lexically', () {
+      final consumer = stamped('tg-1');
+      expect(
+        evaluate(
+          consumer: consumer,
+          dependencies: const [
+            BeadDependency(issueId: 'tg-1', dependsOnId: 'external:zeta:z-1'),
+            BeadDependency(issueId: 'tg-1', dependsOnId: 'external:alpha:a-1'),
+          ],
+          targets: [bead('z-1'), bead('a-1')],
+        ),
+        const MountEligibilityDecision.refused(
+          clause: 'external-unshipped: alpha:a-1 (target open)',
+        ),
+      );
+    });
+
+    test('absent named and CLOSED targets are eligible at this clause', () {
+      final consumer = stamped('tg-1');
+      for (final targets in <List<Bead>>[
+        [
+          closed('pow-container', labels: const ['export:release-gate']),
+        ],
+        [closed('pow-9')],
+        [
+          closed('pow-9', labels: const ['provides:pow-9']),
+        ],
+      ]) {
+        final capability = targets.single.id == 'pow-container'
+            ? 'release-gate'
+            : 'pow-9';
+        expect(
+          evaluate(
+            consumer: consumer,
+            dependencies: [
+              BeadDependency(
+                issueId: 'tg-1',
+                dependsOnId: 'external:power_station:$capability',
+              ),
+            ],
+            targets: targets,
+          ),
+          const MountEligibilityDecision.eligible(),
+        );
+      }
     });
   });
 

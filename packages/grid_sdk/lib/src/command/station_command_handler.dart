@@ -193,19 +193,19 @@ final class StationCommandHandler implements GridCommandHandler {
     });
   }
 
-  /// SHIPS every capability an observed CLOSED work bead still owes — the
-  /// second half of tg-xh5d's ship-on-close ruling
+  /// Publishes every capability an observed CLOSED work bead still owes — the
+  /// second half of tg-xh5d's publish-on-close ruling
   /// (`the_grid#capability-edges-are-bd-native-and-link-is-sugar`).
   ///
-  /// [StationBeadWriter.close] ships on the spot for every bead the station
-  /// itself closes. This is the other producer: "a bead closed by an operator
-  /// BY HAND is shipped by the same path the next time the station observes
-  /// the close". The station observes through each work store's resident
-  /// snapshot, so this pass reads that snapshot, asks
-  /// [unshippedExports] which CLOSED beads still carry an
-  /// `export:<capability>` with no matching `provides:`, and runs the writer's
-  /// own [StationBeadWriter.shipExports] over them — one path, not a second
-  /// spelling of the ship.
+  /// [StationBeadWriter.close] publishes on the spot for every core bead the
+  /// station itself closes. This is the other producer: a bead closed by an
+  /// operator is published by the same writer path the next time the station
+  /// observes the close. The station observes through each work store's
+  /// resident snapshot, so this pass handles both explicit `export:` labels
+  /// and id-shaped external rows whose exact target is CLOSED but lacks its
+  /// `provides:<id>` fact. Both delegate to
+  /// [StationBeadWriter.shipExports] — one path, not a second spelling of the
+  /// publication contract.
   ///
   /// Rising-edge, like the frontier's refusal log: a capability is shipped ONCE
   /// per observation of the bead owing it, and its key is dropped the moment
@@ -230,9 +230,22 @@ final class StationCommandHandler implements GridCommandHandler {
   Future<void> _settleCapabilityExports() async {
     final observed = <String>{};
     // The map is keyed on BOTH identity axes, so the same binding appears
-    // twice; ship each store once.
-    for (final store in {..._workStoresByIdentity.values}) {
-      final snapshot = store.source.current;
+    // twice. Canonicalise it by substation before taking the settled view used
+    // by both publication sweeps.
+    final storesBySubstation = <String, WorkCommandStore>{};
+    for (final store in _workStoresByIdentity.values) {
+      storesBySubstation[store.substation] = store;
+    }
+    final substations = storesBySubstation.keys.toList()..sort();
+    final snapshotsByProject = <String, GraphSnapshot>{};
+    for (final substation in substations) {
+      final snapshot = storesBySubstation[substation]!.source.current;
+      if (snapshot != null) snapshotsByProject[substation] = snapshot;
+    }
+
+    for (final substation in substations) {
+      final store = storesBySubstation[substation]!;
+      final snapshot = snapshotsByProject[substation];
       if (snapshot == null) continue;
       for (final owed in unshippedExports(snapshot.beadsById.values).entries) {
         final keys = [
@@ -244,6 +257,18 @@ final class StationCommandHandler implements GridCommandHandler {
         await store.writer.shipExports(owed.key);
         _shippedCapabilities.addAll(keys);
       }
+    }
+
+    // Consumer-driven bare-close healing. The admission classifier owns the
+    // exact-id/CLOSED/core scope; this rail owns only the existing serialized
+    // publication and rising-edge suppression.
+    for (final target in healableExternalDepTargets(snapshotsByProject)) {
+      final store = storesBySubstation[target.project]!;
+      final key = '${target.project}/${target.capability}/${target.capability}';
+      observed.add(key);
+      if (_shippedCapabilities.contains(key)) continue;
+      await store.writer.shipExports(target.capability, [target.capability]);
+      _shippedCapabilities.add(key);
     }
     _shippedCapabilities.retainAll(observed);
   }
