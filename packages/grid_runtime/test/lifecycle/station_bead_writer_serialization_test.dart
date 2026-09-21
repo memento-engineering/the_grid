@@ -169,8 +169,11 @@ const _pourPlan = GraphApplyPlan(
   nodes: <GraphNode>[GraphNode(key: 'root', title: 'Root', type: 'task')],
 );
 
-Future<String> _stationBeadWriterSource() async {
-  final sourceUri = await Isolate.resolvePackageUri(
+Future<String> _stationBeadWriterSource({
+  Future<Uri?> Function(Uri packageUri) resolvePackageUri =
+      Isolate.resolvePackageUri,
+}) async {
+  final sourceUri = await resolvePackageUri(
     Uri.parse('package:grid_runtime/src/lifecycle/station_bead_writer.dart'),
   );
   if (sourceUri == null) {
@@ -371,6 +374,31 @@ void main() {
       runner.release(1);
       await second;
     });
+
+    test('source lookup is independent of process current directory', () async {
+      final originalCurrentDirectory = Directory.current;
+      final temporaryDirectory = Directory.systemTemp.createTempSync(
+        'station-bead-writer-source-',
+      );
+      try {
+        Directory.current = temporaryDirectory;
+        final source = await _stationBeadWriterSource();
+        expect(source, contains('_storePourTail'));
+      } finally {
+        Directory.current = originalCurrentDirectory;
+        temporaryDirectory.deleteSync(recursive: true);
+      }
+    });
+
+    test(
+      'source lookup fails loudly when package resolution returns null',
+      () async {
+        await expectLater(
+          _stationBeadWriterSource(resolvePackageUri: (_) async => null),
+          throwsStateError,
+        );
+      },
+    );
 
     test(
       'different store writers do not share a durable or process-global queue',
