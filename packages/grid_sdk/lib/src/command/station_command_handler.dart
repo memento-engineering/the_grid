@@ -1682,25 +1682,83 @@ final class StationCommandHandler implements GridCommandHandler {
     }
 
     final session = sessionId == null ? null : state.bead(sessionId);
-    final ruledAway = {
-      for (final ruling in rulings)
-        if (ruling.grade != 'F') ruling.path,
-    };
-    if (session != null && node != null) {
+    if (node != null) {
+      final stepBeads = session == null
+          ? const <Bead>[]
+          : state.beads
+                .where(
+                  (bead) =>
+                      bead.issueType == GridIssueTypes.step &&
+                      _meta(bead, MoleculeStepKeys.session) == session.id,
+                )
+                .toList(growable: false);
+      final projected = projectMoleculeCursor(
+        stepBeads,
+        dependencies: state.dependencies,
+      );
+      if (session == null ||
+          session.issueType != GridIssueTypes.session ||
+          session.isClosed ||
+          _meta(session, SessionBeadKeys.model) != kSessionModelMolecule ||
+          !projected.beadIdByNodePath.containsKey(node)) {
+        final blockedSession = sessionId ?? '<missing>';
+        return _refused(
+          'gate_resume_unavailable',
+          'Session "$blockedSession" has no reachable live scope for gated '
+              'node "$node"; use grid rework instead.',
+        );
+      }
+
+      final stepResults = <String, Map<String, String>>{};
+      for (final stepId in projected.beadIdByNodePath.values) {
+        final step = state.bead(stepId);
+        if (step != null) {
+          stepResults.addAll(projectCircuitResults(step));
+        }
+      }
+      var effectiveResults = mergeOperatorRulings(
+        stepResults,
+        projectCircuitResults(session),
+      );
+      if (rulings.isNotEmpty) {
+        final candidate = Bead(
+          id: '$sessionId#gate-resolve-preflight',
+          metadata: {
+            for (final ruling in rulings)
+              ...operatorRulingMetadata(
+                ruling.path,
+                grade: ruling.grade,
+                rationale: rationale!,
+                evidenceSession: sessionId!,
+              ),
+          },
+        );
+        effectiveResults = mergeOperatorRulings(
+          effectiveResults,
+          projectCircuitResults(candidate),
+        );
+      }
+
       final parent = node.contains('/')
           ? node.substring(0, node.lastIndexOf('/'))
           : '';
-      final hasFeedingF = projectCircuitResults(session).entries.any(
-        (entry) =>
-            entry.key != node &&
-            _isSiblingOf(entry.key, parent) &&
-            (entry.value[ResultKeys.grade] ?? '').toUpperCase() == 'F' &&
-            !ruledAway.contains(entry.key),
-      );
-      if (hasFeedingF) {
+      final invalidatingPaths =
+          effectiveResults.entries
+              .where(
+                (entry) =>
+                    _isSiblingOf(entry.key, parent) &&
+                    (entry.value[ResultKeys.grade] ?? '').toUpperCase() == 'F',
+              )
+              .map((entry) => entry.key)
+              .toList(growable: false)
+            ..sort();
+      if (invalidatingPaths.isNotEmpty) {
+        final invalidatingPath = invalidatingPaths.first;
         return _refused(
           'feeding_grade_f',
-          'A feeding lane still has grade F; closing would immediately re-gate.',
+          'Session "$sessionId" still has grade F at "$invalidatingPath"; '
+              'pass --grade $invalidatingPath=A with --rationale or use '
+              'grid rework.',
         );
       }
     }
