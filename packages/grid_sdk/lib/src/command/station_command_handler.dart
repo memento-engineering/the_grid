@@ -1302,6 +1302,17 @@ final class StationCommandHandler implements GridCommandHandler {
     }
     final round = maxRound + 1;
 
+    final openBlockingGates = state.beads
+        .where(
+          (bead) =>
+              bead.issueType == GridIssueTypes.gate &&
+              !bead.isClosed &&
+              _meta(bead, 'blocks') == session.id,
+        )
+        .toList(growable: false);
+    final readinessHeld = openBlockingGates.any(
+      (gate) => _meta(gate, 'node') == '$beadId/spec_review/readiness-route',
+    );
     if (!session.isClosed) {
       final beadCursor =
           _meta(session, SessionBeadKeys.model) == kSessionModelMolecule
@@ -1332,12 +1343,7 @@ final class StationCommandHandler implements GridCommandHandler {
       // leaving a session that was neither driving nor reworkable with no
       // sanctioned operator exit. This is A48's rule on the park axis: the
       // MARKER, not the cursor, is the evidence.
-      final gateParked = state.beads.any(
-        (bead) =>
-            bead.issueType == GridIssueTypes.gate &&
-            !bead.isClosed &&
-            _meta(bead, 'blocks') == session.id,
-      );
+      final gateParked = openBlockingGates.isNotEmpty;
       // A `running` step REFUSES even under an open gate — the mid-flight
       // guard the widening must not spend. A settled park has nothing running
       // by construction (OPERATIONS §2.3: "an open-but-gated session with
@@ -1421,30 +1427,32 @@ final class StationCommandHandler implements GridCommandHandler {
       return _refused('ownership_refused', error.toString());
     }
 
-    // Subscribe BEFORE reading `current`: the rail is non-replaying and may
-    // publish synchronously during either refresh. This ordering closes both
-    // gaps (publish-before-listen and publish-between-read-and-listen) without
-    // adding a second state accessor or mint path.
+    StreamSubscription<GraphSnapshot>? stateSubscription;
+    Completer<void>? successorObserved;
     GraphSnapshot? latestState;
-    final successorObserved = Completer<void>();
-    void observeState(GraphSnapshot snapshot) {
-      latestState = snapshot;
-      if (_openReworkSuccessors(
-            snapshot,
-            beadId: beadId,
-            retiredSessionId: session.id,
-          ).isNotEmpty &&
-          !successorObserved.isCompleted) {
-        successorObserved.complete();
-      }
-    }
-
-    final stateSubscription = _stateSource.snapshots.listen(
-      observeState,
-      onError: (Object _, StackTrace __) {},
-    );
-    latestState = _stateSource.current;
     try {
+      if (readinessHeld) {
+        successorObserved = Completer<void>();
+        // The snapshot rail and its current value are the restored, persisted
+        // session state-of-record (ADR-0013 Rule 5), not a side channel used
+        // to reconstruct state missing from a value. Subscribe BEFORE reading
+        // `current`: the rail is non-replaying and may publish synchronously
+        // during either refresh.
+        stateSubscription = _stateSource.snapshots.listen((snapshot) {
+          latestState = snapshot;
+          if (_openReworkSuccessors(
+                    snapshot,
+                    beadId: beadId,
+                    retiredSessionId: session.id,
+                  ).length ==
+                  1 &&
+              !successorObserved!.isCompleted) {
+            successorObserved.complete();
+          }
+        }, onError: (Object _, StackTrace __) {});
+        latestState = _stateSource.current;
+      }
+
       // A resident-internal caller can issue this command inside the current
       // projection/flush turn. Publish both durable mutation rails now: the
       // state re-key lets the join retire beadId#rN, while the work refresh
@@ -1473,19 +1481,11 @@ final class StationCommandHandler implements GridCommandHandler {
       );
 
       var observedSuccessors = successors();
-      // A43/A47/A48: ready + no live session IS the governor's pending bin.
-      // It is a successful rework outcome, not a missing mint and not a reason
-      // to wait out the engine's freshness grace. Admission may legitimately
-      // be later than that grace when slots are full or an earlier candidate
-      // wins.
-      final pendingAdmission =
-          observedSuccessors.isEmpty &&
-          refreshedWork!.readyIds.contains(beadId);
-      if (observedSuccessors.isEmpty && !pendingAdmission) {
-        // Outside the pending bin, give an already-started mint the engine's
-        // own freshness window to surface. The deadline is evidence-only: it
-        // never retries or mutates the already-retired predecessor.
-        await successorObserved.future.timeout(
+      if (readinessHeld && observedSuccessors.length != 1) {
+        // A readiness-route hold is the measured race: its successor mint can
+        // follow the paired refresh. Give that existing engine path its own
+        // freshness window to publish; this observer never mints or retries.
+        await successorObserved!.future.timeout(
           SessionScopeState.freshMintSnapshotGrace,
           onTimeout: () {},
         );
@@ -1501,15 +1501,15 @@ final class StationCommandHandler implements GridCommandHandler {
               'observed for "$beadId"',
         );
       }
-      if (observedSuccessors.isEmpty && !pendingAdmission) {
+      if (observedSuccessors.isEmpty) {
         return _reworkSuccessorUnobserved(
           predecessorId: session.id,
           retiredKey: reworkKeyFor(beadId, round),
-          detail: 'no open successor or pending-admission verdict was observed',
+          detail: 'no open successor session was observed for "$beadId"',
         );
       }
 
-      final successor = observedSuccessors.singleOrNull;
+      final successor = observedSuccessors.single;
       return GridCommandResult.completed(
         message: reapFailure == null
             ? 'Rework round $round retired session "${session.id}".'
@@ -1534,22 +1534,16 @@ final class StationCommandHandler implements GridCommandHandler {
                 'cause': receipt.cause.wireValue,
               },
           ],
-          if (successor != null)
-            'successorSession': {
-              'sessionId': successor.id,
-              'workBeadId': beadId,
-              'approvalRev': approvalRev,
-            }
-          else
-            'pendingAdmission': {
-              'workBeadId': beadId,
-              'approvalRev': approvalRev,
-            },
+          'successorSession': {
+            'sessionId': successor.id,
+            'workBeadId': beadId,
+            'approvalRev': approvalRev,
+          },
           if (reapFailure != null) 'reapFailure': reapFailure,
         },
       );
     } finally {
-      await stateSubscription.cancel();
+      await stateSubscription?.cancel();
     }
   }
 

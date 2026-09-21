@@ -49,7 +49,12 @@ void main() {
           },
           'closedGates': [
             {
-              'gateId': 'tgdog-gate',
+              'gateId': 'tgdog-z-gate',
+              'sessionId': 'tgdog-session',
+              'cause': 'superseded-round',
+            },
+            {
+              'gateId': 'tgdog-a-gate',
               'sessionId': 'tgdog-session',
               'cause': 'superseded-round',
             },
@@ -67,68 +72,39 @@ void main() {
     expect(
       result.stdout,
       'grid rework — voided session tgdog-session (reworked).\n'
-      'grid rework — closed gate tgdog-gate (superseded-round).\n'
+      'grid rework — closed gate tgdog-a-gate (superseded-round).\n'
+      'grid rework — closed gate tgdog-z-gate (superseded-round).\n'
       'grid rework — minted session tgdog-successor for work-1 at approval '
       'approved-rev.\n',
     );
     expect(result.stderr, isEmpty);
   });
 
-  test(
-    'reports a governor-queued successor as successful pending admission',
-    () async {
-      final result = await runCaptured(
-        FakeClient(
-          const StationCommandCompleted({
-            'closedSession': {
-              'sessionId': 'tgdog-session',
-              'reason': 'reworked',
-              'disposition': 'voided',
-            },
-            'closedGates': [],
-            'pendingAdmission': {
-              'workBeadId': 'work-1',
-              'approvalRev': 'approved-rev',
-            },
-          }),
-        ),
-      );
+  test('rejects a pending-only completed response as incomplete', () async {
+    final result = await runCaptured(
+      FakeClient(
+        const StationCommandCompleted({
+          'closedSession': {
+            'sessionId': 'tgdog-session',
+            'reason': 'reworked',
+            'disposition': 'voided',
+          },
+          'closedGates': [],
+          'pendingAdmission': {
+            'workBeadId': 'work-1',
+            'approvalRev': 'approved-rev',
+          },
+        }),
+      ),
+    );
 
-      expect(result.code, 0);
-      expect(
-        result.stdout,
-        'grid rework — voided session tgdog-session (reworked).\n'
-        'grid rework — successor pending admission for work-1 at approval '
-        'approved-rev.\n',
-      );
-      expect(result.stderr, isEmpty);
-    },
-  );
-
-  test(
-    'refuses an incomplete completed response without partial stdout',
-    () async {
-      final result = await runCaptured(
-        FakeClient(
-          const StationCommandCompleted({
-            'closedSession': {
-              'sessionId': 'tgdog-session',
-              'reason': 'reworked',
-              'disposition': 'voided',
-            },
-            'closedGates': [],
-          }),
-        ),
-      );
-
-      expect(result.code, 64);
-      expect(result.stdout, isEmpty);
-      expect(
-        result.stderr,
-        'grid rework: resident completed without a complete retirement receipt.\n',
-      );
-    },
-  );
+    expect(result.code, 64);
+    expect(result.stdout, isEmpty);
+    expect(
+      result.stderr,
+      'grid rework: resident completed without a complete retirement receipt.\n',
+    );
+  });
 
   test('reports a resident close refusal on stderr only', () async {
     final result = await runCaptured(

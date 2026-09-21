@@ -125,27 +125,16 @@ class ReworkCommand extends Command<int> {
         final successorApprovalRev = _nonEmptyText(
           successorSession?['approvalRev'],
         );
-        final pendingAdmission = _stringMap(value['pendingAdmission']);
-        final pendingWorkBeadId = _nonEmptyText(
-          pendingAdmission?['workBeadId'],
-        );
-        final pendingApprovalRev = _nonEmptyText(
-          pendingAdmission?['approvalRev'],
-        );
         final hasSuccessor =
             successorId != null &&
             successorWorkBeadId == beadId &&
             successorApprovalRev != null;
-        final hasPending =
-            pendingWorkBeadId == beadId && pendingApprovalRev != null;
         final completeReceipt =
             sessionId != null &&
             closedSession?['reason'] == 'reworked' &&
             closedSession?['disposition'] == 'voided' &&
             closedGates != null &&
-            hasSuccessor != hasPending &&
-            (value['successorSession'] == null || hasSuccessor) &&
-            (value['pendingAdmission'] == null || hasPending);
+            hasSuccessor;
         if (!completeReceipt) {
           stderr.writeln(
             'grid rework: resident completed without a complete retirement receipt.',
@@ -160,17 +149,10 @@ class ReworkCommand extends Command<int> {
             '(${gate['cause']}).',
           );
         }
-        if (hasSuccessor) {
-          stdout.writeln(
-            'grid rework — minted session $successorId for $beadId at '
-            'approval $successorApprovalRev.',
-          );
-        } else {
-          stdout.writeln(
-            'grid rework — successor pending admission for $beadId at '
-            'approval $pendingApprovalRev.',
-          );
-        }
+        stdout.writeln(
+          'grid rework — minted session $successorId for $beadId at '
+          'approval $successorApprovalRev.',
+        );
         return 0;
       case StationCommandRefused(:final message) ||
           StationCommandUnavailable(:final message):

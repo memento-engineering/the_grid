@@ -142,7 +142,8 @@ final class _FakeStationCommandClient extends StationCommandClient {
         'disposition': 'voided',
       },
       'closedGates': const [],
-      'pendingAdmission': {
+      'successorSession': {
+        'sessionId': 'session-new',
         'workBeadId': params['beadId'],
         'approvalRev': 'approved-rev',
       },
