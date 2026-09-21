@@ -1,10 +1,24 @@
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 import 'support/recording_bd_runner.dart';
+
+Future<String> _stationBeadWriterSource({
+  Future<Uri?> Function(Uri packageUri) resolvePackageUri =
+      Isolate.resolvePackageUri,
+}) async {
+  final sourceUri = await resolvePackageUri(
+    Uri.parse('package:grid_runtime/src/lifecycle/station_bead_writer.dart'),
+  );
+  if (sourceUri == null) {
+    throw StateError('Could not resolve the StationBeadWriter source URI');
+  }
+  return File.fromUri(sourceUri).readAsString();
+}
 
 Bead _work(
   String id, {
@@ -208,11 +222,12 @@ void main() {
     expect(runner.callsFor('update'), hasLength(1));
   });
 
-  test('the writer never calls the proxied-mode-refused bd ship verb', () {
-    final source = File(
-      'lib/src/lifecycle/station_bead_writer.dart',
-    ).readAsStringSync();
+  test(
+    'the writer never calls the proxied-mode-refused bd ship verb',
+    () async {
+      final source = await _stationBeadWriterSource();
 
-    expect(source, isNot(contains('_bd.ship(')));
-  });
+      expect(source, isNot(contains('_bd.ship(')));
+    },
+  );
 }
