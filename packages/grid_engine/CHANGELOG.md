@@ -1,3 +1,11 @@
+## 0.4.0-dev.11
+
+ - **FIX**(gate): resume blocked steps on gate resolve and acknowledged re-arm (#486).
+ - **FIX**(engine): publish closed external dependency targets (#494).
+ - **FIX**(engine): park exhausted persist failures at a gate (#488).
+ - **FIX**(engine): report wedge tuple changes (#487).
+ - **FIX**(engine): qualify persists against the current dependency pass (#484).
+
 ## 0.4.0-dev.10
 
  - **FIX**(trajectory): retire liveness-lost sessions (#480).
