@@ -337,6 +337,11 @@ class SessionScopeState extends State<SessionScope>
   bool _mintFailureActive = false;
   bool _cancelled = false;
   bool _terminalScheduled = false;
+
+  /// The exact step-bead generation whose derived human gate owns the terminal
+  /// latch. Null for positive close and breaker escalation, which are never
+  /// rearmable.
+  String? _rearmableTerminalStepBeadId;
   bool _deliveryOutcomeBlocked = false;
   bool _commitOnlyCompleteFlared = false;
 
@@ -1336,6 +1341,7 @@ class SessionScopeState extends State<SessionScope>
   }) {
     if (_terminalScheduled) return;
     _terminalScheduled = true;
+    _rearmableTerminalStepBeadId = null;
     scheduleMicrotask(
       () => unawaited(_completeAndClose(id, outcomeMetadata: outcomeMetadata)),
     );
@@ -1521,6 +1527,7 @@ class SessionScopeState extends State<SessionScope>
   void _scheduleEscalation(String id, String reason) {
     if (_terminalScheduled) return;
     _terminalScheduled = true;
+    _rearmableTerminalStepBeadId = null;
     scheduleMicrotask(() => unawaited(_escalateAndClose(id, reason)));
   }
 
@@ -1534,6 +1541,7 @@ class SessionScopeState extends State<SessionScope>
   }) {
     if (_terminalScheduled) return;
     _terminalScheduled = true;
+    _rearmableTerminalStepBeadId = stepBeadId;
     scheduleMicrotask(
       () => unawaited(
         _persistDerivedEscalation(
@@ -1576,8 +1584,10 @@ class SessionScopeState extends State<SessionScope>
       stepBeadId: stepBeadId,
       gatedMetadata: stepBeadMetadata(node.copyWith(state: StepState.gated)),
       isActive: () => !_cancelled && context.mounted,
-      failToSupervision: (failure) =>
-          _escalateAndClose(sessionId, '$nodePath: $failure'),
+      failToSupervision: (failure) async {
+        _rearmableTerminalStepBeadId = null;
+        await _escalateAndClose(sessionId, '$nodePath: $failure');
+      },
       emitFlare: _flare,
     );
   }
@@ -1877,17 +1887,20 @@ class SessionScopeState extends State<SessionScope>
       );
       switch (result) {
         case Acked():
-          // Settled OK: clear the guard. The store's `gated`→`pending` flip
-          // stops D-7 from re-firing and frees a future gate cycle. The prior
-          // derived escalation set the terminal latch while it parked this
-          // node; only an ACKED re-arm can reopen terminal scheduling for the
-          // resumed circuit. `the_grid#admission-authority-in-process-cut`
-          // remains intact: "SessionScope asks the same object
-          // [StationAdmissionAuthority] for attempt transitions while
-          // retaining tree-owned circuit and step execution." This latch
-          // reset does not touch that admission-authority cut.
-          _terminalScheduled = false;
+          // Settled OK: clear the in-flight guard. The store's
+          // `gated`→`pending` flip stops D-7 from re-firing and frees a future
+          // gate cycle. Only the exact active step-bead generation whose
+          // derived gate owns the terminal latch may reopen terminal
+          // scheduling; an unrelated or superseded re-arm cannot admit a
+          // duplicate close. This preserves
+          // `the_grid#a47-routing-is-a-first-class-engine-primitive-stepoutcome-re`'s
+          // non-lossy human-gate park/re-arm fence and changes only latch
+          // ownership.
           _rearming.remove(nodePath);
+          if (moleculeTarget == _rearmableTerminalStepBeadId) {
+            _terminalScheduled = false;
+            _rearmableTerminalStepBeadId = null;
+          }
         case Dropped() || Suppressed():
           // Cut re-gates this node, so its in-flight guard remains the storm
           // budget. Shadow has no admission halt and retains its old behavior.
@@ -1953,6 +1966,7 @@ class SessionScopeState extends State<SessionScope>
     _sessionId = null;
     _resolving = true;
     _terminalScheduled = false;
+    _rearmableTerminalStepBeadId = null;
     _deliveryOutcomeBlocked = false;
     _commitOnlyCompleteFlared = false;
     _rearming.clear();

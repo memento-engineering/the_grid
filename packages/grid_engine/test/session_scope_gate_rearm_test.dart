@@ -46,6 +46,15 @@ const _code = Circuit(
   ],
 );
 
+const _terminalRaceCircuit = Circuit(
+  id: 'terminal-race',
+  terminalStepId: 'b',
+  steps: [
+    CapabilityStep(stepId: 'a', capabilityId: 'a'),
+    CapabilityStep(stepId: 'b', capabilityId: 'b'),
+  ],
+);
+
 Future<void> _pump() async {
   for (var i = 0; i < 8; i++) {
     await Future<void>.delayed(Duration.zero);
@@ -235,6 +244,40 @@ final class _AckedSink implements TrajectoryAckRecordSink {
   }) async => const TrajectoryAppendResult.acked();
 }
 
+final class _AckAfterCloseSink implements TrajectoryAckRecordSink {
+  _AckAfterCloseSink(this.closeEntered);
+
+  final Future<void> closeEntered;
+  final Completer<void> rearmAcknowledged = Completer<void>();
+
+  @override
+  bool get accepting => true;
+
+  @override
+  void enqueue(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+  }) {}
+
+  @override
+  Future<TrajectoryAppendResult> appendAcked(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+    required bool decisionBearing,
+  }) async {
+    expect(decisionBearing, isTrue);
+    await closeEntered;
+    if (!rearmAcknowledged.isCompleted) rearmAcknowledged.complete();
+    return const TrajectoryAppendResult.acked();
+  }
+}
+
 class _RulingAwareRoute extends RouteCapability {
   const _RulingAwareRoute(this.lane, this.log);
 
@@ -402,6 +445,36 @@ class _FailFirstUpdateRunner extends RecordingBdRunner {
         throw StateError('fake bd update failure #$_updates (tg-boq)');
       }
     }
+    return result;
+  }
+}
+
+final class _GatedSessionCloseRunner extends RecordingBdRunner {
+  _GatedSessionCloseRunner({required this.sessionId});
+
+  final String sessionId;
+  final Completer<void> closeEntered = Completer<void>();
+  final Completer<void> releaseClose = Completer<void>();
+  bool _holdingFirstClose = true;
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    final holdsSessionClose =
+        _holdingFirstClose &&
+        args.length > 1 &&
+        args.first == 'close' &&
+        args[1] == sessionId;
+    if (!holdsSessionClose) {
+      return super.run(args, timeout: timeout, stdin: stdin);
+    }
+    _holdingFirstClose = false;
+    final result = super.run(args, timeout: timeout, stdin: stdin);
+    closeEntered.complete();
+    await releaseClose.future;
     return result;
   }
 }
@@ -717,6 +790,111 @@ void main() {
           isEmpty,
         );
         expect(runner.callsFor('create'), isEmpty);
+      },
+    );
+
+    test(
+      'unrelated re-arm ack does not unlatch a terminal close in flight',
+      () async {
+        const sessionId = 'tgdog-s';
+        const nodeAPath = 'tg-1/a';
+        const nodeAId = 'tgdog-step-a';
+        const nodeBPath = 'tg-1/b';
+
+        List<Bead> stateBeads({required StepState nodeAState}) => [
+          _gatedSession(sessionId, workBead: 'tg-1'),
+          _stepBead(
+            nodeAId,
+            sessionId: sessionId,
+            path: nodeAPath,
+            state: nodeAState,
+          ),
+          _stepBead(
+            'tgdog-step-b',
+            sessionId: sessionId,
+            path: nodeBPath,
+            state: StepState.complete,
+          ),
+          Bead(
+            id: 'tgdog-gate-a',
+            issueType: GridIssueTypes.gate,
+            status: BeadStatus.closed,
+            metadata: const {
+              'rig': stateSubstation,
+              'blocks': sessionId,
+              'node': nodeAPath,
+            },
+          ),
+        ];
+
+        final runner = _GatedSessionCloseRunner(sessionId: sessionId);
+        final sink = _AckAfterCloseSink(runner.closeEntered.future);
+        final work = FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'}));
+        final state = FakeSnapshotSource(
+          _state(stateBeads(nodeAState: StepState.gated)),
+        );
+        final bridge = StationJoinBridge(work: work, state: state)..start();
+        addTearDown(bridge.dispose);
+        final mounted = _mountFull(
+          joined: bridge.notifier,
+          ctx: _ctxOver(runner),
+          registry: RecordingCapabilityRegistry(circuits: const {}),
+          circuitResolver: CircuitResolver((_) => _terminalRaceCircuit),
+          trajectoryScope: TrajectoryRecorderScope(
+            StationTrajectoryRecorder(
+              sink: sink,
+              substationPrefixes: const {stateSubstation},
+              clock: () => DateTime(2026),
+            ),
+          ),
+        );
+        addTearDown(mounted.owner.dispose);
+
+        await _pump();
+        mounted.owner.flush();
+        await runner.closeEntered.future;
+        await sink.rearmAcknowledged.future;
+        await _pump();
+
+        expect(
+          runner.callsFor('close').where((call) => call[1] == sessionId),
+          hasLength(1),
+          reason: 'node B owns one positive close held in flight',
+        );
+
+        state.push(_state(stateBeads(nodeAState: StepState.complete), tick: 1));
+        await _pump();
+        mounted.owner.flush();
+        await _pump();
+
+        runner.releaseClose.complete();
+        await _pump();
+        mounted.owner.flush();
+        await _pump();
+
+        expect(
+          runner.callsFor('close').where((call) => call[1] == sessionId),
+          hasLength(1),
+          reason:
+              'the unrelated node A acknowledgment cannot admit a second '
+              'close while node B terminal completion is in flight',
+        );
+        var terminalOutcomeWrites = 0;
+        for (var index = 0; index < runner.workUpdates.length; index++) {
+          final call = runner.workUpdates[index];
+          if (call.length > 1 &&
+              call[1] == sessionId &&
+              runner
+                  .metadataOfUpdate(index)
+                  .containsKey(SessionBeadKeys.outcome)) {
+            terminalOutcomeWrites += 1;
+          }
+        }
+        expect(
+          terminalOutcomeWrites,
+          1,
+          reason: 'the terminal outcome is persisted exactly once',
+        );
       },
     );
 
