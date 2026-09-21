@@ -535,7 +535,7 @@ void main() {
 
     test(
       'readiness rework retires identically for empty and operator prose and '
-      'returns the observed successor',
+      'waits for the stream successor',
       () async {
         for (final fixture in <({String acceptance, String design})>[
           (design: '', acceptance: ''),
@@ -592,7 +592,10 @@ void main() {
             work: work,
             stateRunner: stateRunner,
             workRunner: workRunner,
-            refreshState: _publishReworkSuccessorOnSecondRefresh(state),
+            refreshState: _publishReworkSuccessorOnSecondRefresh(
+              state,
+              afterRefresh: true,
+            ),
           );
 
           final result = await handler(
@@ -611,7 +614,6 @@ void main() {
             'workBeadId': 'tg-1',
             'approvalRev': 'approved-rev',
           });
-          expect(value['pendingAdmission'], isNull);
           expect(
             workRunner.calls.where(
               (call) =>
@@ -704,8 +706,8 @@ void main() {
       );
     });
 
-    test('an ordinary rework with no successor refuses immediately without a '
-        'snapshot-rail wait', () async {
+    test('an ordinary rework with no successor completes pending immediately '
+        'without a snapshot-rail wait', () async {
       final originalGrace = SessionScopeState.freshMintSnapshotGrace;
       SessionScopeState.freshMintSnapshotGrace = const Duration(days: 1);
       addTearDown(
@@ -713,7 +715,15 @@ void main() {
       );
       final stateRunner = _RecordingRunner();
       final state = _Source(_snapshot([_session('tgdog-predecessor')]));
-      final work = _Source(_workSnapshot());
+      final work = _Source(
+        _workSnapshotWithBead(
+          const Bead(
+            id: 'tg-1',
+            issueType: IssueType.task,
+            metadata: {'rig': 'tg'},
+          ),
+        ),
+      );
       addTearDown(state.dispose);
       addTearDown(work.dispose);
       final handler = _handler(
@@ -729,20 +739,16 @@ void main() {
 
       expect(
         result,
-        isA<GridCommandRefused>()
+        isA<GridCommandCompleted>()
+            .having((value) => value.value['closedSession'], 'closedSession', {
+              'sessionId': 'tgdog-predecessor',
+              'reason': 'reworked',
+              'disposition': 'voided',
+            })
             .having(
-              (value) => value.code,
-              'code',
-              'rework_successor_unobserved',
-            )
-            .having(
-              (value) => value.message,
-              'message',
-              allOf(
-                contains('tgdog-predecessor'),
-                contains('already voided and re-keyed'),
-                contains('Do not run rework again'),
-              ),
+              (value) => value.value['successorSession'],
+              'successorSession',
+              'pending',
             ),
       );
       expect(
@@ -2781,17 +2787,23 @@ Future<void> Function() _publishReworkSuccessorOnSecondRefresh(
   String beadId = 'tg-1',
   String sessionId = 'tgdog-successor',
   List<Bead> otherBeads = const [],
+  bool afterRefresh = false,
 }) {
   var refreshes = 0;
   return () async {
     refreshes++;
     if (refreshes == 2) {
-      state.push(
+      void publish() => state.push(
         _snapshot([
           ...otherBeads,
           _session(sessionId, workBead: beadId, open: true),
         ]),
       );
+      if (afterRefresh) {
+        Timer.run(publish);
+      } else {
+        publish();
+      }
     }
   };
 }

@@ -1466,7 +1466,7 @@ final class StationCommandHandler implements GridCommandHandler {
       final approvalRev = refreshedWorkBead == null
           ? null
           : beadMetadataText(refreshedWorkBead, WorkBeadKeys.approvedRev);
-      if (approvalRev == null) {
+      if (readinessHeld && approvalRev == null) {
         return _reworkSuccessorUnobserved(
           predecessorId: session.id,
           retiredKey: reworkKeyFor(beadId, round),
@@ -1492,24 +1492,28 @@ final class StationCommandHandler implements GridCommandHandler {
         latestState = _stateSource.current ?? latestState;
         observedSuccessors = successors();
       }
-      if (observedSuccessors.length > 1) {
-        return _reworkSuccessorUnobserved(
-          predecessorId: session.id,
-          retiredKey: reworkKeyFor(beadId, round),
-          detail:
-              '${observedSuccessors.length} open successor sessions were '
-              'observed for "$beadId"',
-        );
-      }
-      if (observedSuccessors.isEmpty) {
-        return _reworkSuccessorUnobserved(
-          predecessorId: session.id,
-          retiredKey: reworkKeyFor(beadId, round),
-          detail: 'no open successor session was observed for "$beadId"',
-        );
+      if (readinessHeld) {
+        if (observedSuccessors.length > 1) {
+          return _reworkSuccessorUnobserved(
+            predecessorId: session.id,
+            retiredKey: reworkKeyFor(beadId, round),
+            detail:
+                '${observedSuccessors.length} open successor sessions were '
+                'observed for "$beadId"',
+          );
+        }
+        if (observedSuccessors.isEmpty) {
+          return _reworkSuccessorUnobserved(
+            predecessorId: session.id,
+            retiredKey: reworkKeyFor(beadId, round),
+            detail: 'no open successor session was observed for "$beadId"',
+          );
+        }
       }
 
-      final successor = observedSuccessors.single;
+      final successor = observedSuccessors.length == 1 && approvalRev != null
+          ? observedSuccessors.single
+          : null;
       return GridCommandResult.completed(
         message: reapFailure == null
             ? 'Rework round $round retired session "${session.id}".'
@@ -1534,11 +1538,13 @@ final class StationCommandHandler implements GridCommandHandler {
                 'cause': receipt.cause.wireValue,
               },
           ],
-          'successorSession': {
-            'sessionId': successor.id,
-            'workBeadId': beadId,
-            'approvalRev': approvalRev,
-          },
+          'successorSession': successor == null
+              ? 'pending'
+              : {
+                  'sessionId': successor.id,
+                  'workBeadId': beadId,
+                  'approvalRev': approvalRev,
+                },
           if (reapFailure != null) 'reapFailure': reapFailure,
         },
       );

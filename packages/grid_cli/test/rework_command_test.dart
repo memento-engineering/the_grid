@@ -80,7 +80,7 @@ void main() {
     expect(result.stderr, isEmpty);
   });
 
-  test('rejects a pending-only completed response as incomplete', () async {
+  test('reports a pending successor from a complete retirement', () async {
     final result = await runCaptured(
       FakeClient(
         const StationCommandCompleted({
@@ -90,21 +90,57 @@ void main() {
             'disposition': 'voided',
           },
           'closedGates': [],
-          'pendingAdmission': {
-            'workBeadId': 'work-1',
-            'approvalRev': 'approved-rev',
-          },
+          'successorSession': 'pending',
         }),
       ),
     );
 
-    expect(result.code, 64);
-    expect(result.stdout, isEmpty);
+    expect(result.code, 0);
     expect(
-      result.stderr,
-      'grid rework: resident completed without a complete retirement receipt.\n',
+      result.stdout,
+      'grid rework — voided session tgdog-session (reworked).\n'
+      'grid rework — successor: pending.\n',
     );
+    expect(result.stderr, isEmpty);
   });
+
+  for (final fixture in <({String name, Map<String, Object?> value})>[
+    (
+      name: 'missing closed session',
+      value: const {'closedGates': [], 'successorSession': 'pending'},
+    ),
+    (
+      name: 'malformed gate receipt',
+      value: const {
+        'closedSession': {
+          'sessionId': 'tgdog-session',
+          'reason': 'reworked',
+          'disposition': 'voided',
+        },
+        'closedGates': [
+          {
+            'gateId': 'tgdog-gate',
+            'sessionId': 'tgdog-session',
+            'cause': 'operator',
+          },
+        ],
+        'successorSession': 'pending',
+      },
+    ),
+  ]) {
+    test('rejects ${fixture.name} without partial stdout', () async {
+      final result = await runCaptured(
+        FakeClient(StationCommandCompleted(fixture.value)),
+      );
+
+      expect(result.code, 64);
+      expect(result.stdout, isEmpty);
+      expect(
+        result.stderr,
+        'grid rework: resident completed without a complete retirement receipt.\n',
+      );
+    });
+  }
 
   test('reports a resident close refusal on stderr only', () async {
     final result = await runCaptured(

@@ -117,7 +117,8 @@ class ReworkCommand extends Command<int> {
         final closedSession = _stringMap(value['closedSession']);
         final sessionId = _nonEmptyText(closedSession?['sessionId']);
         final closedGates = _gateReceipts(value['closedGates']);
-        final successorSession = _stringMap(value['successorSession']);
+        final successorValue = value['successorSession'];
+        final successorSession = _stringMap(successorValue);
         final successorId = _nonEmptyText(successorSession?['sessionId']);
         final successorWorkBeadId = _nonEmptyText(
           successorSession?['workBeadId'],
@@ -129,12 +130,13 @@ class ReworkCommand extends Command<int> {
             successorId != null &&
             successorWorkBeadId == beadId &&
             successorApprovalRev != null;
+        final successorPending = successorValue == 'pending';
         final completeReceipt =
             sessionId != null &&
             closedSession?['reason'] == 'reworked' &&
             closedSession?['disposition'] == 'voided' &&
             closedGates != null &&
-            hasSuccessor;
+            (hasSuccessor || successorPending);
         if (!completeReceipt) {
           stderr.writeln(
             'grid rework: resident completed without a complete retirement receipt.',
@@ -149,10 +151,14 @@ class ReworkCommand extends Command<int> {
             '(${gate['cause']}).',
           );
         }
-        stdout.writeln(
-          'grid rework — minted session $successorId for $beadId at '
-          'approval $successorApprovalRev.',
-        );
+        if (successorPending) {
+          stdout.writeln('grid rework — successor: pending.');
+        } else {
+          stdout.writeln(
+            'grid rework — minted session $successorId for $beadId at '
+            'approval $successorApprovalRev.',
+          );
+        }
         return 0;
       case StationCommandRefused(:final message) ||
           StationCommandUnavailable(:final message):
