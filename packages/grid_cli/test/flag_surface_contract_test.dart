@@ -135,6 +135,18 @@ final class _FakeStationCommandClient extends StationCommandClient {
     required Map<String, Object?> params,
   }) async {
     requests.add((gridRoot: gridRoot, method: method, params: params));
-    return const StationCommandCompleted({});
+    return StationCommandCompleted({
+      'closedSession': const {
+        'sessionId': 'session-old',
+        'reason': 'reworked',
+        'disposition': 'voided',
+      },
+      'closedGates': const [],
+      'successorSession': {
+        'sessionId': 'session-new',
+        'workBeadId': params['beadId'],
+        'approvalRev': 'approved-rev',
+      },
+    });
   }
 }

@@ -162,6 +162,12 @@ GraphSnapshot _state(List<Bead> beads, {int tick = 0}) =>
       capturedAt: DateTime.fromMillisecondsSinceEpoch(tick),
     );
 
+const _approvedWorkBead = Bead(
+  id: 'tg-1',
+  issueType: IssueType.task,
+  metadata: {'grid.approved_rev': 'approved-rev'},
+);
+
 /// A the_grid MOLECULE session bead exactly as `grid rework`'s CLI-observed
 /// shape: linked to [workBead] — or, after the CLI's re-key, linked to
 /// `'$originalBead#r1'` while every OTHER key is left untouched (bd's
@@ -531,7 +537,9 @@ void main() {
               cause: RoundRetireCause.rework,
               oldRound: 0,
             );
-        final workSrc = FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'}));
+        final workSrc = FakeSnapshotSource(
+          _work(const [_approvedWorkBead], {'tg-1'}),
+        );
         final stateSrc = FakeSnapshotSource(_state([retired, gate]));
         final bridge = StationJoinBridge(work: workSrc, state: stateSrc)
           ..start();
@@ -553,7 +561,7 @@ void main() {
         );
         workSrc.push(
           _work(
-            [bead('tg-1')],
+            const [_approvedWorkBead],
             {'tg-1'},
             tick: DateTime.now()
                 .add(const Duration(seconds: 1))
@@ -562,6 +570,11 @@ void main() {
         );
         await _pumpUntil(mounted.owner, () => runner.workCreates.length >= 2);
         expect(transport.named('gate.autoCloseFailed'), isEmpty);
+        expect(transport.named('session.mintAbandoned'), isEmpty);
+        expect(
+          gate.metadata[StationBeadWriter.gateCloseCauseKey],
+          GateCloseCause.supersededRound.wireValue,
+        );
         expect(
           runner.callsFor('close').where((call) => call[1] == 'tgdog-round1'),
           hasLength(1),
