@@ -83,13 +83,39 @@ import '../sdk/capability.dart';
 import '../sdk/cursor.dart';
 import '../sdk/circuit.dart';
 import '../sdk/frontier.dart';
-import '../sdk/route.dart' show EscalationRequest;
+import '../sdk/route.dart' show EscalationRequest, HumanGate;
 import 'capability_host.dart' show persistRaisedEscalation;
 import 'capability_registry.dart';
 import 'circuit_scope.dart';
 import 'session_handle.dart';
 
 enum _DeliveryOutcome { delivered, commitOnly, missing }
+
+/// Every node path in [circuit]'s subtree, depth-first in declaration order.
+///
+/// Missing-delivery diagnostics use the same ordering as the circuit's other
+/// first-node selections, so tied or timestamp-free predecessors have a
+/// deterministic "last completed" answer.
+Iterable<String> _declarationOrderNodePaths(
+  Circuit circuit,
+  String nodePath, {
+  required Circuit? Function(String circuitId) circuitById,
+}) sync* {
+  for (final step in circuit.steps) {
+    final path = stepPath(nodePath, step.stepId);
+    yield path;
+    if (step is SubCircuitStep) {
+      final nested = circuitById(step.circuitId);
+      if (nested != null) {
+        yield* _declarationOrderNodePaths(
+          nested,
+          path,
+          circuitById: circuitById,
+        );
+      }
+    }
+  }
+}
 
 /// The tree execution lifecycle for one admitted work [bead]'s [circuit].
 ///
@@ -1373,16 +1399,135 @@ class SessionScopeState extends State<SessionScope>
     return _DeliveryOutcome.missing;
   }
 
-  void _flareDeliveryOutcomeMissing(String id) {
-    if (_deliveryOutcomeBlocked) return;
+  void _scheduleMissingDeliveryOutcome({
+    required String sessionId,
+    required String stepBeadId,
+    required NodeCursor deliverNode,
+    required int stepRound,
+    required String reason,
+    required String lastCompletedNodePath,
+  }) {
+    if (_terminalScheduled || _deliveryOutcomeBlocked) return;
+    final method = _services.delivery?.id ?? '';
+    final nodePath = _rootDeliveryNodePath;
     _deliveryOutcomeBlocked = true;
-    final method = _services.delivery;
+    _terminalScheduled = true;
+    _rearmableTerminalStepBeadId = stepBeadId;
     _flare('delivery.outcomeMissing', {
-      'sessionId': id,
+      'sessionId': sessionId,
       'workBeadId': seed.bead.id,
-      'nodePath': _rootDeliveryNodePath,
-      'method': method?.id ?? '',
+      'nodePath': nodePath,
+      'method': method,
+      'reason': reason,
+      'lastCompletedNodePath': lastCompletedNodePath,
+      'failureClass': 'infra',
     });
+    scheduleMicrotask(
+      () => unawaited(
+        _persistMissingDeliveryOutcome(
+          sessionId: sessionId,
+          stepBeadId: stepBeadId,
+          deliverNode: deliverNode,
+          stepRound: stepRound,
+          method: method,
+          reason: reason,
+          lastCompletedNodePath: lastCompletedNodePath,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _persistMissingDeliveryOutcome({
+    required String sessionId,
+    required String stepBeadId,
+    required NodeCursor deliverNode,
+    required int stepRound,
+    required String method,
+    required String reason,
+    required String lastCompletedNodePath,
+  }) async {
+    final station = _ctx;
+    if (station == null) return;
+    final nodePath = _rootDeliveryNodePath;
+    final gateReason =
+        'delivery outcome missing (infra): method=$method; '
+        'nodePath=$nodePath; reason=$reason; '
+        'lastCompletedNodePath=$lastCompletedNodePath';
+    try {
+      await persistRaisedEscalation(
+        recorder: _recorder,
+        stepRound: stepRound,
+        incarnation: deliverNode.restartCount,
+        station: station,
+        services: ServiceBundle.derive(
+          _services,
+          escalation: const HumanGate(),
+        ),
+        request: EscalationRequest(
+          beadId: seed.bead.id,
+          sessionId: sessionId,
+          nodePath: nodePath,
+          reason: gateReason,
+          rewindCount: deliverNode.rewindCount,
+        ),
+        stepBeadId: stepBeadId,
+        gatedMetadata: stepBeadMetadata(
+          deliverNode.copyWith(state: StepState.gated, failureReason: reason),
+        ),
+        isActive: () => !_cancelled && context.mounted,
+        failToSupervision: (failure) async => throw StateError(failure),
+        emitFlare: _flare,
+      );
+    } on Object catch (error) {
+      _terminalScheduled = false;
+      _rearmableTerminalStepBeadId = null;
+      _deliveryOutcomeBlocked = false;
+      _flare('delivery.outcomeParkFailed', {
+        'sessionId': sessionId,
+        'workBeadId': seed.bead.id,
+        'nodePath': nodePath,
+        'method': method,
+        'reason': truncateReason('$error'),
+        'failureClass': 'infra',
+      });
+    }
+  }
+
+  ({String reason, String lastCompletedNodePath}) _missingDeliveryEvidence(
+    CircuitCursor beadCursor,
+    CapabilityRegistry registry,
+  ) {
+    final method = _services.delivery?.id ?? '';
+    final deliverNode = cursorNodeAt(beadCursor, _rootDeliveryNodePath);
+    final persistedReason = deliverNode.failureReason?.trim() ?? '';
+    final reason = persistedReason.isNotEmpty
+        ? persistedReason
+        : 'delivery "$method" completed without a persisted outcome';
+    String fallbackPath = '';
+    String latestPath = '';
+    DateTime? latestFinishedAt;
+    for (final path in _declarationOrderNodePaths(
+      seed.circuit,
+      seed.bead.id,
+      circuitById: registry.circuit,
+    )) {
+      if (path == _rootDeliveryNodePath) break;
+      final node = beadCursor[path];
+      if (node == null || !node.isPositiveTerminal) continue;
+      fallbackPath = path;
+      final finishedAt = node.finishedAt;
+      if (finishedAt == null) continue;
+      if (latestFinishedAt == null || !finishedAt.isBefore(latestFinishedAt)) {
+        latestFinishedAt = finishedAt;
+        latestPath = path;
+      }
+    }
+    return (
+      reason: reason,
+      lastCompletedNodePath: latestFinishedAt == null
+          ? fallbackPath
+          : latestPath,
+    );
   }
 
   void _flareCommitOnlyComplete(String id) {
@@ -1900,6 +2045,7 @@ class SessionScopeState extends State<SessionScope>
           if (moleculeTarget == _rearmableTerminalStepBeadId) {
             _terminalScheduled = false;
             _rearmableTerminalStepBeadId = null;
+            _deliveryOutcomeBlocked = false;
           }
         case Dropped() || Suppressed():
           // Cut re-gates this node, so its in-flight guard remains the storm
@@ -2152,6 +2298,7 @@ class SessionScopeState extends State<SessionScope>
     var beadIdByNodePath = const <String, String>{};
     var invalidated = const <String>{};
     var heldForSuccessor = const <String>{};
+    var moleculeBeadCursor = const <String, NodeCursor>{};
     var moleculeProjectedCursor = const <String, NodeCursor>{};
     var structuralDepthByPath = const <String, int>{};
     var spentRoundsByPath = const <String, int>{};
@@ -2161,6 +2308,7 @@ class SessionScopeState extends State<SessionScope>
         joined!.moleculeBeads,
         dependencies: joined.moleculeDependencies,
       );
+      moleculeBeadCursor = projected.cursor;
       // CONSUMER 6 of the step dual read (cut-wiring C4) — the MOUNT-FRONTIER
       // authority and the most decision-bearing cursor read in the tree. It
       // adopts at the projection point, so everything downstream (the R4
@@ -2390,7 +2538,31 @@ class SessionScopeState extends State<SessionScope>
                   outcomeMetadata: sessionCommitOnlyMetadata(),
                 );
               case _DeliveryOutcome.missing:
-                _flareDeliveryOutcomeMissing(id);
+                // `_deliveryOutcome` already emitted the dedicated
+                // unreachable-terminal flare for a SubCircuitStep terminal.
+                // That legacy fail-closed shape has no flat delivery bead to
+                // park and remains unchanged.
+                if (_deliveryOutcomeBlocked) break;
+                final stepBeadId = beadIdByNodePath[_rootDeliveryNodePath];
+                final deliverNode = moleculeBeadCursor[_rootDeliveryNodePath];
+                if (stepBeadId == null || deliverNode == null) {
+                  throw StateError(
+                    'delivery terminal "$_rootDeliveryNodePath" has no active '
+                    'step bead in session "$id"',
+                  );
+                }
+                final evidence = _missingDeliveryEvidence(
+                  moleculeBeadCursor,
+                  registry,
+                );
+                _scheduleMissingDeliveryOutcome(
+                  sessionId: id,
+                  stepBeadId: stepBeadId,
+                  deliverNode: deliverNode,
+                  stepRound: structuralDepthByPath[_rootDeliveryNodePath] ?? 0,
+                  reason: evidence.reason,
+                  lastCompletedNodePath: evidence.lastCompletedNodePath,
+                );
             }
           }
         }
