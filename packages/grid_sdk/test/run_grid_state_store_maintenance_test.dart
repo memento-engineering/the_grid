@@ -428,23 +428,40 @@ void main() {
       final hookErrors = <GridHookError>[];
       final maintenanceReports = <String>[];
       final calls = <String>[];
+      var sizeReads = 0;
 
       final handle = await runGrid(
         delegate,
         maintainStateStore: ({required gridHome}) async {
           await StateStoreGc(
-            readSize: (_) async => kStateStoreFlattenThresholdBytes + 1,
+            readSize: (_) async =>
+                sizeReads++ == 0 ? kStateStoreFlattenThresholdBytes + 1 : 81,
             runProcess:
                 (executable, arguments, {required workingDirectory}) async {
                   calls.add('$executable ${arguments.join(' ')}');
-                  if (arguments.first == 'flatten') {
+                  if (arguments.contains('info') &&
+                      workingDirectory != runtimeDir) {
                     return _result(
                       0,
-                      stdout: '{"success":false,"error":"refused"}',
+                      stdout: '{"schema_version":1,"data":{"mode":"embedded"}}',
                     );
                   }
-                  if (arguments.first == 'info') {
+                  if (arguments.contains('flatten')) {
+                    return _result(
+                      0,
+                      stdout:
+                          '{"schema_version":1,"data":'
+                          '{"success":false,"error":"refused"}}',
+                    );
+                  }
+                  if (arguments.contains('info')) {
                     proxyPid.writeAsStringSync('{"pid":2,"port":65001}');
+                    return _result(
+                      0,
+                      stdout:
+                          '{"schema_version":1,"data":'
+                          '{"mode":"proxied-server"}}',
+                    );
                   }
                   return _result(0);
                 },
@@ -458,16 +475,29 @@ void main() {
       );
       addTearDown(handle.teardown);
 
-      expect(calls, <String>[
-        'bd dolt stop',
-        'bd flatten --force --json',
-        'dolt gc --full',
-        'bd info --json',
-      ]);
+      expect(calls, hasLength(5));
+      expect(calls[0], 'bd -C $runtimeDir dolt stop');
+      expect(calls[1], endsWith(' info --json'));
+      expect(
+        calls[2],
+        contains('--actor grid-controller flatten --force --json'),
+      );
+      expect(calls[3], 'dolt gc --full');
+      expect(calls[4], 'bd -C $runtimeDir info --json');
       expect(maintenanceReports, hasLength(1));
       expect(hookErrors, hasLength(1));
       expect(hookErrors.single.hook, 'maintenance');
       expect(hookErrors.single.cause, isA<StateError>());
+      final receipt = maintenanceReports.single;
+      expect(receipt, contains('mode=proxied-server'));
+      expect(
+        receipt,
+        contains('before_bytes=${kStateStoreFlattenThresholdBytes + 1}'),
+      );
+      expect(receipt, contains('after_bytes=81'));
+      expect(receipt, contains('path=proxied-stop-flatten-restore'));
+      expect(receipt, contains('flatten_reason=flatten_failed'));
+      expect(hookErrors.single.cause.toString(), contains(receipt));
       expect(delegate.proxyPresentAtBoot, isTrue);
       expect(delegate.events, <String>['didLaunch', 'boot', 'build']);
     },
