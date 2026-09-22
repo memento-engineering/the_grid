@@ -680,6 +680,26 @@ void main() {
       final record = single().record as AttemptTerminal;
       expect(record.attemptIdBasis, kRecorderMintedAttemptBasis);
     });
+
+    test('an explicit no-mint reconciled terminal is keyed by session', () {
+      final derived = recorder.buildTerminalReconciled(
+        sessionId: 'void-session',
+        workBeadId: 'tg-1',
+        outcome: TerminalOutcome.lost,
+        reason: 'void before spawn',
+        mintAttemptIfMissing: false,
+      );
+      final record = derived.record as AttemptTerminal;
+
+      expect(record.attemptId, isNull);
+      expect(record.attemptIdBasis, isNull);
+      expect(record.sessionId, 'void-session');
+      expect(record.outcome, TerminalOutcome.lost);
+      expect(record.terminalGuardSubject, (
+        kind: TerminalGuardSubjectKind.session,
+        id: 'void-session',
+      ));
+    });
   });
 
   group('the wave-1 RECONSTRUCTED writers (cut-wiring C2)', () {

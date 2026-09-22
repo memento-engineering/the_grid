@@ -483,6 +483,37 @@ void main() {
       expect(lines.join('\n'), contains('epoch 50: miss_post_epoch_total = 1'));
     });
 
+    test(
+      'an attempt-less void terminal needs no clean-row exemption',
+      () async {
+        final rows = seededBoots()
+          ..add(
+            envelope(
+              recordType: 'attempt.terminal',
+              family: TrajectoryFamily.attempt,
+              seq: 99,
+              bootEpoch: 51,
+              sessionId: 'tranquility-void',
+              outcome: TerminalOutcome.lost,
+              provenance: TrajectoryProvenance.reconstructed,
+              payload: const {
+                'heal_basis': 'terminal-reconcile',
+                'reason':
+                    'terminal-reconcile: the ledger void-closed this pre-spawn '
+                    'session before any attempt started',
+              },
+            ),
+          );
+
+        final (code, lines) = await _certify(rows: rows);
+
+        expect(code, 0);
+        expect(_statusOf(lines, 'clean'), 'PASS');
+        expect(lines.join('\n'), contains('p2_miss_total 0'));
+        expect(lines.join('\n'), isNot(contains('void exemption')));
+      },
+    );
+
     test('the EXPLAINED retired-round population is REPORTED, never gating '
         '(tg-af76)', () async {
       // The Q9 shape: legacy retired the round, the fold keeps that head open

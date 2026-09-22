@@ -116,6 +116,25 @@ void main() {
     );
   });
 
+  test('an attempt-less heal keys and settles by session', () {
+    final heal = AttemptTerminal(
+      sessionId: 'tranquility-void',
+      outcome: TerminalOutcome.lost,
+      healBasis: 'terminal-reconcile',
+    );
+    final settling = heal.settlingForm('01J8VOID000000000000000001')!;
+
+    expect(
+      heal.idemKeyText(fixtureContext),
+      'terminal-reconcile:session:tranquility-void',
+    );
+    expect(
+      settling.idemKeyText(fixtureContext),
+      'terminal-resolve:session:tranquility-void:'
+      '01J8VOID000000000000000001',
+    );
+  });
+
   test('the terminal-reconcile HEAL takes its OWN key grammar (cut-wiring '
       'C2, r8 — V2-B1): it can never dedupe against the real record in '
       'EITHER direction', () {
@@ -153,6 +172,10 @@ void main() {
   });
 
   test('required-field invariants refuse at construction', () {
+    expect(
+      () => AttemptTerminal(outcome: TerminalOutcome.succeeded),
+      throwsArgumentError,
+    );
     expect(
       () => AttemptTerminal(attemptId: 'a', outcome: TerminalOutcome.unknown),
       throwsArgumentError,

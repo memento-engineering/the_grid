@@ -76,6 +76,39 @@ void main() {
       expect(result.skipped, isEmpty);
     });
 
+    test('an attempt-less terminal closes the minted session head by id', () {
+      final stream = [
+        envelope(
+          recordType: 'attempt.session.started',
+          family: TrajectoryFamily.attempt,
+          seq: 1,
+          sessionId: 's-void',
+          workBeadId: 'tg-void',
+          grantId: '01J8GRANT00000000000000001',
+          payload: const {'rig': 'operator', 'model': 'molecule'},
+        ),
+        envelope(
+          recordType: 'attempt.terminal',
+          family: TrajectoryFamily.attempt,
+          seq: 2,
+          sessionId: 's-void',
+          outcome: TerminalOutcome.lost,
+          provenance: TrajectoryProvenance.reconstructed,
+          payload: const {
+            'heal_basis': 'terminal-reconcile',
+            'reason': 'void before spawn',
+          },
+        ),
+      ];
+
+      final row = foldSessionHeads(stream).rows['s-void']!;
+
+      expect(row.status, SessionHeadStatus.closed);
+      expect(row.outcome, TerminalOutcome.lost);
+      expect(row.attemptId, isNull);
+      expect(row.terminalProvenance, TrajectoryProvenance.reconstructed);
+    });
+
     test('same stream twice folds to IDENTICAL rows (replay determinism)', () {
       final stream = [
         ...lifecycle('s1', baseSeq: 1),
