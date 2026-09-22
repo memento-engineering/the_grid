@@ -1699,9 +1699,10 @@ void main() {
         sourcesShutdownEnd,
       );
       final shutdownSnapshot = sourcesShutdown.indexOf(
-        '''final shutdownBundles = List<MapEntry<String, GridRuntimeBundle>>.of(
-        bundles.entries,
-      );''',
+        '''final shutdownBundles =
+          List<MapEntry<String, GridRuntimeBundle>>.unmodifiable(
+            bundles.entries,
+          );''',
       );
       final firstAwait = sourcesShutdown.indexOf('await settle(');
       expect(shutdownSnapshot, isNonNegative);

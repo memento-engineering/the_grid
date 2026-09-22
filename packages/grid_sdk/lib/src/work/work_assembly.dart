@@ -2114,9 +2114,10 @@ Future<StationWorkRuntime> _acquireStationWork({
       await stateBundle.runtime.start();
     },
     sourcesShutdown: () async {
-      final shutdownBundles = List<MapEntry<String, GridRuntimeBundle>>.of(
-        bundles.entries,
-      );
+      final shutdownBundles =
+          List<MapEntry<String, GridRuntimeBundle>>.unmodifiable(
+            bundles.entries,
+          );
       await settle(
         'state bundle shutdown',
         stateBundle.shutdown,
