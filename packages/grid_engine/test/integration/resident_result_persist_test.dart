@@ -337,17 +337,24 @@ void main() {
 
       final legal = await drive(
         workBeadId: 'work-legal',
-        payload: const {'source_state': 'accepted'},
+        payload: const {
+          'source_state': 'accepted',
+          'leaseId': 'lease-92',
+          'committeeShadowSampleId': 'sample-92',
+        },
         expectedState: StepState.complete,
       );
       expect(legal.step.metadata[MoleculeStepKeys.state], 'complete');
-      expect(
-        legal.step.metadata[ResultKeys.keyFor(
-          'work-legal/route',
-          'source_state',
-        )],
-        'accepted',
-      );
+      for (final entry in const {
+        'source_state': 'accepted',
+        'leaseId': 'lease-92',
+        'committeeShadowSampleId': 'sample-92',
+      }.entries) {
+        expect(
+          legal.step.metadata[ResultKeys.keyFor('work-legal/route', entry.key)],
+          entry.value,
+        );
+      }
 
       final invalid = await drive(
         workBeadId: 'work-invalid',
@@ -370,13 +377,25 @@ void main() {
           contains('source-state'),
           contains('work-invalid/route'),
           contains('"-"'),
-          contains('[a-z0-9_]+'),
+          contains(r'^[a-zA-Z_][a-zA-Z0-9_.]*$'),
         ),
       );
       expect(
         _metadataKeys(invalid.calls),
         isNot(contains('grid.result.work_hinvalid_sroute.source-state')),
         reason: 'the illegal metadata key must never reach bd',
+      );
+      final invalidUpdates = invalid.calls
+          .where((call) => call.isNotEmpty && call.first == 'update')
+          .toList();
+      expect(
+        invalidUpdates,
+        hasLength(1),
+        reason: 'only the existing supervised-failure write may reach bd',
+      );
+      expect(
+        invalidUpdates.single,
+        contains('${MoleculeStepKeys.state}=failed'),
       );
       expect(
         invalid.calls.where((call) {

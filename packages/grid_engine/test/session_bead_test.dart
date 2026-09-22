@@ -149,61 +149,63 @@ void main() {
         'grid.result.tg_h1_sdeliver.merged_sha',
       );
 
-      for (final path in [
-        'pow-1rn.3/spec_review/intake',
-        'tg-1/review/test-coverage',
-        'tg-burn/follower',
-      ]) {
-        for (final field in ['result', 'result_2', 'a0_b9']) {
-          final key = ResultKeys.keyFor(path, field);
-          expect(bdKeyCharset.hasMatch(key), isTrue, reason: key);
-        }
+      const legalFields = [
+        'source_state',
+        'sourceState',
+        '_private',
+        'field.with.dot',
+        'committeeShadowSampleId',
+        'leaseId',
+      ];
+      for (final field in legalFields) {
+        final key = ResultKeys.keyFor('pow-1rn.3/spec_review/intake', field);
+        expect(key, 'grid.result.pow_h1rn.3_sspec_ureview_sintake.$field');
+        expect(bdKeyCharset.hasMatch(key), isTrue, reason: key);
       }
     });
 
-    test('keyFor refuses an invalid field with its exact cause', () {
-      expect(
-        () => ResultKeys.keyFor('tg-1/agent', 'source-state'),
-        throwsA(
-          isA<ArgumentError>()
-              .having((error) => error.name, 'name', 'field')
-              .having(
-                (error) => error.invalidValue,
-                'invalidValue',
-                'source-state',
-              )
-              .having((error) => '$error', 'message', contains('tg-1/agent'))
-              .having(
-                (error) => '$error',
-                'offending character',
-                contains('"-"'),
-              )
-              .having((error) => '$error', 'grammar', contains('[a-z0-9_]+')),
-        ),
-      );
-      expect(
-        () => ResultKeys.keyFor('tg-1/agent', ''),
-        throwsA(
-          isA<ArgumentError>()
-              .having((error) => error.name, 'name', 'field')
-              .having((error) => '$error', 'node path', contains('tg-1/agent'))
-              .having((error) => '$error', 'empty marker', contains('<empty>'))
-              .having((error) => '$error', 'grammar', contains('[a-z0-9_]+')),
-        ),
-      );
-      expect(
-        () => ResultKeys.keyFor('tg-1/agent', 'sourceState'),
-        throwsA(
-          isA<ArgumentError>()
-              .having((error) => '$error', 'field', contains('sourceState'))
-              .having(
-                (error) => '$error',
-                'offending character',
-                contains('"S"'),
-              )
-              .having((error) => '$error', 'grammar', contains('[a-z0-9_]+')),
-        ),
-      );
+    test('keyFor refuses invalid fields with their exact cause', () {
+      const cases = <({String field, String offending})>[
+        (field: 'source-state', offending: '-'),
+        (field: '1source', offending: '1'),
+        (field: '.source', offending: '.'),
+        (field: '', offending: '<empty>'),
+      ];
+      for (final invalid in cases) {
+        expect(
+          () => ResultKeys.keyFor('tg-1/agent', invalid.field),
+          throwsA(
+            isA<ArgumentError>()
+                .having((error) => error.name, 'name', 'field')
+                .having(
+                  (error) => error.invalidValue,
+                  'invalidValue',
+                  invalid.field,
+                )
+                .having(
+                  (error) => '$error',
+                  'complete field',
+                  contains('invalid result field "${invalid.field}"'),
+                )
+                .having(
+                  (error) => '$error',
+                  'node path',
+                  contains('node path "tg-1/agent"'),
+                )
+                .having(
+                  (error) => '$error',
+                  'offending character',
+                  contains('offending character "${invalid.offending}"'),
+                )
+                .having(
+                  (error) => '$error',
+                  'grammar',
+                  contains(r'^[a-zA-Z_][a-zA-Z0-9_.]*$'),
+                ),
+          ),
+          reason: invalid.field,
+        );
+      }
     });
 
     test('decode is lenient on RAW legacy paths (historical beads): unknown '

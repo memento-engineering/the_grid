@@ -243,7 +243,9 @@ abstract final class ResultKeys {
   /// The flat-key namespace for the per-node step result.
   static const prefix = 'grid.result.';
 
-  static final RegExp _fieldCharacter = RegExp(r'^[a-z0-9_]$');
+  static const _fieldGrammar = r'^[a-zA-Z_][a-zA-Z0-9_.]*$';
+  static final RegExp _fieldStartCharacter = RegExp(r'^[a-zA-Z_]$');
+  static final RegExp _fieldCharacter = RegExp(r'^[a-zA-Z0-9_.]$');
 
   /// The flat key for [field] of the node at [nodePath]
   /// (`grid.result.{encoded nodePath}.{field}` — see [encodeNodePathKey] for
@@ -251,12 +253,17 @@ abstract final class ResultKeys {
   /// raw and therefore must already be a bd-safe result identifier.
   static String keyFor(String nodePath, String field) {
     String? offending;
+    var first = true;
     for (final scalar in field.runes) {
       final character = String.fromCharCode(scalar);
-      if (!_fieldCharacter.hasMatch(character)) {
+      final allowed = first
+          ? _fieldStartCharacter.hasMatch(character)
+          : _fieldCharacter.hasMatch(character);
+      if (!allowed) {
         offending = character;
         break;
       }
+      first = false;
     }
     if (field.isEmpty || offending != null) {
       throw ArgumentError.value(
@@ -264,7 +271,7 @@ abstract final class ResultKeys {
         'field',
         'invalid result field "$field" for node path "$nodePath": '
             'offending character "${offending ?? '<empty>'}"; '
-            'expected [a-z0-9_]+',
+            'expected $_fieldGrammar',
       );
     }
     return '$prefix${encodeNodePathKey(nodePath)}.$field';

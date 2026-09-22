@@ -847,7 +847,7 @@ void main() {
         expect(flare.data['error'], contains('source-state'));
         expect(flare.data['error'], contains('tg-1/agent'));
         expect(flare.data['error'], contains('-'));
-        expect(flare.data['error'], contains('[a-z0-9_]+'));
+        expect(flare.data['error'], contains(r'^[a-zA-Z_][a-zA-Z0-9_.]*$'));
       }
 
       expect(
@@ -880,7 +880,7 @@ void main() {
       expect(exhaustionReason, contains('source-state'));
       expect(exhaustionReason, contains('tg-1/agent'));
       expect(exhaustionReason, contains('-'));
-      expect(exhaustionReason, contains('[a-z0-9_]+'));
+      expect(exhaustionReason, contains(r'^[a-zA-Z_][a-zA-Z0-9_.]*$'));
 
       for (var i = 0; i < updates.length; i++) {
         final metadata = runner.metadataOfUpdate(i);

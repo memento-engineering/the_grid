@@ -1,9 +1,6 @@
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 
-String _legacyResultKey(String nodePath, String field) =>
-    '${ResultKeys.prefix}${encodeNodePathKey(nodePath)}.$field';
-
 Bead _step({
   required String id,
   required String session,
@@ -24,13 +21,13 @@ Bead _step({
   };
   if (path != null) {
     if (grade != null) {
-      metadata[_legacyResultKey(path, ResultKeys.grade)] = grade;
+      metadata[ResultKeys.keyFor(path, ResultKeys.grade)] = grade;
     }
     if (transport != null) {
-      metadata[_legacyResultKey(path, ResultKeys.transport)] = transport;
+      metadata[ResultKeys.keyFor(path, ResultKeys.transport)] = transport;
     }
     for (final entry in extras.entries) {
-      metadata[_legacyResultKey(path, entry.key)] = entry.value;
+      metadata[ResultKeys.keyFor(path, entry.key)] = entry.value;
     }
   }
   return Bead(
@@ -51,17 +48,18 @@ GraphSnapshot sessionLedgerMetricsFixture() => GraphSnapshot.fromParts(
         SessionBeadKeys.workBead: 'tg-work-1',
         SessionBeadKeys.startedAt: '2026-07-10T10:00:00-05:00',
         SessionBeadKeys.closedAt: '2026-07-10T10:10:00-05:00',
-        _legacyResultKey('review/coherence', ResultKeys.grade): 'F',
-        _legacyResultKey('review/coherence', ResultKeys.transport):
+        ResultKeys.keyFor('review/coherence', ResultKeys.grade): 'F',
+        ResultKeys.keyFor('review/coherence', ResultKeys.transport):
             'fail-closed-default',
-        _legacyResultKey('review/coherence', ResultMetricFields.costUsd): '2.5',
-        _legacyResultKey('review/coherence', ResultMetricFields.tokensIn):
+        ResultKeys.keyFor('review/coherence', ResultMetricFields.costUsd):
+            '2.5',
+        ResultKeys.keyFor('review/coherence', ResultMetricFields.tokensIn):
             '100',
-        _legacyResultKey(
+        ResultKeys.keyFor(
           'review/coherence',
           ResultMetricFields.cacheReadInputTokens,
         ): '300',
-        _legacyResultKey('land', ResultKeys.delivery): 'pr',
+        ResultKeys.keyFor('land', ResultKeys.delivery): 'pr',
         'grid.result.broken': 'wire',
       },
     ),
