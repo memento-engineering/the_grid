@@ -18,7 +18,13 @@ import 'package:genesis_tree/genesis_tree.dart';
 
 import '../sdk/cursor.dart';
 import '../sdk/circuit.dart';
+import 'failure_policy.dart';
 import 'session_handle.dart';
+
+/// Returns an adopted exhausted failure to SessionScope's existing breaker
+/// close. The leaf host remains the sole policy evaluator.
+typedef AdoptedFailureLatch =
+    void Function(String nodePath, String failureReason);
 
 /// Everything the registry's [CapabilityRegistry.host] needs to mount one
 /// eligible [CapabilityStep] as an engine leaf.
@@ -45,6 +51,8 @@ class StepMount {
     this.circuitRound = 0,
     this.backoff = Backoff.standard,
     this.maxRestarts = 3,
+    this.adoptedFailure,
+    this.onAdoptedLatch,
   });
 
   /// The eligible step to mount.
@@ -92,6 +100,14 @@ class StepMount {
   /// the host writes the exhausted failure (no cooldown) and SessionScope
   /// escalates.
   final int maxRestarts;
+
+  /// Durable failure evidence that adoption must re-evaluate through the same
+  /// per-kind policy path a live host uses. Null on every ordinary mount.
+  final PersistedFailureEvidence? adoptedFailure;
+
+  /// The existing SessionScope breaker-close seam used only when the shared
+  /// policy returns [ExhaustionBehavior.latchFailed].
+  final AdoptedFailureLatch? onAdoptedLatch;
 }
 
 /// The engine's capability/circuit/clock resolution seam (Track D). The default

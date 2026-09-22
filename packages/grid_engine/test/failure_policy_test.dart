@@ -6,6 +6,49 @@ const _fast = Duration(seconds: 9);
 const _slow = Duration(seconds: 31);
 const _long = Duration(minutes: 5);
 
+final class _StepRow implements StepCursorView {
+  const _StepRow({
+    this.stepState = 'failed',
+    this.failureClass = 'infra',
+    this.restartBudget = 0,
+    this.incarnation = 3,
+    this.attemptId = 'attempt-3',
+    this.startedAt,
+    this.cooldownUntil,
+  });
+
+  @override
+  final String stepState;
+  @override
+  final String? failureClass;
+  @override
+  final int? restartBudget;
+  @override
+  final int incarnation;
+  @override
+  final String? attemptId;
+  @override
+  final DateTime? startedAt;
+  @override
+  final DateTime? cooldownUntil;
+  @override
+  String get sessionId => 'tranquility-ltkod1';
+  @override
+  int get round => 0;
+  @override
+  String get stepPath => 'tg-1/agent';
+  @override
+  int get stepRound => 0;
+  @override
+  int? get supersededByStepRound => null;
+  @override
+  DateTime? get readyAt => null;
+  @override
+  DateTime? get completedAt => null;
+  @override
+  int get lastSeq => 7;
+}
+
 void main() {
   group('resolveFailureClass', () {
     test('work is work however fast it failed', () {
@@ -209,6 +252,85 @@ void main() {
       expect(reason, contains('verdict file is not valid JSON'));
     },
   );
+
+  group('readPersistedFailureEvidence', () {
+    test('decodes every known class into its existing policy kind', () {
+      const expected = <String, CapabilityFailureKind>{
+        'infra': CapabilityFailureKind.noResult,
+        'no_result': CapabilityFailureKind.noResult,
+        'invalid_result': CapabilityFailureKind.invalidResult,
+        'work': CapabilityFailureKind.work,
+        'store_unavailable': CapabilityFailureKind.work,
+      };
+      for (final entry in expected.entries) {
+        final evidence = readPersistedFailureEvidence(
+          _StepRow(failureClass: entry.key),
+        );
+        expect(evidence, isNotNull, reason: entry.key);
+        expect(evidence!.kind, entry.value, reason: entry.key);
+        expect(evidence.failureClass.wire, entry.key, reason: entry.key);
+      }
+    });
+
+    test('carries immutable durable attempt and cooldown facts', () {
+      final startedAt = DateTime.utc(2026, 9, 21, 1);
+      final cooldownUntil = DateTime.utc(2026, 9, 21, 2);
+      final evidence = readPersistedFailureEvidence(
+        _StepRow(
+          incarnation: 4,
+          attemptId: 'attempt-4',
+          startedAt: startedAt,
+          cooldownUntil: cooldownUntil,
+        ),
+      )!;
+      expect(evidence.incarnation, 4);
+      expect(evidence.attemptId, 'attempt-4');
+      expect(evidence.startedAt, startedAt);
+      expect(evidence.cooldownUntil, cooldownUntil);
+      expect(evidence.restartBudget, 0);
+    });
+
+    test('rejects non-failed, unknown, or incomplete rows', () {
+      expect(
+        readPersistedFailureEvidence(const _StepRow(stepState: 'running')),
+        isNull,
+      );
+      expect(
+        readPersistedFailureEvidence(const _StepRow(failureClass: 'unknown')),
+        isNull,
+      );
+      expect(
+        readPersistedFailureEvidence(
+          const _StepRow(failureClass: 'future_class'),
+        ),
+        isNull,
+      );
+      expect(
+        readPersistedFailureEvidence(const _StepRow(failureClass: null)),
+        isNull,
+      );
+      expect(
+        readPersistedFailureEvidence(const _StepRow(restartBudget: null)),
+        isNull,
+      );
+    });
+  });
+
+  test('the exhaustion reason retains detail and names durable facts', () {
+    final evidence = readPersistedFailureEvidence(const _StepRow())!;
+    final reason = exhaustionGateReason(
+      evidence: evidence,
+      nodePath: 'tg-1/agent',
+      detail:
+          'harness throttled: 3 model steps exited without artifacts since '
+          '2026-09-21T00:00:00.000Z',
+    );
+    expect(reason, contains('harness throttled'));
+    expect(reason, contains('without artifacts'));
+    expect(reason, contains('tg-1/agent'));
+    expect(reason, contains('failure_class=infra'));
+    expect(reason, contains('restart_budget=0 (spent)'));
+  });
 
   test('a bounded reason is truncated at construction', () {
     final failure = CapabilityFailure.invalidResult(
