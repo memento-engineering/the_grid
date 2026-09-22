@@ -235,15 +235,17 @@ bool demotesStepState(StepState bead, StepState fold) =>
 bool staleRungPromotion(StepState bead, StepState fold) =>
     bead == StepState.pending && fold != StepState.pending;
 
-/// The merge's rule in ONE predicate: P2's state is served only when it
-/// neither demotes the bead nor promotes off a stale rung.
+/// The merge's COMPARISON rule in one predicate: a P2 state that neither
+/// demotes the bead nor promotes off a stale rung is a genuine divergence.
 ///
 /// Note what this implies, and it is the same honest reading C3 wrote for the
 /// session axis: every step persist site writes the BEAD first and appends
 /// after, so P2 can never legitimately be ahead — which means a healthy round
-/// under `primary` serves the bead's state at every node, and this predicate
-/// returning true is itself the definition of a step-axis divergence. What the
-/// flip buys is a CERTIFIED CARRIER for wave 2, not different decisions.
+/// under `primary` reads the bead's state at every node, and this predicate
+/// returning true is itself the definition of a step-axis divergence. It does
+/// NOT grant decision authority: while `complete`, `failed`, `gated`, and
+/// `ready` remain bead writes, a differing fold state is evidence only. What
+/// the flip buys is a CERTIFIED CARRIER for wave 2, not different decisions.
 bool servesFoldStepState(StepState bead, StepState fold) =>
     !demotesStepState(bead, fold) && !staleRungPromotion(bead, fold);
 
@@ -279,8 +281,8 @@ bool expectsFoldStepRow(StepState bead) => bead != StepState.pending;
 /// from the FOLD's side: it resolves as soon as the bead's own write lands.
 /// This is the discriminator for
 /// [DualReadDivergenceCause.foldAheadOfLegacy] and the "has the bead caught up
-/// yet?" test at window resolution, never a merge input: what is SERVED stays
-/// [servesFoldStepState]'s call.
+/// yet?" test at window resolution, never a merge input: the bead remains the
+/// decision carrier throughout the dual-read pass.
 bool foldAheadOfLegacyStep(StepState bead, StepState fold) =>
     _stepProgress(fold) > _stepProgress(bead);
 
@@ -298,7 +300,11 @@ int _stepProgress(StepState state) => switch (state) {
 /// The result of merging P2 over one session's bead-carried cursor.
 @immutable
 final class StepCursorMerge {
-  const StepCursorMerge({required this.cursor, required this.nodes});
+  const StepCursorMerge({
+    required this.cursor,
+    required this.nodes,
+    required this.changed,
+  });
 
   /// The EFFECTIVE cursor a consumer reads. Its node SET is the bead's,
   /// always: the P2-miss rule keeps a P2-less node, and the never-creates rule
@@ -308,10 +314,12 @@ final class StepCursorMerge {
   /// One entry per compared node, in bead order then orphan order.
   final List<StepNodeComparison> nodes;
 
-  /// True when the merge changed a state — under `primary` the entries the
-  /// station actually decided differently on.
-  bool get changed =>
-      nodes.any((node) => node.classification == StepNodeClass.divergence);
+  /// True when the effective decision cursor differs from [legacy].
+  ///
+  /// Classification is deliberately separate: a fold-ahead divergence still
+  /// increments divergence evidence while the effective cursor remains the
+  /// bead cursor, so that held disagreement reports `false` here.
+  final bool changed;
 }
 
 /// THE MERGE — P2 over the bead-carried cursor for ONE session, with the three
@@ -329,7 +337,11 @@ StepCursorMerge mergeStepCursor({
   Map<String, StepCursorView> collapsed = const <String, StepCursorView>{},
 }) {
   if (traj == null) {
-    return StepCursorMerge(cursor: legacy, nodes: const <StepNodeComparison>[]);
+    return StepCursorMerge(
+      cursor: legacy,
+      nodes: const <StepNodeComparison>[],
+      changed: false,
+    );
   }
   final merged = <String, NodeCursor>{};
   final nodes = <StepNodeComparison>[];
@@ -367,15 +379,11 @@ StepCursorMerge mergeStepCursor({
       supersededByStepRound: row?.supersededByStepRound,
     );
     nodes.add(comparison);
-    // The STATE is the only field P2 serves: everything else on the node —
-    // restartCount, cooldownUntil, the fence identity triple — is bead-read
-    // for all of wave 1, so the served node is the BEAD's with P2's state
-    // spliced, never a node built out of P2. A refused state serves the bead
-    // whole (`stepLag`), which is also what makes the node set stable: the
-    // same key is present either way.
-    merged[stepPath] = servesFoldStepState(beadNode.state, foldNode.state)
-        ? beadNode.copyWith(state: foldNode.state)
-        : beadNode;
+    // Comparison and decision authority are separate. A differing fold state
+    // remains divergence/lag EVIDENCE above, but it never crosses the KEPT
+    // bead carrier's dependency barrier. Every field — including state — is
+    // therefore bead-read for the narrow dual-read pass.
+    merged[stepPath] = beadNode;
   });
   // THE OVERLAY NEVER CREATES, step axis: a P2 node the ledger does not carry
   // is counted and dropped. Mounting one would be the mirror image of the
@@ -394,7 +402,7 @@ StepCursorMerge mergeStepCursor({
       ),
     );
   });
-  return StepCursorMerge(cursor: merged, nodes: nodes);
+  return StepCursorMerge(cursor: merged, nodes: nodes, changed: false);
 }
 
 /// THE SHARED HELPER the cursor consumers adopt (§C4's

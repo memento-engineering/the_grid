@@ -253,8 +253,8 @@ void main() {
       );
     });
 
-    test('a P2 state STRICTLY AHEAD of a non-pending bead is served and '
-        'classed a divergence', () {
+    test('a P2 state STRICTLY AHEAD is divergence evidence but never the '
+        'decision cursor', () {
       // Unreachable in a healthy station (every persist site writes the bead
       // first), which is exactly why it is the class the gates count.
       final merge = mergeStepCursor(
@@ -262,9 +262,9 @@ void main() {
         legacy: {'a': const NodeCursor(state: StepState.running)},
         traj: {'a': const NodeCursor(state: StepState.complete)},
       );
-      expect(merge.cursor['a']!.state, StepState.complete);
+      expect(merge.cursor['a']!.state, StepState.running);
       expect(merge.nodes.single.classification, StepNodeClass.divergence);
-      expect(merge.changed, isTrue);
+      expect(merge.changed, isFalse);
     });
 
     test('BREAKER PARITY (B-M2): restartCount and cooldownUntil come off the '
@@ -316,7 +316,7 @@ void main() {
     });
 
     test(
-      'with a trajCursor the BEAD cursor is the floor, not the site read',
+      'with a trajCursor the BEAD cursor is the decision, not the site read',
       () {
         // Engaged, the frontier stops reading an empty map and starts reading
         // the session's real nodes — the behavior CHANGE the carry names.
@@ -344,8 +344,84 @@ void main() {
         beadCursor: {'b': const NodeCursor(state: StepState.running)},
       );
       expect(cursor.keys, ['b']);
-      expect(cursor['b']!.state, StepState.complete);
+      expect(cursor['b']!.state, StepState.running);
     });
+
+    test(
+      'fold-ahead completion cannot skip build, review, land to deliver',
+      () {
+        const specReview = Circuit(
+          id: 'spec-review',
+          terminalStepId: 'route',
+          steps: [CapabilityStep(stepId: 'route', capabilityId: 'route')],
+        );
+        const root = Circuit(
+          id: 'code',
+          terminalStepId: 'deliver',
+          steps: [
+            SubCircuitStep(stepId: 'spec_review', circuitId: 'spec-review'),
+            CapabilityStep(
+              stepId: 'build',
+              capabilityId: 'build',
+              dependsOn: {'spec_review'},
+            ),
+            CapabilityStep(
+              stepId: 'review',
+              capabilityId: 'review',
+              dependsOn: {'build'},
+            ),
+            CapabilityStep(
+              stepId: 'land',
+              capabilityId: 'land',
+              dependsOn: {'review'},
+            ),
+            CapabilityStep(
+              stepId: 'deliver',
+              capabilityId: 'deliver',
+              dependsOn: {'land'},
+            ),
+          ],
+        );
+        const bead = <String, NodeCursor>{
+          'pow-1/spec_review/route': NodeCursor(state: StepState.complete),
+          'pow-1/build': NodeCursor(state: StepState.pending),
+          'pow-1/review': NodeCursor(state: StepState.pending),
+          'pow-1/land': NodeCursor(state: StepState.pending),
+          'pow-1/deliver': NodeCursor(state: StepState.pending),
+        };
+        final session = _session(
+          workBeadId: 'pow-1',
+          trajCursor: const {
+            'pow-1/spec_review/route': NodeCursor(state: StepState.complete),
+            'pow-1/build': NodeCursor(state: StepState.complete),
+            'pow-1/review': NodeCursor(state: StepState.complete),
+            'pow-1/land': NodeCursor(state: StepState.complete),
+            'pow-1/deliver': NodeCursor(state: StepState.complete),
+          },
+        );
+
+        final effective = effectiveStepCursor(
+          session,
+          siteCursor: const <String, NodeCursor>{},
+          beadCursor: bead,
+        );
+        final frontier = eligibleSteps(
+          root,
+          effective,
+          'pow-1',
+          circuitById: (id) => id == 'spec-review' ? specReview : null,
+          now: DateTime.utc(2026, 9, 21),
+        );
+        final runnableCapabilities = frontier.whereType<CapabilityStep>();
+
+        expect(effective, bead);
+        expect(runnableCapabilities.map((step) => step.stepId), ['build']);
+        expect(
+          runnableCapabilities.map((step) => step.stepId),
+          isNot(contains('deliver')),
+        );
+      },
+    );
   });
 
   group('StepLagTracker — stepLag\'s arithmetic', () {
