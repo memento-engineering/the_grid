@@ -248,6 +248,11 @@ bool foldLagsLedger(String field, String? legacyValue, String? foldValue) =>
       'held' => legacyValue == 'true' && foldValue == 'false',
       // The mount lane: the ledger counts remounts, the fold carries none.
       'legacy_attempt_count' => legacyValue != null && foldValue == null,
+      // G2's explicit append-presence fact. Only this named field may ask the
+      // corroboration classifier to turn a legacy-write/append gap into the
+      // allow-listed non-atomic-crash class; an ordinary projection miss is
+      // never sufficient evidence by itself.
+      'g2_append_presence' => legacyValue == 'present' && foldValue == 'absent',
       'step_state' => switch ((
         stepStateProgress[legacyValue],
         stepStateProgress[foldValue],

@@ -487,6 +487,11 @@ void main() {
         DualReadDivergenceCause.operatorStoreEdit,
         DualReadDivergenceCause.foldAheadOfLegacy,
         DualReadDivergenceCause.foldBackedMountFacts,
+        DualReadDivergenceCause.moleculeGraphMismatch,
+        DualReadDivergenceCause.graphApplyPlanMismatch,
+        DualReadDivergenceCause.successorRelationshipMismatch,
+        DualReadDivergenceCause.successorDepthMismatch,
+        DualReadDivergenceCause.nonAtomicCrashGap,
         DualReadDivergenceCause.retiredRoundOpenByDesign,
         DualReadDivergenceCause.legacyTerminalNoFoldTerminal,
         DualReadDivergenceCause.unexplained,
@@ -582,6 +587,7 @@ void main() {
         'occurred_at': '2026-09-01T16:20:00.000Z',
         'active_step_path': null,
         'cause': 'unexplained',
+        'mismatch_key': 'session:s1:humanHeld',
       });
     });
 
@@ -1102,6 +1108,12 @@ void main() {
             fail('the session comparator never mints fold-ahead-of-legacy');
           case DualReadDivergenceCause.foldBackedMountFacts:
             fail('this probe does not compare fold-backed mount facts');
+          case DualReadDivergenceCause.moleculeGraphMismatch:
+          case DualReadDivergenceCause.graphApplyPlanMismatch:
+          case DualReadDivergenceCause.successorRelationshipMismatch:
+          case DualReadDivergenceCause.successorDepthMismatch:
+          case DualReadDivergenceCause.nonAtomicCrashGap:
+            fail('the session comparator never mints G2-only causes');
           case DualReadDivergenceCause.retiredRoundOpenByDesign:
             fail('this probe does not compare a retired round');
           case DualReadDivergenceCause.legacyTerminalNoFoldTerminal:

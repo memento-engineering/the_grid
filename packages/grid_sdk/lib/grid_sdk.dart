@@ -185,6 +185,7 @@ export 'src/trajectory/step_cursor_mirror.dart';
 export 'src/trajectory/trajectory_config.dart';
 export 'src/trajectory/process_identity_mirror.dart';
 export 'src/trajectory/attempt_liveness_recovery.dart';
+export 'src/trajectory/g2_shadow_round.dart';
 export 'src/trajectory/trajectory_harness.dart';
 
 // ── Station command extension ───────────────────────────────────────────────

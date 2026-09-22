@@ -27,16 +27,37 @@ import '../cli/traj_shadow_diff_command.dart';
 import '../cli/trajectory_reader.dart';
 import 'shadow_corroboration.dart';
 
+/// Optional G2 lane routed into the station's incumbent comparator core.
+///
+/// The leaf package supplies only the invocation shape. The SDK/CLI adapter
+/// owns engine types and calls `DualReadStepObserver.observeG2Round`, so this
+/// callback never becomes a second [ShadowCompare] implementation.
+typedef G2ShadowRoundCompare =
+    Future<ShadowCompareResult> Function({
+      required String sessionId,
+      required SubjectRecords records,
+      int? round,
+      required ShadowCorroboration corroboration,
+    });
+
 /// The lane composition. Order is preserved into the report so a mismatch
 /// list reads family by family.
 class CompositeShadow implements ShadowCompare, ShadowDefaultScope {
-  CompositeShadow(this.lanes);
+  CompositeShadow(this.lanes, {G2ShadowRoundCompare? g2Compare})
+    : _g2Compare = g2Compare;
 
   final List<ShadowCompare> lanes;
+  final G2ShadowRoundCompare? _g2Compare;
 
   @override
   Set<String> get comparableFields => {
     for (final lane in lanes) ...lane.comparableFields,
+    if (_g2Compare != null) ...const {
+      'molecule_graph',
+      'graph_apply_plan',
+      'successor_relationship',
+      'successor_depth',
+    },
   };
 
   /// Null once ANY lane can compare something: the run is a real comparison
@@ -95,6 +116,18 @@ class CompositeShadow implements ShadowCompare, ShadowDefaultScope {
       mismatches.addAll(result.mismatches);
       if (result.incompleteReason case final String reason) {
         incomplete.add('${lane.runtimeType} — $reason');
+      }
+    }
+    if (_g2Compare case final compare?) {
+      final result = await compare(
+        sessionId: sessionId,
+        records: records,
+        round: round,
+        corroboration: corroboration,
+      );
+      mismatches.addAll(result.mismatches);
+      if (result.incompleteReason case final String reason) {
+        incomplete.add('G2 — $reason');
       }
     }
     if (incomplete.isEmpty) return ShadowCompareResult(mismatches);

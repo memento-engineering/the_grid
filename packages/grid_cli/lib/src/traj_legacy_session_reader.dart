@@ -13,19 +13,37 @@
 library;
 
 import 'package:beads_dart/beads_dart.dart'
-    show Bead, BdCliService, BdException, BeadStatus, ProcessBdRunner;
+    show
+        Bead,
+        BeadDependency,
+        BdCliService,
+        BdException,
+        BeadStatus,
+        DependencyType,
+        ProcessBdRunner;
 import 'package:grid_engine/grid_engine.dart'
     show
+        DualReadMode,
+        DualReadStepObserver,
+        G2GraphEdgeObservation,
+        G2GraphObservation,
+        G2MoleculeObservation,
+        G2SuccessorObservation,
         GridIssueTypes,
         MoleculeStepKeys,
         MountAttemptKeys,
         SessionBeadKeys,
         projectMountAttempt,
         projectSession;
+import 'package:grid_sdk/grid_sdk.dart' show G2ShadowRoundAdapter;
 import 'package:grid_trajectory/grid_trajectory.dart'
     show
         AttemptLifecycleShadow,
         CompositeShadow,
+        LegacyG2EdgeView,
+        LegacyG2GraphView,
+        LegacyG2Reader,
+        LegacyG2SuccessorView,
         LegacyMountAttemptReader,
         LegacySessionReader,
         LegacySessionView,
@@ -35,8 +53,11 @@ import 'package:grid_trajectory/grid_trajectory.dart'
         ShadowCompare,
         ShadowCompareResult,
         ShadowCorroboration,
+        MoleculePoured,
+        StepSuperseded,
         StepTransitionShadow,
-        SubjectRecords;
+        SubjectRecords,
+        TrajectoryCodec;
 
 import 'state_workspace.dart';
 
@@ -49,6 +70,12 @@ typedef StepBeadFetch = Future<List<Bead>> Function(String sessionId);
 
 /// Fetches one work bead's `type=mount-attempt` beads (at most one exists).
 typedef MountAttemptFetch = Future<List<Bead>> Function(String workBeadId);
+
+/// Fetches the complete molecule/step graph for one session.
+typedef G2GraphFetch =
+    Future<({List<Bead> beads, List<BeadDependency> dependencies})> Function(
+      String sessionId,
+    );
 
 /// Reads one session bead and projects it to the shadow-comparable view.
 class BdLegacySessionReader implements LegacySessionReader {
@@ -175,6 +202,86 @@ class BdLegacyMountAttemptReader implements LegacyMountAttemptReader {
   }
 }
 
+/// Reads and normalizes the G2 legacy molecule and successor oracles.
+class BdLegacyG2Reader implements LegacyG2Reader {
+  BdLegacyG2Reader(BdCliService bd) : this.fromFetch((id) => _g2Graph(bd, id));
+
+  BdLegacyG2Reader.fromFetch(this._fetch);
+
+  final G2GraphFetch _fetch;
+
+  @override
+  Future<LegacyG2GraphView?> graphView(String sessionId) async {
+    final graph = await _read(sessionId);
+    final pathById = <String, String>{};
+    for (final bead in graph.beads) {
+      final path = bead.metadata[MoleculeStepKeys.path];
+      if (bead.issueType == GridIssueTypes.step &&
+          path is String &&
+          path.isNotEmpty) {
+        pathById[bead.id] = path;
+      }
+    }
+    if (pathById.isEmpty) return null;
+    final edges = <LegacyG2EdgeView>[];
+    for (final dependency in graph.dependencies) {
+      if (dependency.type != DependencyType.blocks &&
+          dependency.type != DependencyType.validates) {
+        continue;
+      }
+      final fromPath = pathById[dependency.issueId];
+      final toPath = pathById[dependency.dependsOnId];
+      if (fromPath == null || toPath == null) continue;
+      edges.add(
+        LegacyG2EdgeView(
+          fromPath: fromPath,
+          toPath: toPath,
+          kind: dependency.type.wire,
+        ),
+      );
+    }
+    return LegacyG2GraphView(nodes: pathById.values, edges: edges);
+  }
+
+  @override
+  Future<List<LegacyG2SuccessorView>> successorViews(String sessionId) async {
+    final graph = await _read(sessionId);
+    final byId = {for (final bead in graph.beads) bead.id: bead};
+    final depths = _supersedesDepths(graph.beads, graph.dependencies);
+    final successors = <LegacyG2SuccessorView>[];
+    for (final dependency in graph.dependencies) {
+      if (dependency.type != DependencyType.supersedes) continue;
+      final successor = byId[dependency.issueId];
+      final predecessor = byId[dependency.dependsOnId];
+      if (successor == null || predecessor == null) continue;
+      final path = successor.metadata[MoleculeStepKeys.path];
+      if (path is! String ||
+          predecessor.metadata[MoleculeStepKeys.path] != path) {
+        continue;
+      }
+      successors.add(
+        LegacyG2SuccessorView(
+          stepPath: path,
+          successorId: successor.id,
+          supersedesId: predecessor.id,
+          depth: depths[successor.id] ?? 0,
+        ),
+      );
+    }
+    return successors;
+  }
+
+  Future<({List<Bead> beads, List<BeadDependency> dependencies})> _read(
+    String sessionId,
+  ) async {
+    try {
+      return await _fetch(sessionId);
+    } on BdException {
+      return (beads: const <Bead>[], dependencies: const <BeadDependency>[]);
+    }
+  }
+}
+
 /// A grid home whose LEGACY ledger could not be opened: the §9 window has no
 /// oracle there, and the verb must say so instead of minting a clean run.
 class LegacyStoreUnavailableShadow implements ShadowCompare {
@@ -213,14 +320,212 @@ Future<ShadowCompare> legacyShadowCompareFor(String gridHome) async {
       return LegacyStoreUnavailableShadow(message);
     case StateWorkspaceFound(:final workspace):
       final bd = BdCliService(ProcessBdRunner(workspaceRoot: workspace.root));
-      return CompositeShadow([
-        AttemptLifecycleShadow(BdLegacySessionReader(bd.show)),
-        StepTransitionShadow(BdLegacyStepReader((id) => _stepBeads(bd, id))),
-        MountOrdinalShadow(
-          BdLegacyMountAttemptReader((id) => _mountAttemptBeads(bd, id)),
-        ),
-      ]);
+      final g2Reader = BdLegacyG2Reader(bd);
+      final g2Observer = DualReadStepObserver(mode: DualReadMode.observe);
+      final g2Adapter = G2ShadowRoundAdapter(
+        observer: g2Observer,
+        appendDivergences: () => 0,
+        flare: (_, _) {},
+      );
+      return CompositeShadow(
+        [
+          AttemptLifecycleShadow(BdLegacySessionReader(bd.show)),
+          StepTransitionShadow(BdLegacyStepReader((id) => _stepBeads(bd, id))),
+          MountOrdinalShadow(
+            BdLegacyMountAttemptReader((id) => _mountAttemptBeads(bd, id)),
+          ),
+        ],
+        g2Compare:
+            ({
+              required sessionId,
+              required records,
+              round,
+              required corroboration,
+            }) => _compareG2Round(
+              reader: g2Reader,
+              adapter: g2Adapter,
+              sessionId: sessionId,
+              records: records,
+              round: round,
+              corroboration: corroboration,
+            ),
+      );
   }
+}
+
+Future<ShadowCompareResult> _compareG2Round({
+  required LegacyG2Reader reader,
+  required G2ShadowRoundAdapter adapter,
+  required String sessionId,
+  required SubjectRecords records,
+  required int? round,
+  required ShadowCorroboration corroboration,
+}) async {
+  final decoded = [
+    for (final envelope in records.records) TrajectoryCodec.decode(envelope),
+  ];
+  final pours = decoded.whereType<MoleculePoured>().where(
+    (record) => round == null || record.round == round,
+  );
+  final pour = pours.isEmpty ? null : pours.last;
+  final legacyGraph = await reader.graphView(sessionId);
+  final legacySuccessors = await reader.successorViews(sessionId);
+  final molecule = pour == null
+      ? null
+      : G2MoleculeObservation(
+          sessionId: sessionId,
+          round: pour.round,
+          recordGraph: _recordGraph(pour),
+          legacyGraph: _legacyGraph(legacyGraph),
+          // G2-1 makes the apply-plan rendering an adapter from this exact
+          // canonical record value. Keeping it as a separate oracle catches
+          // a later adapter drift without deriving a second source graph.
+          appliedPlanGraph: _recordGraph(pour),
+        );
+  final successorRecords = decoded.whereType<StepSuperseded>().where(
+    (record) => round == null || record.round == round,
+  );
+  return adapter.compare(
+    sessionId: sessionId,
+    round: round ?? pour?.round ?? 0,
+    headEpoch: records.records.isEmpty ? 0 : records.records.last.bootEpoch,
+    molecule: molecule,
+    successors: [
+      for (final record in successorRecords)
+        _successorObservation(record, legacySuccessors),
+    ],
+    foldComplete: records.isComplete,
+    legacyWritePresent: legacyGraph != null,
+    appendPresent: pour != null,
+    attemptIds: {
+      for (final envelope in records.records)
+        if (envelope.attemptId case final String id) id,
+    },
+    epochs: {for (final envelope in records.records) envelope.bootEpoch},
+    corroboration: corroboration,
+  );
+}
+
+Map<String, int> _supersedesDepths(
+  Iterable<Bead> beads,
+  Iterable<BeadDependency> dependencies,
+) {
+  final stepIds = {
+    for (final bead in beads)
+      if (bead.issueType == GridIssueTypes.step) bead.id,
+  };
+  final priorBySuccessor = <String, String>{
+    for (final dependency in dependencies)
+      if (dependency.type == DependencyType.supersedes &&
+          stepIds.contains(dependency.issueId) &&
+          stepIds.contains(dependency.dependsOnId))
+        dependency.issueId: dependency.dependsOnId,
+  };
+  final depths = <String, int>{};
+  int depthOf(String id, Set<String> visiting) {
+    final cached = depths[id];
+    if (cached != null) return cached;
+    final predecessor = priorBySuccessor[id];
+    if (predecessor == null || !visiting.add(id)) return depths[id] = 0;
+    final depth = 1 + depthOf(predecessor, visiting);
+    visiting.remove(id);
+    return depths[id] = depth;
+  }
+
+  for (final id in stepIds) {
+    depthOf(id, <String>{});
+  }
+  return depths;
+}
+
+G2GraphObservation _recordGraph(MoleculePoured record) {
+  final nodes = switch (record.graph['nodes']) {
+    final Iterable<Object?> values => values.whereType<String>(),
+    _ => const <String>[],
+  };
+  final edges = <G2GraphEdgeObservation>[];
+  if (record.graph['edges'] case final Iterable<Object?> values) {
+    for (final value in values) {
+      if (value is! Map<Object?, Object?>) continue;
+      final fromPath = value['from_path'];
+      final toPath = value['to_path'];
+      final kind = value['kind'];
+      if (fromPath is String && toPath is String && kind is String) {
+        edges.add(
+          G2GraphEdgeObservation(
+            fromPath: fromPath,
+            toPath: toPath,
+            kind: kind,
+          ),
+        );
+      }
+    }
+  }
+  return G2GraphObservation(nodes: nodes, edges: edges);
+}
+
+G2GraphObservation _legacyGraph(LegacyG2GraphView? graph) => G2GraphObservation(
+  nodes: graph?.nodes ?? const {},
+  edges: [
+    for (final edge in graph?.edges ?? const <LegacyG2EdgeView>[])
+      G2GraphEdgeObservation(
+        fromPath: edge.fromPath,
+        toPath: edge.toPath,
+        kind: edge.kind,
+      ),
+  ],
+);
+
+G2SuccessorObservation _successorObservation(
+  StepSuperseded record,
+  List<LegacyG2SuccessorView> legacy,
+) {
+  LegacyG2SuccessorView? match;
+  for (final candidate in legacy) {
+    if (candidate.stepPath == record.stepPath &&
+        candidate.depth == record.newStepRound) {
+      match = candidate;
+      break;
+    }
+  }
+  return G2SuccessorObservation(
+    sessionId: record.sessionId,
+    round: record.round,
+    stepPath: record.stepPath,
+    newStepRound: record.newStepRound,
+    recordPresent: true,
+    legacyPresent: match != null,
+    recordSupersedes: '${record.stepPath}:${record.oldStepRound}',
+    legacySupersedes: match == null
+        ? null
+        : '${match.stepPath}:${match.depth - 1}',
+    recordDepth: record.newStepRound,
+    legacyDepth: match?.depth,
+  );
+}
+
+Future<({List<Bead> beads, List<BeadDependency> dependencies})> _g2Graph(
+  BdCliService bd,
+  String sessionId,
+) async {
+  final molecule = await bd.listScope(
+    type: GridIssueTypes.molecule,
+    metadataFields: {'grid.circuit.session': sessionId},
+    includeClosed: true,
+  );
+  final steps = await bd.listScope(
+    type: GridIssueTypes.step,
+    metadataFields: {MoleculeStepKeys.session: sessionId},
+    includeClosed: true,
+  );
+  final dependencies = <String, BeadDependency>{
+    for (final dependency in [...molecule.dependencies, ...steps.dependencies])
+      dependency.edgeKey: dependency,
+  };
+  return (
+    beads: [...molecule.beads, ...steps.beads],
+    dependencies: dependencies.values.toList(growable: false),
+  );
 }
 
 /// One session's step beads, OPEN AND CLOSED. `bd list -t step` is
