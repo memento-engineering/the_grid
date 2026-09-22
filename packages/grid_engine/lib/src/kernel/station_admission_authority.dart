@@ -23,6 +23,18 @@ import '../sdk/circuit.dart';
 import 'admission_barrier.dart';
 import 'trajectory_scope.dart';
 
+/// The once-resolved Stage-2 emission posture injected by station assembly.
+enum G2EmissionMode {
+  /// Legacy graph writes run without Stage-2 observations.
+  off,
+
+  /// Legacy graph writes remain authoritative and emit shadow records.
+  shadow,
+
+  /// Stage-2 records are authoritative once the later cut chunk is armed.
+  cut,
+}
+
 /// The input that most recently resolved the station admission ceiling.
 enum StationAdmissionCeilingSource {
   /// The fresh-authority value supplied by station composition.
@@ -263,6 +275,8 @@ final class StationAdmissionAuthority {
     AllocationLiveness? liveness,
     TrajectoryAdmissionHalt? trajectoryAdmissionHalt,
     AdmissionBarrier? admissionBarrier,
+    G2EmissionMode g2EmissionMode = G2EmissionMode.off,
+    StationTrajectoryRecorder? trajectoryRecorder,
     DateTime Function()? clock,
   }) : _writer = writer,
        _admissionBarrier = admissionBarrier,
@@ -271,6 +285,9 @@ final class StationAdmissionAuthority {
        _maxAgents = maxConcurrentWork,
        _liveness = liveness ?? neverLive,
        _clock = clock ?? DateTime.now,
+       _g2EmissionMode = g2EmissionMode,
+       _trajectoryRecorder =
+           trajectoryRecorder ?? StationTrajectoryRecorder.disabled(),
        _trajectoryAdmissionHalt = trajectoryAdmissionHalt {
     _removeTrajectoryAdmissionHaltListener = trajectoryAdmissionHalt
         ?.addListener(_notifyListeners);
@@ -284,6 +301,8 @@ final class StationAdmissionAuthority {
       StationAdmissionCeilingSource.boot;
   final AllocationLiveness _liveness;
   final DateTime Function() _clock;
+  final G2EmissionMode _g2EmissionMode;
+  final StationTrajectoryRecorder _trajectoryRecorder;
   final TrajectoryAdmissionHalt? _trajectoryAdmissionHalt;
   void Function()? _removeTrajectoryAdmissionHaltListener;
 
@@ -1259,6 +1278,12 @@ final class StationAdmissionAuthority {
         sessionId: sessionId,
         rootCrumbs: rootCrumbs,
       );
+      if (_g2EmissionMode != G2EmissionMode.off) {
+        await _trajectoryRecorder.moleculePoured(
+          sessionId: sessionId,
+          molecule: molecule,
+        );
+      }
       _notifyListeners();
       return result;
     } on Object catch (error) {

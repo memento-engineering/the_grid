@@ -35,6 +35,8 @@ class StationServices {
     this.workSignal,
     this.trajectoryAdmissionHalt,
     this.admissionBarrier,
+    this.g2EmissionMode = G2EmissionMode.off,
+    StationTrajectoryRecorder? trajectoryRecorder,
     this.maxConcurrentWork = kDefaultMaxConcurrentWork,
     DateTime Function()? clock,
   }) : admission = StationAdmissionAuthority(
@@ -45,6 +47,8 @@ class StationServices {
          liveness: liveness,
          trajectoryAdmissionHalt: trajectoryAdmissionHalt,
          admissionBarrier: admissionBarrier,
+         g2EmissionMode: g2EmissionMode,
+         trajectoryRecorder: trajectoryRecorder,
          clock: clock,
        );
 
@@ -102,6 +106,9 @@ class StationServices {
   /// instance the ambient [TrajectoryRecorderScope] carries, so the authority
   /// path and the offline path count onto one bookkeeper.
   final AdmissionBarrier? admissionBarrier;
+
+  /// The once-resolved Stage-2 emitter posture. Defaults inert.
+  final G2EmissionMode g2EmissionMode;
 
   /// The single station-owned admission and durable attempt-transition owner.
   final StationAdmissionAuthority admission;

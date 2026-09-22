@@ -11,6 +11,7 @@
 //     the deterministic unowned fallback;
 //   * the §2.3 trigger discipline as API shape: synchronous, void, and
 //     NON-FATAL — a throwing sink or flare transport never reaches the caller.
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:test/test.dart';
@@ -72,9 +73,15 @@ final class _ThrowingSink implements TrajectoryRecordSink {
 }
 
 final class _CapturingAckSink implements TrajectoryAckRecordSink {
-  _CapturingAckSink({this.result = const TrajectoryAppendResult.acked()});
+  _CapturingAckSink({
+    this.result = const TrajectoryAppendResult.acked(),
+    this.syncError,
+    this.asyncError,
+  });
 
   final TrajectoryAppendResult result;
+  final Object? syncError;
+  final Object? asyncError;
   final List<_Capture> enqueued = [];
   final List<({TrajectoryRecord record, bool decisionBearing})> acked = [];
 
@@ -108,14 +115,49 @@ final class _CapturingAckSink implements TrajectoryAckRecordSink {
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
     required bool decisionBearing,
-  }) async {
+  }) {
     acked.add((record: record, decisionBearing: decisionBearing));
-    return result;
+    final synchronous = syncError;
+    if (synchronous != null) throw synchronous;
+    final asynchronous = asyncError;
+    if (asynchronous != null) return Future.error(asynchronous);
+    return Future.value(result);
   }
 }
 
 /// 26-char Crockford ULID (the CHAR(26) identity classes mint).
 final Matcher isUlid = matches(RegExp(r'^[0-9A-HJKMNP-TV-Z]{26}$'));
+
+CanonicalMoleculeGraph _canonicalMolecule(String sessionId) =>
+    CanonicalMoleculeGraph(
+      formula: 'code',
+      commitMessage: 'pour code',
+      nodeDefinitions: [
+        GraphNode(
+          key: 'work',
+          title: 'work',
+          type: GridIssueTypes.molecule.wire,
+          parentId: sessionId,
+        ),
+        GraphNode(
+          key: 'work/verify',
+          title: 'verify',
+          type: GridIssueTypes.step.wire,
+        ),
+        GraphNode(
+          key: 'work/build',
+          title: 'build',
+          type: GridIssueTypes.step.wire,
+        ),
+      ],
+      edges: [
+        CanonicalMoleculeEdge(
+          fromPath: 'work/verify',
+          toPath: 'work/build',
+          kind: DependencyType.validates.wire,
+        ),
+      ],
+    );
 
 void main() {
   final clockNow = DateTime.utc(2026, 8, 31, 12);
@@ -134,66 +176,76 @@ void main() {
     );
   });
 
-  test(
-    'only the five decision observations use the acknowledged sink',
-    () async {
-      final ackSink = _CapturingAckSink();
-      final ackRecorder = StationTrajectoryRecorder(
-        sink: ackSink,
-        substationPrefixes: const {'tg'},
-        clock: () => clockNow,
-      );
+  test('only decision observations use the acknowledged sink', () async {
+    final ackSink = _CapturingAckSink();
+    final ackRecorder = StationTrajectoryRecorder(
+      sink: ackSink,
+      substationPrefixes: const {'tg'},
+      clock: () => clockNow,
+    );
 
-      final results = <TrajectoryAppendResult>[
-        await ackRecorder.stepRunning(
-          sessionId: 's1',
-          stepPath: 'build',
-          stepRound: 0,
-          incarnation: 0,
-        ),
-        await ackRecorder.stepRearmed(
-          sessionId: 's1',
-          stepPath: 'review',
-          fromStepRound: 0,
-          incarnation: 0,
-        ),
-        await ackRecorder.sessionCompleted(sessionId: 's2', workBeadId: 'tg-2'),
-        await ackRecorder.sessionEscalated(sessionId: 's3', workBeadId: 'tg-3'),
-        await ackRecorder.sessionVoided(sessionId: 's4', workBeadId: 'tg-4'),
-      ];
-      ackRecorder.sessionSettled(sessionId: 's5', workBeadId: 'tg-5');
-      ackRecorder.stepReady(
+    final results = <TrajectoryAppendResult>[
+      await ackRecorder.stepRunning(
         sessionId: 's1',
-        stepPath: 'ship',
+        stepPath: 'build',
         stepRound: 0,
         incarnation: 0,
-      );
+      ),
+      await ackRecorder.stepRearmed(
+        sessionId: 's1',
+        stepPath: 'review',
+        fromStepRound: 0,
+        incarnation: 0,
+      ),
+      await ackRecorder.moleculePoured(
+        sessionId: 's1',
+        molecule: _canonicalMolecule('s1'),
+      ),
+      await ackRecorder.stepSuperseded(
+        sessionId: 's1',
+        stepPath: 'review',
+        currentDepth: 0,
+        spentRounds: 0,
+        maxReworkRounds: 3,
+      ),
+      await ackRecorder.sessionCompleted(sessionId: 's2', workBeadId: 'tg-2'),
+      await ackRecorder.sessionEscalated(sessionId: 's3', workBeadId: 'tg-3'),
+      await ackRecorder.sessionVoided(sessionId: 's4', workBeadId: 'tg-4'),
+    ];
+    ackRecorder.sessionSettled(sessionId: 's5', workBeadId: 'tg-5');
+    ackRecorder.stepReady(
+      sessionId: 's1',
+      stepPath: 'ship',
+      stepRound: 0,
+      incarnation: 0,
+    );
 
-      expect([
-        for (final result in results)
-          switch (result) {
-            Acked() => 'acked',
-            Dropped() => 'dropped',
-            Suppressed() => 'suppressed',
-          },
-      ], everyElement('acked'));
-      expect(ackSink.acked, hasLength(5));
-      expect(ackSink.acked.map((entry) => entry.record.recordType), [
-        'step.transition',
-        'step.transition',
-        ...List.filled(3, 'attempt.terminal'),
-      ]);
-      expect(
-        ackSink.acked.map((entry) => entry.decisionBearing),
-        everyElement(isTrue),
-      );
-      expect(
-        ackSink.enqueued.map((entry) => entry.record.recordType),
-        ['attempt.terminal', 'step.transition'],
-        reason: 'settled and every non-decision observation stay void enqueue',
-      );
-    },
-  );
+    expect([
+      for (final result in results)
+        switch (result) {
+          Acked() => 'acked',
+          Dropped() => 'dropped',
+          Suppressed() => 'suppressed',
+        },
+    ], everyElement('acked'));
+    expect(ackSink.acked, hasLength(7));
+    expect(ackSink.acked.map((entry) => entry.record.recordType), [
+      'step.transition',
+      'step.transition',
+      'molecule.poured',
+      'step.superseded',
+      ...List.filled(3, 'attempt.terminal'),
+    ]);
+    expect(
+      ackSink.acked.map((entry) => entry.decisionBearing),
+      everyElement(isTrue),
+    );
+    expect(
+      ackSink.enqueued.map((entry) => entry.record.recordType),
+      ['attempt.terminal', 'step.transition'],
+      reason: 'settled and every non-decision observation stay void enqueue',
+    );
+  });
 
   test('acknowledged observations name suppression and contain legacy sink '
       'failures', () async {
@@ -1336,6 +1388,150 @@ void main() {
       );
       final record = single().record as WorktreeHeld;
       expect((record.uncommitted, record.unpushed, record.stashes), (3, 1, 0));
+    });
+  });
+
+  group('the G2 shadow records', () {
+    test(
+      'molecule.poured copies the canonical graph and recorder round',
+      () async {
+        final ackSink = _CapturingAckSink();
+        final ackRecorder = StationTrajectoryRecorder(
+          sink: ackSink,
+          clock: () => clockNow,
+        );
+        ackRecorder.seedRound('s1', 4);
+        final molecule = _canonicalMolecule('s1');
+
+        expect(
+          await ackRecorder.moleculePoured(
+            sessionId: 's1',
+            molecule: molecule,
+            occurredAt: clockNow,
+          ),
+          isA<Acked>(),
+        );
+
+        final record = ackSink.acked.single.record as MoleculePoured;
+        expect(record.sessionId, 's1');
+        expect(record.round, 4);
+        expect(record.formula, molecule.formula);
+        expect(record.graph, same(molecule.graph));
+        expect(record.nodeCount, molecule.nodeCount);
+        expect(record.graphDigest, molecule.graphDigest);
+        expect(record.graph['nodes'], ['work/build', 'work/verify']);
+        expect(
+          record.idemKeyText(const IdemContext(station: 'x', bootEpoch: 1)),
+          'pour:s1:4',
+        );
+      },
+    );
+
+    test(
+      'step.superseded authors exact rounds, cause, key, and budget',
+      () async {
+        final ackSink = _CapturingAckSink();
+        final ackRecorder = StationTrajectoryRecorder(sink: ackSink);
+        ackRecorder.seedRound('s1', 2);
+
+        for (final (spentRounds, _) in [(0, 2), (2, 0), (5, 0)]) {
+          await ackRecorder.stepSuperseded(
+            sessionId: 's1',
+            stepPath: 'work/verify',
+            currentDepth: 6,
+            spentRounds: spentRounds,
+            maxReworkRounds: 3,
+          );
+        }
+
+        final records = [
+          for (final entry in ackSink.acked) entry.record as StepSuperseded,
+        ];
+        expect(records.map((record) => record.budgetRemaining), [2, 0, 0]);
+        for (final record in records) {
+          expect(record.sessionId, 's1');
+          expect(record.round, 2);
+          expect(record.stepPath, 'work/verify');
+          expect(record.oldStepRound, 6);
+          expect(record.newStepRound, 7);
+          expect(record.cause, 'validation-failed');
+          expect(
+            record.idemKeyText(const IdemContext(station: 'x', bootEpoch: 1)),
+            'supersede:s1:2:work/verify:6',
+          );
+        }
+      },
+    );
+
+    test('step.superseded refuses a non-advancing round', () {
+      expect(
+        () => StepSuperseded(
+          sessionId: 's1',
+          round: 0,
+          stepPath: 'work/verify',
+          cause: 'validation-failed',
+          budgetRemaining: 0,
+          oldStepRound: 2,
+          newStepRound: 2,
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('every non-ACK disposition records one named divergence', () async {
+      final cases = <(String, _CapturingAckSink, Type, String?)>[
+        (
+          'dropped',
+          _CapturingAckSink(result: const TrajectoryAppendResult.dropped()),
+          Dropped,
+          null,
+        ),
+        (
+          'suppressed',
+          _CapturingAckSink(result: const TrajectoryAppendResult.suppressed()),
+          Suppressed,
+          null,
+        ),
+        (
+          'dropped',
+          _CapturingAckSink(syncError: StateError('sync append failed')),
+          Dropped,
+          'sync append failed',
+        ),
+        (
+          'dropped',
+          _CapturingAckSink(asyncError: StateError('async append failed')),
+          Dropped,
+          'async append failed',
+        ),
+      ];
+
+      for (final (disposition, ackSink, resultType, reason) in cases) {
+        final observedFlares = <(String, Map<String, String>)>[];
+        final ackRecorder = StationTrajectoryRecorder(
+          sink: ackSink,
+          onFlare: (name, data) => observedFlares.add((name, data)),
+        );
+        final result = await ackRecorder.moleculePoured(
+          sessionId: 's1',
+          molecule: _canonicalMolecule('s1'),
+        );
+
+        expect(result.runtimeType, resultType);
+        expect(ackRecorder.stats.g2ShadowAppendDivergences, 1);
+        final divergence = observedFlares.singleWhere(
+          (flare) => flare.$1 == 'trajectory.g2ShadowAppendDivergence',
+        );
+        expect(divergence.$2['site'], 'moleculePoured');
+        expect(divergence.$2['recordType'], 'molecule.poured');
+        expect(divergence.$2['sessionId'], 's1');
+        expect(divergence.$2['disposition'], disposition);
+        if (reason == null) {
+          expect(divergence.$2, isNot(contains('reason')));
+        } else {
+          expect(divergence.$2['reason'], contains(reason));
+        }
+      }
     });
   });
 

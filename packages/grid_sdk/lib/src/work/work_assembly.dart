@@ -1131,6 +1131,11 @@ Future<StationWorkRuntime> assembleStationWork({
   final g2G1PrerequisiteRefusal =
       resolvedTrajectoryConfig.g2G1PrerequisiteRefusal;
   if (g2G1PrerequisiteRefusal != null) throw g2G1PrerequisiteRefusal;
+  final g2EmissionMode = switch (resolvedTrajectoryConfig.g2Posture) {
+    G2Posture.off => G2EmissionMode.off,
+    G2Posture.shadow => G2EmissionMode.shadow,
+    G2Posture.cut => G2EmissionMode.cut,
+  };
   final cutPostureRefusal = resolvedTrajectoryConfig.cutPostureRefusal;
   if (cutPostureRefusal != null) throw cutPostureRefusal;
 
@@ -1264,6 +1269,7 @@ Future<StationWorkRuntime> assembleStationWork({
       wedgePollInterval: wedgePollInterval,
       syncFloorInterval: syncFloorInterval,
       trajectoryConfig: resolvedTrajectoryConfig,
+      g2EmissionMode: g2EmissionMode,
       trajectoryOverride: trajectoryOverride,
       bundleBuilder: bundleBuilder,
       federatedSourceBuilder: federatedSourceBuilder,
@@ -1310,6 +1316,7 @@ Future<StationWorkRuntime> _acquireStationWork({
   required Duration wedgePollInterval,
   required Duration syncFloorInterval,
   required TrajectoryConfig trajectoryConfig,
+  required G2EmissionMode g2EmissionMode,
   required TrajectoryHarness? trajectoryOverride,
   required StationWorkBundleBuilder? bundleBuilder,
   required StationWorkFederatedSourceBuilder? federatedSourceBuilder,
@@ -1827,6 +1834,8 @@ Future<StationWorkRuntime> _acquireStationWork({
     // The barrier's observer, shared with the ambient recorder scope below so
     // the authority path and the offline path count onto ONE bookkeeper.
     admissionBarrier: admissionBarrier,
+    g2EmissionMode: g2EmissionMode,
+    trajectoryRecorder: recorder,
     // THE COMPLETION FENCE. A detached one-shot agent's vanish is reported as an
     // INFERRED clean exit — a murder and a completion look identical on the wire.
     // The engine advances the circuit on such an exit only for a capability that
