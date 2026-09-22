@@ -1106,23 +1106,26 @@ class StationBeadWriter {
   /// metadata filters into `bd list`). Expressed instead as "list every owned
   /// session, filter in Dart", this would reintroduce precisely the unbounded
   /// boot pass `RestartReconciler` documents itself refusing to do — a large
-  /// backlog would then be walked on every boot. [BeadProbeReader.openBeads]
-  /// also excludes closed beads, so the open half of the conjunction costs
-  /// nothing extra.
+  /// backlog would then be walked on every boot. The reads deliberately use
+  /// this writer's [BdCliService.listScope], so they dial the same configured
+  /// station-state root as lifecycle mutations instead of inheriting a probe
+  /// reader rooted at an ambient worktree.
   Future<List<Bead>> sessionsAwaitingTeardown() async {
     final matches = await Future.wait([
-      _reader.openBeads(
-        types: {GridIssueTypes.session},
-        metadataAll: const {'grid.outcome': 'complete'},
+      _bd.listScope(
+        type: GridIssueTypes.session,
+        status: BeadStatus.open,
+        metadataFields: const {'grid.outcome': 'complete'},
       ),
-      _reader.openBeads(
-        types: {GridIssueTypes.session},
-        metadataAll: const {'grid.outcome': 'commit_only'},
+      _bd.listScope(
+        type: GridIssueTypes.session,
+        status: BeadStatus.open,
+        metadataFields: const {'grid.outcome': 'commit_only'},
       ),
     ]);
     final byId = <String, Bead>{};
     for (final group in matches) {
-      for (final bead in group) {
+      for (final bead in group.beads) {
         byId[bead.id] = bead;
       }
     }
