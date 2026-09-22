@@ -3,7 +3,11 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'bd_runner.dart';
 import 'dolt_endpoint.dart';
+
+/// Builds the one-shot bd runner used to warm a proxied endpoint at boot.
+typedef EndpointWarmRunnerFactory = BdRunner Function(String workspaceRoot);
 
 /// How a workspace's beads store is reached by bd.
 enum DoltMode { proxiedServer, direct, unknown }
@@ -231,12 +235,55 @@ class BeadsWorkspace {
     String? start,
     EndpointResolver endpointResolver = const ProxiedServerEndpointResolver(),
   }) {
+    final root = _findRoot(start);
+    return root == null
+        ? null
+        : _parse(root, endpointResolver: endpointResolver);
+  }
+
+  /// Discovers the same nearest workspace as [discover], warming bd's
+  /// ephemeral proxied endpoint once before resolving it.
+  ///
+  /// Warming is boot-only, read-only, and best-effort: success, non-zero exit,
+  /// throw, and timeout all lead to exactly one immediate [endpointResolver]
+  /// call, whose [EndpointResolution] remains the defined outcome.
+  static Future<BeadsWorkspace?> discoverWarmed({
+    String? start,
+    EndpointResolver endpointResolver = const ProxiedServerEndpointResolver(),
+    EndpointWarmRunnerFactory? warmRunnerFactory,
+    Duration warmTimeout = const Duration(seconds: 15),
+  }) async {
+    final root = _findRoot(start);
+    if (root == null) return null;
+
+    final metadata = _readJson(p.join(root, '.beads', 'metadata.json'));
+    if (metadata?['dolt_mode'] == 'proxied-server') {
+      final runner =
+          warmRunnerFactory?.call(root) ?? ProcessBdRunner(workspaceRoot: root);
+      try {
+        await runner
+            .run(const [
+              'query',
+              'id=grid-endpoint-warm',
+              '--all',
+              '--json',
+              '--limit',
+              '0',
+            ], timeout: warmTimeout)
+            .timeout(warmTimeout);
+      } on Object {
+        // Resolution below owns the operator-facing outcome. Warming only
+        // gives bd one bounded chance to materialize its ephemeral proxy.
+      }
+    }
+
+    return _parse(root, endpointResolver: endpointResolver, metadata: metadata);
+  }
+
+  static String? _findRoot(String? start) {
     var dir = Directory(start ?? Directory.current.path).absolute;
     for (var i = 0; i < 12; i++) {
-      final beads = Directory(p.join(dir.path, '.beads'));
-      if (beads.existsSync()) {
-        return _parse(dir.path, endpointResolver: endpointResolver);
-      }
+      if (Directory(p.join(dir.path, '.beads')).existsSync()) return dir.path;
       final parent = dir.parent;
       if (parent.path == dir.path) break;
       dir = parent;
@@ -247,16 +294,18 @@ class BeadsWorkspace {
   static BeadsWorkspace _parse(
     String root, {
     required EndpointResolver endpointResolver,
+    Map<String, dynamic>? metadata,
   }) {
-    final metadata = _readJson(p.join(root, '.beads', 'metadata.json'));
-    final rawMode = metadata?['dolt_mode'];
+    final parsedMetadata =
+        metadata ?? _readJson(p.join(root, '.beads', 'metadata.json'));
+    final rawMode = parsedMetadata?['dolt_mode'];
     final modeString = rawMode is String ? rawMode : '';
     final mode = switch (modeString) {
       'proxied-server' => DoltMode.proxiedServer,
       'direct' || 'embedded' => DoltMode.direct,
       _ => DoltMode.unknown,
     };
-    final rawDatabase = metadata?['dolt_database'];
+    final rawDatabase = parsedMetadata?['dolt_database'];
     final database = rawDatabase is String ? rawDatabase : null;
     final endpointResolution = endpointResolver.resolve(
       EndpointResolutionRequest(

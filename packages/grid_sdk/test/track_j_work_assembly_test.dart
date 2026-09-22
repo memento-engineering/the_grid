@@ -47,6 +47,8 @@ final class _RecordingBdRunner implements BdRunner {
   }
 }
 
+BdRunner _fastEndpointWarmRunner(String _) => _RecordingBdRunner();
+
 final class _RecordingDryGit extends DryStationGitService {
   final List<String> listedRoots = [];
 
@@ -298,6 +300,7 @@ void main() {
         'proxy.pid',
       );
       final refusals = <String>[];
+      var bundleAcquired = false;
 
       await expectLater(
         assembleStationWork(
@@ -309,6 +312,16 @@ void main() {
           dryRun: false,
           preferSql: false,
           onRefusal: refusals.add,
+          endpointWarmRunnerFactory: _fastEndpointWarmRunner,
+          bundleBuilder:
+              ({
+                required storeName,
+                required workspace,
+                required buildDefault,
+              }) async {
+                bundleAcquired = true;
+                return buildDefault();
+              },
         ),
         throwsA(
           isA<StoreRefusal>()
@@ -330,7 +343,79 @@ void main() {
         ),
       );
       expect(refusals, isEmpty);
+      expect(bundleAcquired, isFalse);
     });
+
+    test(
+      'work-store SQL fallback reports the labelled resolver diagnostic',
+      () async {
+        _seedProxiedStore('${tmp.path}/proj', database: 'pow');
+        _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
+        final missingPid = p.join(
+          tmp.path,
+          'proj',
+          '.beads',
+          'dolt',
+          'proxy.pid',
+        );
+        final reports = <String>[];
+
+        final work = await assembleStationWork(
+          stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
+          substations: [
+            SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj'),
+          ],
+          resolver: const _NullResolver(),
+          dryRun: true,
+          endpointWarmRunnerFactory: _fastEndpointWarmRunner,
+          onUnresolvedExternalDep: reports.add,
+        );
+        addTearDown(work.shutdown);
+
+        expect(work.readPathName, 'proj=cli, state=cli');
+        expect(
+          reports,
+          contains(
+            '[proj] SQL read path unavailable at boot for ${tmp.path}/proj; '
+            'using bd CLI reads — Cannot resolve proxied-server SQL endpoint: '
+            '$missingPid is missing; start bd\'s proxy for this workspace.',
+          ),
+        );
+      },
+    );
+
+    test(
+      'dry-run state fallback stays bootable and reports its diagnostic',
+      () async {
+        _seedStore('${tmp.path}/proj', database: 'pow');
+        _seedProxiedStore('${tmp.path}/home/.grid', database: 'tgstate');
+        final stateRoot = '${tmp.path}/home/.grid';
+        final missingPid = p.join(stateRoot, '.beads', 'dolt', 'proxy.pid');
+        final reports = <String>[];
+
+        final work = await assembleStationWork(
+          stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
+          substations: [
+            SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj'),
+          ],
+          resolver: const _NullResolver(),
+          dryRun: true,
+          endpointWarmRunnerFactory: _fastEndpointWarmRunner,
+          onUnresolvedExternalDep: reports.add,
+        );
+        addTearDown(work.shutdown);
+
+        expect(work.readPathName, 'proj=cli, state=cli');
+        expect(
+          reports,
+          contains(
+            '[state] SQL read path unavailable at boot for $stateRoot; using bd '
+            'CLI reads — Cannot resolve proxied-server SQL endpoint: $missingPid '
+            'is missing; start bd\'s proxy for this workspace.',
+          ),
+        );
+      },
+    );
 
     test('the built runtime sweeps orphans against the OWNED state partition '
         '(the runner has one to hand to runGrid)', () async {
@@ -427,6 +512,7 @@ void main() {
         resolver: const _NullResolver(),
         dryRun: false,
         preferSql: false,
+        endpointWarmRunnerFactory: _fastEndpointWarmRunner,
       );
       addTearDown(work.shutdown);
 

@@ -1628,6 +1628,7 @@ void main() {
         'trajectoryConfig',
         'trajectoryOverride',
         'environment',
+        'endpointWarmRunnerFactory',
         'bundleBuilder',
         'federatedSourceBuilder',
         'joinBridgeBuilder',

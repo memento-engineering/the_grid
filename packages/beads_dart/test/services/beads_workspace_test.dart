@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart';
@@ -318,6 +319,47 @@ void main() {
       addTearDown(() => isolated.deleteSync(recursive: true));
       expect(BeadsWorkspace.discover(start: isolated.path), isNull);
     });
+
+    test(
+      'discoverWarmed bounds a stuck runner then resolves exactly once',
+      () async {
+        writeBeads({
+          'metadata.json':
+              '{"dolt_mode":"proxied-server","dolt_database":"tg"}',
+        });
+        final runner = _NeverCompletingWarmRunner();
+        final resolver = _FakeEndpointResolver(
+          const EndpointResolution.unavailable('cold proxy'),
+        );
+
+        final workspace = await BeadsWorkspace.discoverWarmed(
+          start: tmp.path,
+          endpointResolver: resolver,
+          warmRunnerFactory: (root) {
+            expect(root, tmp.absolute.path);
+            return runner;
+          },
+          warmTimeout: const Duration(milliseconds: 1),
+        );
+
+        expect(workspace, isNotNull);
+        expect(workspace!.endpoint, isNull);
+        expect(workspace.endpointDiagnostic, 'cold proxy');
+        expect(resolver.callCount, 1);
+        expect(runner.calls, [
+          const [
+            'query',
+            'id=grid-endpoint-warm',
+            '--all',
+            '--json',
+            '--limit',
+            '0',
+          ],
+        ]);
+        expect(runner.calls.single, isNot(contains('show')));
+        expect(runner.timeouts, [const Duration(milliseconds: 1)]);
+      },
+    );
   });
 }
 
@@ -326,10 +368,24 @@ final class _FakeEndpointResolver implements EndpointResolver {
 
   final EndpointResolution resolution;
   EndpointResolutionRequest? lastRequest;
+  int callCount = 0;
 
   @override
   EndpointResolution resolve(EndpointResolutionRequest request) {
+    callCount++;
     lastRequest = request;
     return resolution;
+  }
+}
+
+final class _NeverCompletingWarmRunner implements BdRunner {
+  final List<List<String>> calls = [];
+  final List<Duration?> timeouts = [];
+
+  @override
+  Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
+    calls.add(List.unmodifiable(args));
+    timeouts.add(timeout);
+    return Completer<BdResult>().future;
   }
 }
