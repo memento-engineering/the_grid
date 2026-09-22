@@ -127,6 +127,13 @@ neither a branch-owned mint site nor another admission authority.” The
 `StationAdmissionAuthority`; it is neither a second mint site nor a second
 authority.
 
+It also preserves `the_grid#admission-authority-in-process-cut`:
+`StationServices` continues to construct one `StationAdmissionAuthority`, and
+`SessionScope` continues to ask that same object for attempt transitions while
+the tree retains circuit and step execution. The Stage 2 projection authority
+selects graph read values only; it does not create a second admission authority
+or move the existing reservation, recovery, or latch flow.
+
 G2-1 adds the missing `MoleculePoured` edge delta through the same
 incremental-SQL and in-memory-replay delta architecture already used by P1 and
 P2. The record-to-delta function is shared by live append and replay, and the
