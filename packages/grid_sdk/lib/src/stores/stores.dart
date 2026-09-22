@@ -18,8 +18,9 @@ const String kWorkStoreDirName = '.beads';
 /// **colocates** with the grid state store inside `<grid.root>/.grid/`.
 const String kStationLockFileName = 'station.lock';
 
-/// Raised when a required store is absent (or misplaced) at a root — a LOUD boot
-/// refusal, never a silent default (the guard principle: LOUD or gone).
+/// A required store may refuse because it is absent, misplaced, unparseable, or missing a field it must declare.
+/// This is a LOUD boot refusal, never a silent default (the guard principle:
+/// LOUD or gone).
 ///
 /// The v3 model kills cwd/walk-up store discovery (SCRATCH §7 item 9): a store is
 /// expected **exactly at a root**, so its absence is an authoring/ops error the

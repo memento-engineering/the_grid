@@ -54,6 +54,7 @@ import 'package:grid_sdk/grid_sdk.dart'
         StationRefusal,
         StationView,
         StoreConnection,
+        StoreRefusal,
         SubstationWorkSpec,
         TreeProjector,
         kNotWedged,
@@ -439,24 +440,35 @@ class UpCommand extends Command<int> {
         break;
     }
 
-    String? typesCustomWarning;
+    final stateStorePath = GridStateStore.forGridRoot(config.gridHome).beadsDir;
     try {
-      final configured = configuredBdTypeNames(
-        await _readStateStoreTypes(gridHome: config.gridHome),
-      );
-      final missing = <String>[
-        for (final type in GridIssueTypes.customTypes)
-          if (!configured.contains(type.wire)) type.wire,
-      ];
-      if (missing.isNotEmpty) {
-        typesCustomWarning =
-            'WARNING: types.custom is missing GridIssueTypes.customTypes: '
-            '${missing.join(', ')} — station may be unable to mint its own beads; '
-            'booting anyway.';
+      try {
+        final configured = configuredBdTypeNames(
+          await _readStateStoreTypes(gridHome: config.gridHome),
+        );
+        final missing = <String>[
+          for (final type in GridIssueTypes.customTypes)
+            if (!configured.contains(type.wire)) type.wire,
+        ];
+        if (missing.isNotEmpty) {
+          throw StoreRefusal(
+            'state store at $stateStorePath: types.custom is missing '
+            'GridIssueTypes.customTypes: ${missing.join(', ')} — configure '
+            'types.custom before booting.',
+          );
+        }
+      } on StoreRefusal {
+        rethrow;
+      } on Object catch (error) {
+        throw StoreRefusal(
+          'state store at $stateStorePath: types.custom probe FAILED: $error — '
+          'make the store readable and configure types.custom before booting.',
+        );
       }
-    } on Object catch (error) {
-      typesCustomWarning =
-          'WARNING: types.custom probe FAILED: $error — booting anyway.';
+    } on StoreRefusal catch (refusal) {
+      delegate.dispose();
+      stderr.writeln('$prefix: $refusal');
+      return 1;
     }
 
     final startedAt = DateTime.now();
@@ -671,7 +683,6 @@ class UpCommand extends Command<int> {
             : 'stores: read-path {${view.readPathName}}  ·  state partition: '
                   '${view.stateSubstation}',
       )
-      ..writeAll([if (typesCustomWarning != null) '$typesCustomWarning\n'])
       ..writeln(
         'control: ${control.url}  ·  token: (see ${stationLock.path}, 0600)',
       );
