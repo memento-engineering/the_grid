@@ -1665,6 +1665,16 @@ void main() {
     StationDriver Function({required StationDriver Function() buildDefault});''',
         ),
       );
+      expect(
+        source,
+        contains('''onProcessIdentityChanges: !dualReadArmed
+        ? null
+        : (listener) => trajectory.onProcessIdentitiesChanged(
+            listener,
+            fireImmediately: false,
+          ),'''),
+        reason: 'P6 rejoins only while the dual read is armed',
+      );
       for (final retired in [
         'workBundleOverrides',
         'stateBundleOverride',

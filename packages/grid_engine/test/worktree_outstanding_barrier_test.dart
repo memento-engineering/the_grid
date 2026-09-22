@@ -447,6 +447,10 @@ void main() {
         expect(live.wedged, isTrue);
         expect(compromised.refuse, isTrue);
         expect(compromised.wedged, isTrue);
+        expect(live.detail, contains('beat source P6'));
+        expect(compromised.detail, contains('beat source P6'));
+        expect(live.detail, contains(staleAt.toIso8601String()));
+        expect(compromised.detail, contains(staleAt.toIso8601String()));
         expect(live.detail, contains('mirror health live'));
         expect(compromised.detail, contains('mirror health compromised'));
       },
