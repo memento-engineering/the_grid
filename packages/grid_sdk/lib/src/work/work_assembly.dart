@@ -1071,6 +1071,9 @@ typedef StationWorkDriverBuilder =
 /// resource without acquiring the default; once returned, that resource's
 /// lifetime transfers to this assembly. Null builders invoke their default
 /// exactly once in the existing acquisition order.
+/// [endpointWarmRunnerFactory] is a boot-only, read-only seam for the one
+/// bounded bd query that materializes an ephemeral proxied endpoint before
+/// initial resolution. It does not participate in later sync or reconnects.
 ///
 /// [registryBuilder] retains the original one-argument capability seam.
 /// [registryBuilderWithSpecWriter] adds the SPECIFY-authored prose seam without
@@ -1119,6 +1122,7 @@ Future<StationWorkRuntime> assembleStationWork({
   TrajectoryConfig trajectoryConfig = const TrajectoryConfig(),
   TrajectoryHarness? trajectoryOverride,
   Map<String, String>? environment,
+  EndpointWarmRunnerFactory? endpointWarmRunnerFactory,
   StationWorkBundleBuilder? bundleBuilder,
   StationWorkFederatedSourceBuilder? federatedSourceBuilder,
   StationWorkJoinBridgeBuilder? joinBridgeBuilder,
@@ -1196,7 +1200,10 @@ Future<StationWorkRuntime> assembleStationWork({
       root: p.canonicalize(s.root),
       substationName: s.name,
     );
-    final ws = BeadsWorkspace.discover(start: s.root);
+    final ws = await BeadsWorkspace.discoverWarmed(
+      start: s.root,
+      warmRunnerFactory: endpointWarmRunnerFactory,
+    );
     if (ws == null || !_sameCanonicalRoot(ws.root, s.root)) {
       throw StoreRefusal(
         'assembleStationWork: substation "${s.name}": could not parse the work '
@@ -1212,7 +1219,10 @@ Future<StationWorkRuntime> assembleStationWork({
       'the substation-init process (docs/SUBSTATION-INIT.md) before arming.',
     );
   }
-  final stateWs = BeadsWorkspace.discover(start: stateStore.runtimeDir);
+  final stateWs = await BeadsWorkspace.discoverWarmed(
+    start: stateStore.runtimeDir,
+    warmRunnerFactory: endpointWarmRunnerFactory,
+  );
   if (stateWs == null ||
       !_sameCanonicalRoot(stateWs.root, stateStore.runtimeDir)) {
     throw StoreRefusal(

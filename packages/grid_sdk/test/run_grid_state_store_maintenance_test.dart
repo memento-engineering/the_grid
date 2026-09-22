@@ -88,6 +88,7 @@ final class _UnavailableStateDelegate extends _EnabledDelegate {
       preferSql: false,
       providerOverride: DryRunProvider(),
       gitOverride: DryStationGitService(),
+      endpointWarmRunnerFactory: _fastEndpointWarmRunner,
     );
   }
 
@@ -141,9 +142,21 @@ final class _PostMaintenanceWriterDelegate extends _EnabledDelegate {
       providerOverride: DryRunProvider(),
       gitOverride: DryStationGitService(),
       stateBdOverride: BdCliService(runner),
+      endpointWarmRunnerFactory: _fastEndpointWarmRunner,
     );
   }
 }
+
+final class _FastEndpointWarmRunner implements BdRunner {
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async => const BdResult(exitCode: 0, stdout: '{}', stderr: '');
+}
+
+BdRunner _fastEndpointWarmRunner(String _) => _FastEndpointWarmRunner();
 
 final class _ByteConsumer implements StreamConsumer<List<int>> {
   final _bytes = <int>[];
