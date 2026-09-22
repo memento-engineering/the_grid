@@ -1399,6 +1399,18 @@ class SessionScopeState extends State<SessionScope>
     return _DeliveryOutcome.missing;
   }
 
+  void _flareDeliveryOutcomeMissing(String id) {
+    if (_deliveryOutcomeBlocked) return;
+    _deliveryOutcomeBlocked = true;
+    final method = _services.delivery;
+    _flare('delivery.outcomeMissing', {
+      'sessionId': id,
+      'workBeadId': seed.bead.id,
+      'nodePath': _rootDeliveryNodePath,
+      'method': method?.id ?? '',
+    });
+  }
+
   void _scheduleMissingDeliveryOutcome({
     required String sessionId,
     required String stepBeadId,
@@ -2543,6 +2555,10 @@ class SessionScopeState extends State<SessionScope>
                 // That legacy fail-closed shape has no flat delivery bead to
                 // park and remains unchanged.
                 if (_deliveryOutcomeBlocked) break;
+                if (!isMolecule) {
+                  _flareDeliveryOutcomeMissing(id);
+                  break;
+                }
                 final stepBeadId = beadIdByNodePath[_rootDeliveryNodePath];
                 final deliverNode = moleculeBeadCursor[_rootDeliveryNodePath];
                 if (stepBeadId == null || deliverNode == null) {
