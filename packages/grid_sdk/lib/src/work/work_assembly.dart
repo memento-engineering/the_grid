@@ -1978,9 +1978,19 @@ Future<StationWorkRuntime> _acquireStationWork({
     // THE BARRIER's third mirror (§W2.4 W2-B): the pre-fetched P6
     // process/worktree identity read, on the same terms as P1 and P2 — a
     // value the pure join takes, null at `off` so the clause stays disarmed.
+    // Its publication seam also stays null at `off`; while armed it rebuilds
+    // the SAME JoinedSnapshot and bead-scoped eligibility revision consumed by
+    // StationAdmissionAuthority (admission-authority-in-process-cut), so a
+    // resumed heartbeat cannot leave the authority evaluating a stale basis.
     processIdentitySnapshot: dualReadArmed
         ? () => trajectory.processIdentities
         : null,
+    onProcessIdentityChanges: !dualReadArmed
+        ? null
+        : (listener) => trajectory.onProcessIdentitiesChanged(
+            listener,
+            fireImmediately: false,
+          ),
   );
   final bridge =
       joinBridgeBuilder?.call(buildDefault: buildJoinBridgeDefault) ??
@@ -2058,12 +2068,15 @@ Future<StationWorkRuntime> _acquireStationWork({
       await stateBundle.runtime.start();
     },
     sourcesShutdown: () async {
+      final shutdownBundles = List<MapEntry<String, GridRuntimeBundle>>.of(
+        bundles.entries,
+      );
       await settle(
         'state bundle shutdown',
         stateBundle.shutdown,
         onRefusal: refusalSink,
       );
-      for (final entry in bundles.entries) {
+      for (final entry in shutdownBundles) {
         await settle(
           'work bundle shutdown (${entry.key})',
           entry.value.shutdown,

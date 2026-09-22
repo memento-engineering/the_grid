@@ -14,13 +14,18 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:beads_dart/beads_dart.dart'
+    show Bead, BeadStatus, GraphSnapshot, IssueType;
 import 'package:grid_engine/grid_engine.dart'
     show
         DualReadMode,
+        SnapshotSource,
+        StationJoinBridge,
         SessionHeadWon,
         TerminalReconcileOutcome,
         TerminalReconcileRequest,
         TrajectorySnapshotHealth,
+        evaluateWorktreeOutstanding,
         kWorktreeOutstandingStaleAfter;
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:grid_sdk/grid_sdk.dart';
@@ -347,6 +352,16 @@ final class _FakeTimer implements Timer {
 }
 
 typedef _ScheduledTimer = (Duration, void Function(), _FakeTimer);
+
+final class _StaticSnapshotSource implements SnapshotSource {
+  const _StaticSnapshotSource(this.current);
+
+  @override
+  final GraphSnapshot? current;
+
+  @override
+  Stream<GraphSnapshot> get snapshots => const Stream<GraphSnapshot>.empty();
+}
 
 void _fireFakeTimer(_ScheduledTimer scheduled) {
   if (!scheduled.$3.isActive) return;
@@ -3310,6 +3325,7 @@ void main() {
   group('the P6 mirror', () {
     Object? Function(String sql) seedScript({
       List<Map<String, String?>> processes = const [],
+      List<Map<String, String?>> heads = const [],
     }) => (sql) {
       if (sql.contains('AS max_seq')) {
         return const SqlResult(
@@ -3341,6 +3357,9 @@ void main() {
       if (sql.contains('FROM proj_process_identity')) {
         return SqlResult(rows: processes);
       }
+      if (sql.contains('FROM proj_session_head')) {
+        return SqlResult(rows: heads);
+      }
       if (sql.contains('MIN(advanced_at)')) {
         return const SqlResult(
           rows: [
@@ -3370,6 +3389,24 @@ void main() {
       'adopted_existing': '0',
       'worktree_state': 'live',
       'predecessor_attempt_id': null,
+      'last_seq': '40',
+    };
+
+    Map<String, String?> headRow({
+      required String sessionId,
+      required String workBeadId,
+    }) => {
+      'session_id': sessionId,
+      'work_bead_id': workBeadId,
+      'round': '0',
+      'status': 'closed',
+      'outcome': 'failed',
+      'terminal_provenance': 'observed',
+      'unknown_reason': null,
+      'held': '0',
+      'started_at': '2026-08-31 10:00:00.000000',
+      'closed_at': '2026-08-31 11:00:00.000000',
+      'head_epoch': '1',
       'last_seq': '40',
     };
 
@@ -3466,7 +3503,66 @@ void main() {
       test(
         'stale P6 heartbeat restarts once and resumes on observed beat',
         () async {
-          final h = await startLiveHarness();
+          const workBeadId = 'tg-remint';
+          const sessionId = 'tranquility-stale';
+          now = DateTime.now().toUtc().subtract(
+            kWorktreeOutstandingStaleAfter + const Duration(seconds: 1),
+          );
+          dbScript = seedScript(
+            processes: [
+              processRow(attemptId: 'stale-attempt', sessionId: sessionId),
+            ],
+            heads: [headRow(sessionId: sessionId, workBeadId: workBeadId)],
+          );
+          final h = await harness(tickQueries: [_ProbeQuery()]);
+          await h.start();
+          final work = _StaticSnapshotSource(
+            GraphSnapshot.fromParts(
+              beads: const [
+                Bead(
+                  id: workBeadId,
+                  issueType: IssueType.feature,
+                  status: BeadStatus.open,
+                ),
+              ],
+              dependencies: const [],
+              readyIds: const [workBeadId],
+              capturedAt: now,
+            ),
+          );
+          final state = _StaticSnapshotSource(
+            GraphSnapshot.fromParts(
+              beads: const [
+                Bead(
+                  id: sessionId,
+                  issueType: GridIssueTypes.session,
+                  status: BeadStatus.closed,
+                  metadata: {'rig': 'tranquility', 'work_bead': workBeadId},
+                ),
+              ],
+              dependencies: const [],
+              readyIds: const [],
+              capturedAt: now,
+            ),
+          );
+          var processListenerRemoved = false;
+          final bridge = StationJoinBridge(
+            work: work,
+            state: state,
+            headSnapshot: () => h.sessionHeads,
+            processIdentitySnapshot: () => h.processIdentities,
+            onProcessIdentityChanges: (listener) {
+              final remove = h.onProcessIdentitiesChanged(
+                listener,
+                fireImmediately: false,
+              );
+              return () {
+                processListenerRemoved = true;
+                remove();
+              };
+            },
+          )..start();
+          addTearDown(bridge.dispose);
           final originalTick = h.tick;
           final lastBeat = h.processIdentities.lastTickAt!;
           final p1Health = h.sessionHeads.health;
@@ -3480,6 +3576,17 @@ void main() {
           );
           expect(h.sessionHeads.health, p1Health, reason: 'only P6 is stale');
           expect(h.stepCursors.health, p2Health, reason: 'only P6 is stale');
+          final wedgedSnapshot = bridge.latest;
+          final wedged = evaluateWorktreeOutstanding(
+            read: wedgedSnapshot.worktreeOutstanding,
+            workBeadId: workBeadId,
+            linkedSessions: wedgedSnapshot.linkedSessions(workBeadId),
+            now: now,
+          );
+          final wedgedRevision = wedgedSnapshot.eligibilityBasisRevisionOf(
+            workBeadId,
+          );
+          expect(wedged.wedged, isTrue);
           final stale = flares.singleWhere(
             (flare) => flare.$1 == 'trajectory.tickStale',
           );
@@ -3496,15 +3603,41 @@ void main() {
           expect(h.tick, isNot(same(originalTick)));
           expect(h.processIdentities.health, TrajectorySnapshotHealth.live);
           expect(h.processIdentities.lastTickAt, now);
-          final resumed = flares.singleWhere(
+          final resumedSnapshot = bridge.latest;
+          final resumedBeat = resumedSnapshot.worktreeOutstanding.heartbeatAt!;
+          final resumed = evaluateWorktreeOutstanding(
+            read: resumedSnapshot.worktreeOutstanding,
+            workBeadId: workBeadId,
+            linkedSessions: resumedSnapshot.linkedSessions(workBeadId),
+            now: now,
+          );
+          expect(resumedBeat.isAfter(lastBeat), isTrue);
+          expect(now.difference(resumedBeat).isNegative, isFalse);
+          expect(
+            now.difference(resumedBeat),
+            lessThanOrEqualTo(h.config.tickInterval),
+          );
+          expect(resumed.wedged, isFalse);
+          expect(resumed.refuse, isTrue);
+          expect(resumed.outstanding, hasLength(1));
+          expect(
+            resumed.outstanding.single.worktree,
+            '/station/.grid/worktrees/proj/$sessionId',
+          );
+          expect(
+            resumedSnapshot.eligibilityBasisRevisionOf(workBeadId),
+            isNot(wedgedRevision),
+            reason: 'the admission authority must receive a fresh basis',
+          );
+          final resumedFlare = flares.singleWhere(
             (flare) => flare.$1 == 'trajectory.tickResumed',
           );
-          expect(resumed.$2['pass'], 'P6');
-          expect(resumed.$2['kind'], 'tickStale');
-          expect(resumed.$2['lastBeat'], lastBeat.toIso8601String());
-          expect(resumed.$2['resumedAt'], now.toIso8601String());
-          expect(resumed.$2['staleFor'], '91');
-          expect(resumed.$2['attempts'], '1');
+          expect(resumedFlare.$2['pass'], 'P6');
+          expect(resumedFlare.$2['kind'], 'tickStale');
+          expect(resumedFlare.$2['lastBeat'], lastBeat.toIso8601String());
+          expect(resumedFlare.$2['resumedAt'], now.toIso8601String());
+          expect(resumedFlare.$2['staleFor'], '91');
+          expect(resumedFlare.$2['attempts'], '1');
           expect(
             flares.where((flare) => flare.$1 == 'trajectory.tickStale'),
             hasLength(1),
@@ -3513,6 +3646,8 @@ void main() {
             flares.where((flare) => flare.$1 == 'trajectory.tickResumed'),
             hasLength(1),
           );
+          bridge.dispose();
+          expect(processListenerRemoved, isTrue);
         },
       );
 

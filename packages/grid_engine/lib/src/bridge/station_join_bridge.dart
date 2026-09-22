@@ -20,6 +20,16 @@ import 'step_dual_read_pass.dart';
 
 typedef _JoinedStepIncarnation = ({Bead bead, int ordinal});
 
+/// Subscribes to P6 process-identity snapshot publications and returns the
+/// remover (house convention).
+///
+/// The callback is an out-of-band observation seam: the bridge synchronously
+/// re-reads the already-fetched mirror and republishes one joined snapshot.
+typedef ProcessIdentitySnapshotSubscribe =
+    void Function() Function(
+      void Function(TrajectoryProcessIdentitySnapshot snapshot) listener,
+    );
+
 /// The JOIN bridge — the **only** subscription into the snapshot pipelines
 /// (A39 / derailment-invariant 1).
 ///
@@ -72,6 +82,7 @@ class StationJoinBridge {
     StepSnapshotSubscribe? onStepChanges,
     DualReadStepObserver? stepDualRead,
     TrajectoryProcessIdentitySnapshot Function()? processIdentitySnapshot,
+    ProcessIdentitySnapshotSubscribe? onProcessIdentityChanges,
   }) {
     final revisions = EligibilityBasisRevisions();
     final seed = _join(
@@ -97,6 +108,7 @@ class StationJoinBridge {
       onStepChanges: onStepChanges,
       stepDualRead: stepDualRead,
       processIdentitySnapshot: processIdentitySnapshot,
+      onProcessIdentityChanges: onProcessIdentityChanges,
       revisions: revisions,
     );
   }
@@ -115,6 +127,7 @@ class StationJoinBridge {
     required DualReadStepObserver? stepDualRead,
     required TrajectoryProcessIdentitySnapshot Function()?
     processIdentitySnapshot,
+    required ProcessIdentitySnapshotSubscribe? onProcessIdentityChanges,
     required EligibilityBasisRevisions revisions,
   }) : _work = work,
        _state = state,
@@ -127,6 +140,7 @@ class StationJoinBridge {
        _onStepChanges = onStepChanges,
        _stepDualRead = stepDualRead,
        _processIdentitySnapshot = processIdentitySnapshot,
+       _onProcessIdentityChanges = onProcessIdentityChanges,
        _revisions = revisions;
 
   final SnapshotSource _work;
@@ -162,6 +176,9 @@ class StationJoinBridge {
   /// any composition that arms no dual read, which leaves the barrier's read
   /// disarmed and the clause refusing nothing.
   final TrajectoryProcessIdentitySnapshot Function()? _processIdentitySnapshot;
+
+  final ProcessIdentitySnapshotSubscribe? _onProcessIdentityChanges;
+  void Function()? _removeProcessIdentityListener;
 
   /// The bead-scoped eligibility BASIS revision ledger. Bridge-owned because
   /// the join is the one producer of every input it hashes, and MONOTONE
@@ -231,6 +248,13 @@ class StationJoinBridge {
     if (_stepDualRead?.armed ?? false) {
       _removeStepListener = _onStepChanges?.call((_) => _push(_rejoin()));
     }
+    // P6 owns the heartbeat that the worktree-outstanding gate reads. A
+    // heartbeat publication must therefore rebuild the immutable read and its
+    // bead-scoped eligibility basis even when work, state, P1, and P2 are all
+    // quiet.
+    _removeProcessIdentityListener = _onProcessIdentityChanges?.call(
+      (_) => _push(_rejoin()),
+    );
   }
 
   /// Recomputes the join from the latest of all three inputs, taking the
@@ -285,6 +309,8 @@ class StationJoinBridge {
     _removeHeadListener = null;
     _removeStepListener?.call();
     _removeStepListener = null;
+    _removeProcessIdentityListener?.call();
+    _removeProcessIdentityListener = null;
     // THE CLEAN-DOWN FIXPOINT (§0.4): one boot-final round summary, riding the
     // sessionId of the LAST terminal session of the boot. It runs HERE because
     // the driver disposes the bridge before the trajectory harness drains, so
