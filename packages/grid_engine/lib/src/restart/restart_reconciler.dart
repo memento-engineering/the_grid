@@ -280,6 +280,37 @@ class TeardownReplayReport {
       entries.where((e) => e.disposition == GateSweepSessionDisposition.held);
 }
 
+/// The outstanding-teardown query could not read the station's state store.
+///
+/// This aborts the replay pass before it can fabricate an empty candidate set.
+/// The station boot boundary catches the failure and continues startup after
+/// reporting it loudly.
+final class TeardownReplayReadFailure implements Exception {
+  const TeardownReplayReadFailure({
+    required this.store,
+    required this.reason,
+    required this.cause,
+  });
+
+  /// The store role whose read failed.
+  final String store;
+
+  /// The bounded diagnostic reported to the loud and flare sinks.
+  final String reason;
+
+  /// The original read failure.
+  final Object cause;
+
+  @override
+  String toString() =>
+      'TeardownReplayReadFailure(store: $store, reason: $reason, '
+      'cause: $cause)';
+}
+
+/// The outstanding-teardown state-store read failed closed.
+const String kTeardownReplayOutstandingReadFailedFlare =
+    'teardownReplay.outstandingReadFailed';
+
 class RestartReport {
   RestartReport(
     List<RestartEntry> entries, {
@@ -608,8 +639,11 @@ class RestartReconciler {
   /// closed owners are projected from the post-barrier snapshot and merged
   /// with the marker-filtered open crash-window query.
   ///
-  /// Every step is LOUD and non-fatal: a replay failure must never stop a
-  /// station from booting.
+  /// Every teardown effect is LOUD and non-fatal. The trigger read itself is
+  /// fail-closed: if the state store cannot provide the candidate set, this
+  /// pass throws [TeardownReplayReadFailure] before listing worktrees or
+  /// running effects. The station boot boundary reports that failure and
+  /// continues startup.
   Future<TeardownReplayReport> replayTeardownTail() async {
     final writer = _writer;
     if (writer == null) return const TeardownReplayReport([]);
@@ -617,12 +651,24 @@ class RestartReconciler {
     // stale state.
     await _freshnessBarrier();
     final snapshot = _stateSnapshot();
-    var openCandidates = const <Bead>[];
+    late final List<Bead> openCandidates;
     try {
       openCandidates = await writer.sessionsAwaitingTeardown();
     } on Object catch (error) {
+      const store = 'station-state';
+      final reason = truncateReason('station state store read failed: $error');
       _onOrphan(
-        'teardown replay: could not read the outstanding-teardown set — $error',
+        'teardown replay: could not read the outstanding-teardown set — '
+        'store=$store reason=$reason',
+      );
+      _onFlare?.call(kTeardownReplayOutstandingReadFailedFlare, {
+        'store': store,
+        'reason': reason,
+      });
+      throw TeardownReplayReadFailure(
+        store: store,
+        reason: reason,
+        cause: error,
       );
     }
     final candidatesById = <String, Bead>{

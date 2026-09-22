@@ -25,9 +25,12 @@ class _FakeGit {
 
   final List<BeadWorktree> worktrees;
   final List<String> reaped = [];
+  int listCalls = 0;
 
-  Future<List<BeadWorktree>?> listWorktrees(RootCheckout root) async =>
-      worktrees;
+  Future<List<BeadWorktree>?> listWorktrees(RootCheckout root) async {
+    listCalls++;
+    return worktrees;
+  }
 
   Future<ReapOutcome> reapWorktree({
     required RootCheckout root,
@@ -54,8 +57,10 @@ class _FakeGroups implements ProcessGroupController {
   Future<int?> resolvePgid(int pid) async => null;
 }
 
-/// A reader whose probe THROWS — the boot must survive it.
+/// A reader whose probe THROWS — the replay must fail closed before effects.
 class _ThrowingReader implements BeadProbeReader {
+  int openBeadsCalls = 0;
+
   @override
   Future<Bead?> beadById(String id, {required Set<IssueType> types}) async =>
       null;
@@ -64,9 +69,53 @@ class _ThrowingReader implements BeadProbeReader {
     required Set<IssueType> types,
     Map<String, String> metadataAll = const {},
     Map<String, String> metadataAny = const {},
-  }) async => throw StateError('probe exploded');
+  }) async {
+    openBeadsCalls++;
+    throw StateError('probe exploded');
+  }
+
   @override
   Future<List<Bead>> openSuperseding(Set<String> priorIds) async => const [];
+}
+
+class _StoreReader implements BeadProbeReader {
+  _StoreReader(this.delegate, {required this.rejectSessionReads});
+
+  final BeadProbeReader delegate;
+  final bool rejectSessionReads;
+  final List<({Set<IssueType> types, Map<String, String> metadataAll})>
+  openBeadCalls = [];
+
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) =>
+      delegate.beadById(id, types: types);
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) {
+    openBeadCalls.add((
+      types: Set.unmodifiable(types),
+      metadataAll: metadataAll,
+    ));
+    if (rejectSessionReads && types.contains(GridIssueTypes.session)) {
+      throw StateError(
+        'invalid issue type "session" '
+        '(valid: bug, feature, task, epic, chore, decision)',
+      );
+    }
+    return delegate.openBeads(
+      types: types,
+      metadataAll: metadataAll,
+      metadataAny: metadataAny,
+    );
+  }
+
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) =>
+      delegate.openSuperseding(priorIds);
 }
 
 class _SelectiveThrowingReader implements BeadProbeReader {
@@ -494,6 +543,65 @@ void main() {
 
   group('the boot contract', () {
     test(
+      'outstanding teardown reads stay on the resident state store',
+      () async {
+        final stateBd = RecordingBdRunner()
+          ..exportBeads = [_session('tgdog-sess1', workBead: 'tg-1')];
+        final workBd = RecordingBdRunner();
+        final stateStore = _StoreReader(stateBd, rejectSessionReads: false);
+        final ambientWorkStore = _StoreReader(workBd, rejectSessionReads: true);
+        final loud = <String>[];
+        final flares = <({String name, Map<String, String> data})>[];
+        final git = _FakeGit();
+        final reconciler = RestartReconciler(
+          listWorktrees: git.listWorktrees,
+          reapWorktree: git.reapWorktree,
+          workRoot: const RootCheckout(
+            path: '/workspace/the_grid/.grid/worktrees/the_grid/tg-1',
+            defaultBranch: 'main',
+            substation: 'the_grid',
+          ),
+          groups: _FakeGroups(),
+          writer: StationBeadWriter(
+            bd: BdCliService(stateBd),
+            reader: stateStore,
+            ownership: BeadOwnershipPredicate(const {'tgdog'}),
+          ),
+          onOrphan: loud.add,
+          onFlare: (name, data) => flares.add((name: name, data: data)),
+          freshnessBarrier: () async {},
+          stateSnapshot: () => GraphSnapshot.fromParts(
+            beads: stateBd.exportBeads,
+            dependencies: const [],
+            readyIds: const [],
+            capturedAt: DateTime(2026, 9, 22),
+          ),
+        );
+
+        final report = await reconciler.replayTeardownTail();
+
+        expect(report.replayed.map((entry) => entry.sessionId), [
+          'tgdog-sess1',
+        ]);
+        final stateSessionQueries = stateStore.openBeadCalls.where(
+          (call) => call.types.contains(GridIssueTypes.session),
+        );
+        expect(stateSessionQueries, hasLength(2));
+        expect(
+          stateSessionQueries.map((call) => call.types),
+          everyElement({GridIssueTypes.session}),
+        );
+        expect(stateSessionQueries.map((call) => call.metadataAll), [
+          {'grid.outcome': 'complete'},
+          {'grid.outcome': 'commit_only'},
+        ]);
+        expect(ambientWorkStore.openBeadCalls, isEmpty);
+        expect(loud.join('\n'), isNot(contains('invalid issue type')));
+        expect(flares, isEmpty);
+      },
+    );
+
+    test(
       'the freshness barrier completes BEFORE anything is decided',
       () async {
         final order = <String>[];
@@ -536,19 +644,24 @@ void main() {
       expect(_closedIds(f.bd), isEmpty);
     });
 
-    test('a reader failure still RETURNS — a replay must never stop a '
-        'station from booting', () async {
+    test('outstanding teardown read failure flares and fails loudly', () async {
       final git = _FakeGit();
+      final bd = RecordingBdRunner();
+      final reader = _ThrowingReader();
+      final loud = <String>[];
+      final flares = <({String name, Map<String, String> data})>[];
       final reconciler = RestartReconciler(
         listWorktrees: git.listWorktrees,
         reapWorktree: git.reapWorktree,
         workRoot: _workRoot,
         groups: _FakeGroups(),
         writer: StationBeadWriter(
-          bd: BdCliService(RecordingBdRunner()),
-          reader: _ThrowingReader(),
+          bd: BdCliService(bd),
+          reader: reader,
           ownership: BeadOwnershipPredicate(const {'tgdog'}),
         ),
+        onOrphan: loud.add,
+        onFlare: (name, data) => flares.add((name: name, data: data)),
         freshnessBarrier: () async {},
         stateSnapshot: () => GraphSnapshot.fromParts(
           beads: const [],
@@ -558,7 +671,41 @@ void main() {
         ),
       );
 
-      expect((await reconciler.replayTeardownTail()).entries, isEmpty);
+      await expectLater(
+        reconciler.replayTeardownTail(),
+        throwsA(
+          isA<TeardownReplayReadFailure>()
+              .having((failure) => failure.store, 'store', 'station-state')
+              .having(
+                (failure) => failure.reason,
+                'reason',
+                allOf(
+                  contains('station state store'),
+                  contains('probe exploded'),
+                ),
+              )
+              .having(
+                (failure) => failure.cause.toString(),
+                'cause',
+                contains('probe exploded'),
+              ),
+        ),
+      );
+      expect(reader.openBeadsCalls, 2);
+      expect(loud, hasLength(1));
+      expect(loud.single, contains('store=station-state'));
+      expect(loud.single, contains('probe exploded'));
+      expect(flares, hasLength(1));
+      expect(flares.single.name, kTeardownReplayOutstandingReadFailedFlare);
+      expect(flares.single.data['store'], 'station-state');
+      expect(flares.single.data['reason'], contains('probe exploded'));
+      expect(
+        flares.single.data['reason']!.length,
+        lessThanOrEqualTo(kMaxReasonChars),
+      );
+      expect(git.listCalls, 0);
+      expect(git.reaped, isEmpty);
+      expect(bd.calls, isEmpty);
     });
 
     test(
