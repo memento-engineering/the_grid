@@ -1685,6 +1685,34 @@ void main() {
       }
 
       final assembly = source.substring(signatureStart);
+      final sourcesShutdownStart = assembly.indexOf(
+        '    sourcesShutdown: () async {',
+      );
+      final sourcesShutdownEnd = assembly.indexOf(
+        '\n    freshnessBarrier:',
+        sourcesShutdownStart,
+      );
+      expect(sourcesShutdownStart, isNonNegative);
+      expect(sourcesShutdownEnd, greaterThan(sourcesShutdownStart));
+      final sourcesShutdown = assembly.substring(
+        sourcesShutdownStart,
+        sourcesShutdownEnd,
+      );
+      final shutdownSnapshot = sourcesShutdown.indexOf(
+        '''final shutdownBundles = List<MapEntry<String, GridRuntimeBundle>>.of(
+        bundles.entries,
+      );''',
+      );
+      final firstAwait = sourcesShutdown.indexOf('await settle(');
+      expect(shutdownSnapshot, isNonNegative);
+      expect(firstAwait, greaterThan(shutdownSnapshot));
+      expect(sourcesShutdown, contains('for (final entry in shutdownBundles)'));
+      expect(
+        sourcesShutdown,
+        isNot(contains('for (final entry in bundles.entries)')),
+        reason: 'an awaited shutdown loop must not retain a live map iterator',
+      );
+
       var cursor = 0;
       for (final acquisition in [
         'Future<GridRuntimeBundle> buildDefault() => GridRuntimeFactory.build(',
