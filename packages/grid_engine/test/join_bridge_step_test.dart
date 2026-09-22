@@ -23,15 +23,18 @@ final class _Row implements StepCursorView {
     required this.stepPath,
     required this.stepState,
     this.sessionId = 'tgdog-s1',
+    this.sessionRound = 0,
     this.stepRound = 0,
     this.incarnation = 0,
+    this.attemptId,
     this.supersededByStepRound,
   });
 
   @override
   final String sessionId;
   @override
-  int get round => 0;
+  int get round => sessionRound;
+  final int sessionRound;
   @override
   final String stepPath;
   @override
@@ -41,7 +44,7 @@ final class _Row implements StepCursorView {
   @override
   final int incarnation;
   @override
-  String? get attemptId => null;
+  final String? attemptId;
   @override
   final int? supersededByStepRound;
   @override
@@ -61,12 +64,16 @@ final class _Row implements StepCursorView {
 }
 
 final class _StepSnapshot implements TrajectoryStepSnapshot {
-  _StepSnapshot(this._rows, {this.health = TrajectorySnapshotHealth.live});
+  _StepSnapshot(
+    this._rows, {
+    this.health = TrajectorySnapshotHealth.live,
+    this.version = 11,
+  });
 
   final List<StepCursorView> _rows;
 
   @override
-  int get version => 11;
+  final int version;
   @override
   final TrajectorySnapshotHealth health;
   @override
@@ -77,6 +84,119 @@ final class _StepSnapshot implements TrajectoryStepSnapshot {
   @override
   Iterable<StepCursorView> byP2SessionId(String sessionId) => [
     for (final row in _rows)
+      if (row.sessionId == sessionId) row,
+  ];
+}
+
+final class _Edge implements TrajectoryStepEdgeView {
+  const _Edge({
+    required this.fromPath,
+    required this.toPath,
+    required this.kind,
+    this.round = 0,
+  });
+
+  @override
+  String get sessionId => 'tgdog-s1';
+  @override
+  final int round;
+  @override
+  final String fromPath;
+  @override
+  final String toPath;
+  @override
+  final String kind;
+}
+
+final class _EdgeSnapshot implements TrajectoryStepEdgeSnapshot {
+  const _EdgeSnapshot(
+    this.rows, {
+    this.health = TrajectorySnapshotHealth.live,
+    this.version = 22,
+  });
+
+  @override
+  final List<TrajectoryStepEdgeView> rows;
+  @override
+  final TrajectorySnapshotHealth health;
+  @override
+  final int version;
+  @override
+  DateTime? get seededAt => null;
+
+  @override
+  Iterable<TrajectoryStepEdgeView> bySessionId(String sessionId) => [
+    for (final row in rows)
+      if (row.sessionId == sessionId) row,
+  ];
+}
+
+final class _ProcessIdentity implements ProcessIdentityView {
+  const _ProcessIdentity({
+    required this.attemptId,
+    required this.stepPath,
+    required this.stepRound,
+    required this.incarnation,
+    this.round = 0,
+    this.pid,
+    this.pgid,
+  });
+
+  @override
+  final String attemptId;
+  @override
+  String get sessionId => 'tgdog-s1';
+  @override
+  final int round;
+  @override
+  final String stepPath;
+  @override
+  final int stepRound;
+  @override
+  final int incarnation;
+  @override
+  final int? pid;
+  @override
+  final int? pgid;
+  @override
+  String? get leaseState => 'held';
+  @override
+  String? get worktree => null;
+  @override
+  String? get branch => null;
+  @override
+  String? get baseSha => null;
+  @override
+  bool? get adoptedExisting => null;
+  @override
+  String? get worktreeState => null;
+  @override
+  String? get predecessorAttemptId => null;
+  @override
+  int get lastSeq => 1;
+}
+
+final class _ProcessSnapshot implements TrajectoryProcessIdentitySnapshot {
+  const _ProcessSnapshot(
+    this.rows, {
+    this.health = TrajectorySnapshotHealth.live,
+    this.version = 33,
+  });
+
+  @override
+  final List<ProcessIdentityView> rows;
+  @override
+  final TrajectorySnapshotHealth health;
+  @override
+  final int version;
+  @override
+  DateTime? get seededAt => null;
+  @override
+  DateTime? get lastTickAt => null;
+
+  @override
+  Iterable<ProcessIdentityView> bySessionId(String sessionId) => [
+    for (final row in rows)
       if (row.sessionId == sessionId) row,
   ];
 }
@@ -413,5 +533,218 @@ void main() {
       );
       expect(engaged['build']!.restartCount, 2);
     });
+  });
+
+  group('projection graph', () {
+    late _Source work;
+    late _Source state;
+
+    setUp(() {
+      work = _Source(_graph([_work('tg-1')]));
+      state = _Source(
+        _graph([
+          _sessionBead('tgdog-s1', workBeadId: 'tg-1'),
+          _stepBead('build', state: StepState.running),
+        ]),
+      );
+    });
+
+    test(
+      'projection graph joins live P2 edges and P6 at their maximum round',
+      () {
+        final steps = _StepSnapshot([
+          _Row(
+            stepPath: 'ignored-step',
+            stepState: StepState.complete.name,
+            sessionRound: 1,
+          ),
+          _Row(
+            stepPath: 'prep',
+            stepState: StepState.complete.name,
+            sessionRound: 4,
+          ),
+          _Row(
+            stepPath: 'build',
+            stepState: StepState.running.name,
+            sessionRound: 4,
+            stepRound: 2,
+            incarnation: 3,
+            attemptId: 'attempt-live',
+          ),
+          _Row(
+            stepPath: 'review',
+            stepState: StepState.complete.name,
+            sessionRound: 4,
+          ),
+        ], version: 101);
+        const edges = _EdgeSnapshot([
+          _Edge(
+            fromPath: 'build',
+            toPath: 'ignored-blocker',
+            kind: 'blocks',
+            round: 2,
+          ),
+          _Edge(fromPath: 'build', toPath: 'prep', kind: 'blocks', round: 4),
+          _Edge(
+            fromPath: 'review',
+            toPath: 'build',
+            kind: 'validates',
+            round: 4,
+          ),
+        ], version: 202);
+        const processes = _ProcessSnapshot([
+          _ProcessIdentity(
+            attemptId: 'attempt-old',
+            stepPath: 'build',
+            stepRound: 1,
+            incarnation: 2,
+            round: 3,
+            pid: 30,
+            pgid: 31,
+          ),
+          _ProcessIdentity(
+            attemptId: 'attempt-wrong',
+            stepPath: 'build',
+            stepRound: 2,
+            incarnation: 3,
+            round: 4,
+            pid: 40,
+            pgid: 41,
+          ),
+          _ProcessIdentity(
+            attemptId: 'attempt-live',
+            stepPath: 'build',
+            stepRound: 2,
+            incarnation: 3,
+            round: 4,
+            pid: 50,
+            pgid: 51,
+          ),
+        ], version: 303);
+        final bridge = StationJoinBridge(
+          work: work,
+          state: state,
+          stepSnapshot: () => steps,
+          edgeSnapshot: () => edges,
+          processIdentitySnapshot: () => processes,
+          projectionGraphAuthoritative: true,
+        );
+        addTearDown(bridge.dispose);
+
+        final graph =
+            bridge.latest.sessionsByWorkBead['tg-1']!.trajectoryGraph!;
+        expect(graph.round, 4);
+        expect(graph.isAuthoritative, isTrue);
+        expect(graph.stepAt('ignored-step').isMaterialized, isFalse);
+        expect(graph.blockersFor('build'), ['prep']);
+        expect(graph.validatesFor('review'), ['build']);
+        expect(
+          (graph.stepAt('build') as ProjectionStepMaterialized).lease,
+          const ProjectionAttemptLeaseHeld(
+            attemptId: 'attempt-live',
+            pid: 50,
+            pgid: 51,
+          ),
+        );
+      },
+    );
+
+    test('any compromised projection input leaves trajectoryGraph null', () {
+      final inputs =
+          <
+            ({
+              TrajectoryStepSnapshot steps,
+              TrajectoryStepEdgeSnapshot edges,
+              TrajectoryProcessIdentitySnapshot processes,
+            })
+          >[
+            (
+              steps: _StepSnapshot(
+                const [],
+                health: TrajectorySnapshotHealth.compromised,
+              ),
+              edges: const _EdgeSnapshot([]),
+              processes: const _ProcessSnapshot([]),
+            ),
+            (
+              steps: _StepSnapshot(const []),
+              edges: const _EdgeSnapshot(
+                [],
+                health: TrajectorySnapshotHealth.compromised,
+              ),
+              processes: const _ProcessSnapshot([]),
+            ),
+            (
+              steps: _StepSnapshot(const []),
+              edges: const _EdgeSnapshot([]),
+              processes: const _ProcessSnapshot(
+                [],
+                health: TrajectorySnapshotHealth.compromised,
+              ),
+            ),
+          ];
+
+      for (final input in inputs) {
+        final bridge = StationJoinBridge(
+          work: work,
+          state: state,
+          stepSnapshot: () => input.steps,
+          edgeSnapshot: () => input.edges,
+          processIdentitySnapshot: () => input.processes,
+          projectionGraphAuthoritative: true,
+        );
+        expect(
+          bridge.latest.sessionsByWorkBead['tg-1']!.trajectoryGraph,
+          isNull,
+        );
+        bridge.dispose();
+      }
+    });
+
+    test(
+      'edge mirror changes rejoin once and dispose removes the listener',
+      () {
+        final steps = _StepSnapshot([
+          _Row(stepPath: 'build', stepState: StepState.pending.name),
+        ]);
+        var edges = const _EdgeSnapshot([
+          _Edge(fromPath: 'build', toPath: 'prep', kind: 'blocks'),
+        ]);
+        void Function(TrajectoryStepEdgeSnapshot)? listener;
+        final bridge = StationJoinBridge(
+          work: work,
+          state: state,
+          stepSnapshot: () => steps,
+          edgeSnapshot: () => edges,
+          onEdgeChanges: (next) {
+            listener = next;
+            return () => listener = null;
+          },
+          processIdentitySnapshot: () => const _ProcessSnapshot([]),
+          projectionGraphAuthoritative: true,
+        );
+        bridge.start();
+        final publications = <JoinedSnapshot>[];
+        final removePublication = bridge.notifier.addListener(
+          publications.add,
+          fireImmediately: false,
+        );
+
+        edges = const _EdgeSnapshot([
+          _Edge(fromPath: 'build', toPath: 'lint', kind: 'blocks'),
+        ]);
+        listener!(edges);
+
+        expect(publications, hasLength(1));
+        expect(
+          bridge.latest.sessionsByWorkBead['tg-1']!.trajectoryGraph!
+              .blockersFor('build'),
+          ['lint'],
+        );
+        removePublication();
+        bridge.dispose();
+        expect(listener, isNull);
+      },
+    );
   });
 }

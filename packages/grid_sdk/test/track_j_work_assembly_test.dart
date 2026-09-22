@@ -59,6 +59,38 @@ final class _RecordingDryGit extends DryStationGitService {
   }
 }
 
+final class _SnapshotReader implements SnapshotReader {
+  const _SnapshotReader(this.snapshot);
+  final GraphSnapshot snapshot;
+
+  @override
+  Future<GraphSnapshot> read() async => snapshot;
+}
+
+GraphSnapshot _snapshot(List<Bead> beads) => GraphSnapshot.fromParts(
+  beads: beads,
+  dependencies: const [],
+  readyIds: {for (final bead in beads) bead.id},
+  capturedAt: DateTime.utc(2026, 9, 22),
+);
+
+Future<GridRuntimeBundle> _snapshotBundle(GraphSnapshot snapshot) async {
+  final runtime = GridControllerRuntime(
+    reader: _SnapshotReader(snapshot),
+    dirtySources: const [],
+  );
+  await runtime.start();
+  return GridRuntimeBundle(
+    runtime: runtime,
+    probeReader: CliBeadProbeReader(
+      BdCliService(_RecordingBdRunner()),
+      lifecycleTypes: const {},
+    ),
+    readPath: ReadPath.cli,
+    shutdown: runtime.dispose,
+  );
+}
+
 void _seedStore(String dir, {String? database}) {
   Directory('$dir/.beads').createSync(recursive: true);
   File('$dir/.beads/metadata.json').writeAsStringSync(
@@ -103,6 +135,68 @@ void main() {
     resolver: const _NullResolver(),
     dryRun: true,
   );
+
+  test('default G2 posture leaves projection graph assembly unarmed', () async {
+    _seedStore('${tmp.path}/proj', database: 'pow');
+    _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
+    final workBundle = await _snapshotBundle(
+      _snapshot([
+        const Bead(
+          id: 'proj-1',
+          issueType: IssueType.task,
+          status: BeadStatus.open,
+        ),
+      ]),
+    );
+    final stateBundle = await _snapshotBundle(
+      _snapshot([
+        const Bead(
+          id: 'tgstate-session',
+          issueType: engine.GridIssueTypes.session,
+          status: BeadStatus.open,
+          metadata: {'rig': 'tgstate', 'work_bead': 'proj-1'},
+        ),
+      ]),
+    );
+    var bridgeBuilds = 0;
+    late engine.StationJoinBridge bridge;
+    final runtime = await assembleStationWork(
+      stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
+      substations: [SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj')],
+      resolver: const _NullResolver(),
+      dryRun: true,
+      trajectoryConfig: const TrajectoryConfig(),
+      bundleBuilder:
+          ({required storeName, required workspace, required buildDefault}) {
+            return Future.value(
+              storeName == 'state' ? stateBundle : workBundle,
+            );
+          },
+      joinBridgeBuilder: ({required buildDefault}) {
+        bridgeBuilds++;
+        bridge = buildDefault();
+        return bridge;
+      },
+    );
+    addTearDown(runtime.shutdown);
+
+    expect(bridgeBuilds, 1);
+    expect(runtime.trajectory.config.g2Posture, G2Posture.off);
+    expect(runtime.trajectory.moleculeEdges, isNull);
+    expect(bridge.latest.sessionsByWorkBead, isNotEmpty);
+    expect(
+      bridge.latest.sessionsByWorkBead.values,
+      everyElement(
+        isA<engine.SessionProjection>().having(
+          (session) => session.trajectoryGraph,
+          'trajectoryGraph',
+          isNull,
+        ),
+      ),
+    );
+
+    await runtime.shutdown();
+  });
 
   group('Track J — the assembly is fail-closed at the stores', () {
     String relativeUnnormalized(String absolute) =>

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/src/molecule/inherited_circuit.dart';
 import 'package:grid_engine/src/molecule/live_frontier.dart';
 import 'package:grid_engine/src/molecule/molecule_codec.dart'
     show supersedesDepthByPath, supersedesVerdictCountByPath;
@@ -57,6 +58,37 @@ const retryRootCircuit = Circuit(
 const sessionId = 'tgdog-session';
 const specifyPath = 'tg-lt2a/spec_review/specify';
 const routePath = 'tg-lt2a/spec_review/route';
+const legacyTargetPath = 'tg-lt2a/legacy-target';
+const projectedTargetPath = 'tg-lt2a/projected-target';
+const declaredBlockerPath = 'tg-lt2a/declared-blocker';
+const projectedBlockerPath = 'tg-lt2a/projected-blocker';
+const authorityValidatorPath = 'tg-lt2a/validator';
+
+const authorityCircuit = Circuit(
+  id: 'authority',
+  steps: [
+    CapabilityStep(stepId: 'legacy-target', capabilityId: 'legacy-target'),
+    CapabilityStep(
+      stepId: 'projected-target',
+      capabilityId: 'projected-target',
+      dependsOn: {'declared-blocker'},
+    ),
+    CapabilityStep(
+      stepId: 'declared-blocker',
+      capabilityId: 'declared-blocker',
+    ),
+    CapabilityStep(
+      stepId: 'projected-blocker',
+      capabilityId: 'projected-blocker',
+    ),
+    CapabilityStep(
+      stepId: 'validator',
+      capabilityId: 'validator',
+      params: {kValidatesParam: 'legacy-target'},
+    ),
+  ],
+  terminalStepId: 'validator',
+);
 
 Bead _moleculeBead() => const Bead(
   id: 'molecule-root',
@@ -75,6 +107,7 @@ Bead _stepBead({
   required String capability,
   required String path,
   required StepState state,
+  int restartCount = 0,
   Map<String, String> results = const {},
 }) => Bead(
   id: id,
@@ -89,6 +122,7 @@ Bead _stepBead({
     MoleculeStepKeys.path: path,
     MoleculeStepKeys.session: sessionId,
     MoleculeStepKeys.state: state.name,
+    MoleculeStepKeys.restartCount: '$restartCount',
     ...results,
   },
 );
@@ -253,6 +287,381 @@ SessionProjection _interleavedProjection() {
   );
 }
 
+SessionProjection _authorityProjection({required bool authoritative}) {
+  final beads = <Bead>[
+    _moleculeBead(),
+    _stepBead(
+      id: 'tgdog-legacy-target-0',
+      stepId: 'legacy-target',
+      capability: 'legacy-target',
+      path: legacyTargetPath,
+      state: StepState.complete,
+    ),
+    _stepBead(
+      id: 'tgdog-legacy-target-1',
+      stepId: 'legacy-target',
+      capability: 'legacy-target',
+      path: legacyTargetPath,
+      state: StepState.complete,
+    ),
+    _stepBead(
+      id: 'tgdog-legacy-target-2',
+      stepId: 'legacy-target',
+      capability: 'legacy-target',
+      path: legacyTargetPath,
+      state: StepState.failed,
+      restartCount: 3,
+      results: {ResultKeys.keyFor(legacyTargetPath, 'source'): 'legacy'},
+    ),
+    _stepBead(
+      id: 'tgdog-projected-target',
+      stepId: 'projected-target',
+      capability: 'projected-target',
+      path: projectedTargetPath,
+      state: StepState.complete,
+    ),
+    _stepBead(
+      id: 'tgdog-declared-blocker',
+      stepId: 'declared-blocker',
+      capability: 'declared-blocker',
+      path: declaredBlockerPath,
+      state: StepState.pending,
+    ),
+    _stepBead(
+      id: 'tgdog-projected-blocker',
+      stepId: 'projected-blocker',
+      capability: 'projected-blocker',
+      path: projectedBlockerPath,
+      state: StepState.complete,
+    ),
+    _stepBead(
+      id: 'tgdog-authority-validator',
+      stepId: 'validator',
+      capability: 'validator',
+      path: authorityValidatorPath,
+      state: StepState.complete,
+      results: {
+        ResultKeys.keyFor(authorityValidatorPath, ResultKeys.grade): 'F',
+        ResultKeys.keyFor(authorityValidatorPath, 'source'): 'legacy',
+      },
+    ),
+  ];
+  const dependencies = <BeadDependency>[
+    BeadDependency(
+      issueId: 'tgdog-legacy-target-1',
+      dependsOnId: 'tgdog-legacy-target-0',
+      type: DependencyType.supersedes,
+    ),
+    BeadDependency(
+      issueId: 'tgdog-legacy-target-2',
+      dependsOnId: 'tgdog-legacy-target-1',
+      type: DependencyType.supersedes,
+    ),
+  ];
+  final graph = ProjectionGraphRead(
+    sessionId: sessionId,
+    round: 0,
+    steps: const _AuthoritySteps([
+      _AuthorityStep(path: legacyTargetPath, state: 'complete'),
+      _AuthorityStep(
+        path: projectedTargetPath,
+        state: 'complete',
+        stepRound: 0,
+        supersededBy: 1,
+      ),
+      _AuthorityStep(
+        path: projectedTargetPath,
+        state: 'complete',
+        stepRound: 1,
+        supersededBy: 2,
+        result: {'spent': 'first'},
+      ),
+      _AuthorityStep(
+        path: projectedTargetPath,
+        state: 'complete',
+        stepRound: 2,
+        supersededBy: 3,
+      ),
+      _AuthorityStep(
+        path: projectedTargetPath,
+        state: 'complete',
+        stepRound: 3,
+        supersededBy: 4,
+      ),
+      _AuthorityStep(
+        path: projectedTargetPath,
+        state: 'failed',
+        stepRound: 4,
+        incarnation: 3,
+        attemptId: 'projection-attempt',
+        result: {'source': 'projection'},
+      ),
+      _AuthorityStep(path: declaredBlockerPath, state: 'pending'),
+      _AuthorityStep(path: projectedBlockerPath, state: 'complete'),
+      _AuthorityStep(
+        path: authorityValidatorPath,
+        state: 'complete',
+        result: {'grade': 'F', 'source': 'projection'},
+      ),
+    ]),
+    edges: const _AuthorityEdges([
+      _AuthorityEdge(
+        from: authorityValidatorPath,
+        to: projectedTargetPath,
+        kind: 'validates',
+      ),
+      _AuthorityEdge(
+        from: projectedTargetPath,
+        to: projectedBlockerPath,
+        kind: 'blocks',
+      ),
+    ]),
+    processIdentities: const _AuthorityProcesses([
+      _AuthorityProcess(
+        attemptId: 'legacy-attempt',
+        path: projectedTargetPath,
+        stepRound: 4,
+        incarnation: 3,
+        pid: 800,
+        pgid: 801,
+      ),
+      _AuthorityProcess(
+        attemptId: 'projection-attempt',
+        path: projectedTargetPath,
+        stepRound: 4,
+        incarnation: 3,
+        pid: 900,
+        pgid: 901,
+      ),
+    ]),
+    isAuthoritative: authoritative,
+  );
+  return SessionProjection(
+    workBeadId: 'tg-lt2a',
+    sessionId: sessionId,
+    isMolecule: true,
+    moleculeBeads: beads,
+    moleculeDependencies: dependencies,
+    trajectoryGraph: graph,
+  );
+}
+
+final class _AuthorityStep implements StepTransitionCursorView {
+  const _AuthorityStep({
+    required this.path,
+    required this.state,
+    this.stepRound = 0,
+    this.supersededBy,
+    this.incarnation = 0,
+    this.attemptId,
+    this.result,
+  });
+
+  final String path;
+  final String state;
+  @override
+  final int stepRound;
+  final int? supersededBy;
+  @override
+  final int incarnation;
+  @override
+  final String? attemptId;
+  @override
+  final Map<String, Object?>? result;
+  @override
+  String get sessionId => 'tgdog-session';
+  @override
+  int get round => 0;
+  @override
+  String get stepPath => path;
+  @override
+  String get stepState => state;
+  @override
+  int? get supersededByStepRound => supersededBy;
+  @override
+  DateTime? get cooldownUntil => null;
+  @override
+  int? get restartBudget => null;
+  @override
+  DateTime? get startedAt => null;
+  @override
+  DateTime? get readyAt => null;
+  @override
+  DateTime? get completedAt => null;
+  @override
+  String? get failureClass => null;
+  @override
+  int get lastSeq => stepRound + 1;
+}
+
+final class _AuthoritySteps implements TrajectoryStepSnapshot {
+  const _AuthoritySteps(this.rows);
+  final List<StepCursorView> rows;
+  @override
+  Iterable<StepCursorView> byP2SessionId(String value) => [
+    for (final row in rows)
+      if (row.sessionId == value) row,
+  ];
+  @override
+  int get version => 1;
+  @override
+  TrajectorySnapshotHealth get health => TrajectorySnapshotHealth.live;
+  @override
+  DateTime? get seededAt => null;
+  @override
+  DateTime? get firstEpochClaimedAt => null;
+}
+
+final class _AuthorityEdge implements TrajectoryStepEdgeView {
+  const _AuthorityEdge({
+    required this.from,
+    required this.to,
+    required this.kind,
+  });
+  final String from;
+  final String to;
+  @override
+  String get sessionId => 'tgdog-session';
+  @override
+  int get round => 0;
+  @override
+  String get fromPath => from;
+  @override
+  String get toPath => to;
+  @override
+  final String kind;
+}
+
+final class _AuthorityEdges implements TrajectoryStepEdgeSnapshot {
+  const _AuthorityEdges(this.rows);
+  @override
+  final List<TrajectoryStepEdgeView> rows;
+  @override
+  Iterable<TrajectoryStepEdgeView> bySessionId(String value) => [
+    for (final row in rows)
+      if (row.sessionId == value) row,
+  ];
+  @override
+  int get version => 1;
+  @override
+  TrajectorySnapshotHealth get health => TrajectorySnapshotHealth.live;
+  @override
+  DateTime? get seededAt => null;
+}
+
+final class _AuthorityProcess implements ProcessIdentityView {
+  const _AuthorityProcess({
+    required this.attemptId,
+    required this.path,
+    required this.stepRound,
+    required this.incarnation,
+    required this.pid,
+    required this.pgid,
+  });
+  @override
+  final String attemptId;
+  final String path;
+  @override
+  final int stepRound;
+  @override
+  final int incarnation;
+  @override
+  final int? pid;
+  @override
+  final int? pgid;
+  @override
+  String get sessionId => 'tgdog-session';
+  @override
+  int get round => 0;
+  @override
+  String get stepPath => path;
+  @override
+  String? get leaseState => 'held';
+  @override
+  String? get worktree => null;
+  @override
+  String? get branch => null;
+  @override
+  String? get baseSha => null;
+  @override
+  bool? get adoptedExisting => null;
+  @override
+  String? get worktreeState => null;
+  @override
+  String? get predecessorAttemptId => null;
+  @override
+  int get lastSeq => 1;
+}
+
+final class _AuthorityProcesses implements TrajectoryProcessIdentitySnapshot {
+  const _AuthorityProcesses(this.rows);
+  @override
+  final List<ProcessIdentityView> rows;
+  @override
+  Iterable<ProcessIdentityView> bySessionId(String value) => [
+    for (final row in rows)
+      if (row.sessionId == value) row,
+  ];
+  @override
+  int get version => 1;
+  @override
+  TrajectorySnapshotHealth get health => TrajectorySnapshotHealth.live;
+  @override
+  DateTime? get seededAt => null;
+  @override
+  DateTime? get lastTickAt => null;
+}
+
+final class _AuthorityObservation {
+  const _AuthorityObservation({
+    required this.mount,
+    required this.siblings,
+    required this.circuit,
+  });
+  final StepMount mount;
+  final SiblingView siblings;
+  final InheritedCircuit circuit;
+}
+
+final class _AuthorityRegistry implements CapabilityRegistry {
+  final List<_AuthorityObservation> observations = [];
+
+  @override
+  Circuit? circuit(String circuitId) => null;
+
+  @override
+  Seed host(StepMount mount) =>
+      _AuthorityProbe(registry: this, mount: mount, key: mount.key);
+
+  @override
+  DateTime now() => DateTime.utc(2026);
+}
+
+final class _AuthorityProbe extends StatelessSeed {
+  const _AuthorityProbe({
+    required this.registry,
+    required this.mount,
+    super.key,
+  });
+
+  final _AuthorityRegistry registry;
+  final StepMount mount;
+
+  @override
+  Seed build(TreeContext context) {
+    final siblings = context.dependOnInheritedSeedOfExactType<SiblingView>();
+    final circuit = context
+        .dependOnInheritedSeedOfExactType<InheritedCircuit>();
+    if (siblings == null || circuit == null) {
+      throw StateError('authority probe requires molecule session ambients');
+    }
+    registry.observations.add(
+      _AuthorityObservation(mount: mount, siblings: siblings, circuit: circuit),
+    );
+    return const Idle();
+  }
+}
+
 final class _RefusingSuccessorRunner extends RecordingBdRunner {
   _RefusingSuccessorRunner(this.failuresByTitle);
 
@@ -348,6 +757,7 @@ StationServices _ctxOver(
   RecordingBdRunner? runner,
   Circuit circuit = rootCircuit,
   Map<String, Circuit> circuits = const {'spec_review': specReviewCircuit},
+  CapabilityRegistry? registry,
   G2EmissionMode g2EmissionMode = G2EmissionMode.off,
   TrajectoryRecordSink? trajectorySink,
   TrajectoryRecorderFlare? onRecorderFlare,
@@ -357,7 +767,8 @@ StationServices _ctxOver(
   final effectiveProjection =
       projection ?? _projection(specifyVerdicts: specifyVerdicts);
   final joined = _joined(effectiveProjection);
-  final registry = RecordingCapabilityRegistry(circuits: circuits);
+  final effectiveRegistry =
+      registry ?? RecordingCapabilityRegistry(circuits: circuits);
   final recorder = trajectorySink == null
       ? StationTrajectoryRecorder.disabled()
       : StationTrajectoryRecorder(
@@ -378,7 +789,7 @@ StationServices _ctxOver(
           child: InheritedSeed<ServiceBundle>(
             value: services,
             child: InheritedSeed<CapabilityRegistry>(
-              value: registry,
+              value: effectiveRegistry,
               child: InheritedSeed<TrajectoryRecorderScope>(
                 value: TrajectoryRecorderScope(recorder),
                 child: SessionScope(
@@ -414,6 +825,77 @@ Future<void> _pumpUntil(
 }
 
 void main() {
+  test('projection graph authority exposes projected graph inputs', () {
+    final registry = _AuthorityRegistry();
+    final mounted = _mount(
+      projection: _authorityProjection(authoritative: true),
+      circuit: authorityCircuit,
+      circuits: const {},
+      registry: registry,
+    );
+    addTearDown(mounted.owner.dispose);
+
+    final target = registry.observations.lastWhere(
+      (observation) => observation.mount.step.stepId == 'projected-target',
+    );
+    expect(
+      registry.observations.map((observation) => observation.mount.step.stepId),
+      contains('projected-target'),
+    );
+    expect(
+      registry.observations.map((observation) => observation.mount.step.stepId),
+      isNot(contains('legacy-target')),
+    );
+    expect(target.mount.circuitRound, 4);
+    expect(target.mount.node.rewindCount, 2);
+    expect(target.siblings.resultOf(projectedTargetPath), {
+      'source': 'projection',
+    });
+    expect(
+      target.siblings.cursorOf(declaredBlockerPath).state,
+      StepState.pending,
+    );
+    expect(
+      target.siblings.cursorOf(projectedBlockerPath).state,
+      StepState.complete,
+    );
+    expect(
+      target.circuit.projectedLeases[projectedTargetPath],
+      const ProjectionAttemptLeaseHeld(
+        attemptId: 'projection-attempt',
+        pid: 900,
+        pgid: 901,
+      ),
+    );
+  });
+
+  test('projection graph authority false preserves every legacy input', () {
+    final registry = _AuthorityRegistry();
+    final mounted = _mount(
+      projection: _authorityProjection(authoritative: false),
+      circuit: authorityCircuit,
+      circuits: const {},
+      registry: registry,
+    );
+    addTearDown(mounted.owner.dispose);
+
+    final target = registry.observations.lastWhere(
+      (observation) => observation.mount.step.stepId == 'legacy-target',
+    );
+    expect(
+      registry.observations.map((observation) => observation.mount.step.stepId),
+      contains('legacy-target'),
+    );
+    expect(
+      registry.observations.map((observation) => observation.mount.step.stepId),
+      isNot(contains('projected-target')),
+    );
+    expect(target.mount.circuitRound, 2);
+    expect(target.mount.node.rewindCount, 1);
+    expect(target.siblings.resultOf(legacyTargetPath), {'source': 'legacy'});
+    expect(target.circuit.projectedLeases, isEmpty);
+  });
+
   test(
     'three verdict-less predecessors mint the depth-four successor',
     () async {
