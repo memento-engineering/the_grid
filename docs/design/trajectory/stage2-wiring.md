@@ -274,6 +274,51 @@ acceptance thresholds.
 | G2-8 | the_grid | G2-7 plus fleet zero-residue receipts | delete `reapMolecule` on the normal path after fleet zero-residue receipts; if the bounded fallback was activated, make its deletion a hard Stage 3 entry prerequisite; remove shadow fallback and run repository hygiene | 220 | 260 |
 | **Total** |  |  |  | **3,130** | **3,090** |
 
+### G2-4 delivery surface
+
+G2-4 is one read-model migration spread across the existing engine and SDK
+surfaces, not only the four final consumer files. Its new production roots are
+`packages/grid_engine/lib/src/domain/projection_graph_read.dart` and
+`packages/grid_sdk/lib/src/trajectory/molecule_edge_mirror.dart`. The complete
+production surface is:
+
+* `packages/grid_engine/lib/grid_engine.dart`;
+  `src/bridge/station_join_bridge.dart`; `src/circuit/capability_host.dart`,
+  `circuit_scope.dart`, `session_scope.dart`, and `unclaimed_frontier.dart`;
+  `src/domain/projection_graph_read.dart`, `session_head_read.dart`,
+  `session_projection.dart`, `session_projection.freezed.dart`,
+  `step_cursor_read.dart`, and `trajectory_views.dart`;
+  `src/molecule/inherited_circuit.dart`, `live_frontier.dart`, and
+  `process_lease_vendor.dart`; `src/restart/restart_reconciler.dart`; and
+  `src/sdk/claim.dart` and `frontier.dart`.
+* `packages/grid_sdk/lib/grid_sdk.dart`;
+  `src/command/station_command_handler.dart`;
+  `src/trajectory/molecule_edge_mirror.dart`, `step_cursor_mirror.dart`, and
+  `trajectory_harness.dart`; and `src/work/work_assembly.dart`.
+* `packages/grid_trajectory/lib/src/fold/molecule_edge_row.dart`.
+
+The matching regression surface is
+`packages/grid_engine/test/join_bridge_step_test.dart`,
+`session_scope_respec_cap_gate_test.dart`, `unclaimed_frontier_test.dart`,
+`projection_graph_read_test.dart`, `projection_graph_consumers_test.dart`,
+`restart_reconciler_molecule_test.dart`,
+`molecule/process_lease_vendor_test.dart`,
+`molecule/inherited_circuit_test.dart`,
+`molecule/lease_breadcrumb_resilience_test.dart`,
+`molecule/lease_sweep_test.dart`, `molecule/live_frontier_test.dart`, and
+`trajectory/call_site_hooks_test.dart`; plus
+`packages/grid_sdk/test/station_command_handler_test.dart`,
+`track_j_work_assembly_test.dart`, `trajectory/molecule_edge_mirror_test.dart`,
+`trajectory/trajectory_harness_test.dart`, and `work_assembly_unwind_test.dart`;
+and `packages/grid_trajectory/test/fold/molecule_edge_delta_test.dart` and
+`step_cursor_delta_test.dart`.
+
+The stable `bundles.entries` shutdown snapshot in
+`packages/grid_sdk/lib/src/work/work_assembly.dart` predates G2-4. G2-4 retains
+and validates it through `work_assembly_unwind_test.dart` and the unchanged
+`substation_attach_live_test.dart`; it does not duplicate that lifecycle fix or
+claim a separate production commit for it.
+
 The dependency graph is `completed G1 cut → G2-1 → G2-2 → G2-3`;
 `G2-1 → G2-S`; `G2-1 + G2-2 → G2-4`; `G2-3 + G2-4 → G2-5`;
 `G2-S + G2-5 + three clean rounds → G2-6 → G2-7 → G2-8`.
