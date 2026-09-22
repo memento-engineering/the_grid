@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
@@ -470,6 +472,60 @@ void main() {
         disappearance,
       ].map((counts) => counts.total).reduce((left, right) => left + right),
       10,
+    );
+  });
+
+  test('design note records counts costs and retain recommendation', () {
+    final note = File(
+      '../../docs/design/joined-snapshot-invalidation.md',
+    ).readAsStringSync();
+    final prose = note.replaceAll(RegExp(r'\s+'), ' ');
+
+    expect(note, contains('**16 → 10 synthetic builds**'));
+    expect(
+      note,
+      contains(
+        '| Local session A cursor only | `2 / 1 / 1 = 4` | '
+        '`1 / 1 / 0 = 2` |',
+      ),
+    );
+    expect(
+      note,
+      contains(
+        '| Station-capacity revision | `2 / 1 / 1 = 4` | '
+        '`1 / 1 / 1 = 3` |',
+      ),
+    );
+    expect(
+      note,
+      contains(
+        '| Cross-store-blocker revision | `2 / 1 / 1 = 4` | '
+        '`1 / 1 / 1 = 3` |',
+      ),
+    );
+    expect(note, contains('station-capacity aspect'));
+    expect(note, contains('cross-store-blocker aspect'));
+    expect(note, contains('SubstationFactsModelSeed'));
+    for (final cost in [
+      'station-level projector',
+      'stable aspect keys',
+      'semantic comparison for every admission-relevant field',
+      'bridge from authority invalidations not carried by `JoinedSnapshot`',
+    ]) {
+      expect(note, contains(cost));
+    }
+    expect(
+      prose,
+      contains(
+        'Retain the production `Provider<JoinedSnapshot>` projection and '
+        'whole-value `SessionScope` observation.',
+      ),
+    );
+    expect(
+      note,
+      contains(
+        '`the_grid#light-dag-deferred-bodies-and-two-tier-change-signals`',
+      ),
     );
   });
 }
