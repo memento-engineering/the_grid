@@ -248,6 +248,7 @@ class CapabilityHostState extends State<CapabilityHost>
   /// a process: the survivor keeps the attempt its breadcrumb already carries.
   String _attemptId = '';
   bool _completed = false;
+  bool _adoptedFailureScheduled = false;
 
   /// Capture-only flow telemetry (FT-1, tg-pez) — the instant this incarnation
   /// began driving its effect (captured at the FIRST kick, off any build-path
@@ -354,6 +355,29 @@ class CapabilityHostState extends State<CapabilityHost>
     _ctx = ctx;
     _services = reader.watch<ServiceBundle>() ?? const ServiceBundle();
     _registry = reader.watch<CapabilityRegistry>();
+
+    final adoptedFailure = seed.mount.adoptedFailure;
+    if (adoptedFailure != null) {
+      // This mount exists only to re-enter the SAME leaf-host exhaustion path
+      // as a live failure. Latch before scheduling, and never create an
+      // allocation for already-failed durable evidence.
+      if (!_adoptedFailureScheduled) {
+        _adoptedFailureScheduled = true;
+        scheduleMicrotask(() {
+          _firePersist(
+            'adoptedFailure',
+            () => _persistFailureClassed(
+              seed.mount.node.failureReason ?? '',
+              kind: adoptedFailure.kind,
+              failureClass: adoptedFailure.failureClass,
+              persisted: adoptedFailure,
+            ),
+            recoverable: false,
+          );
+        });
+      }
+      return;
+    }
 
     final existing = _allocation;
     if (existing == null) {
@@ -958,6 +982,7 @@ class CapabilityHostState extends State<CapabilityHost>
     CapabilityFailureKind kind = CapabilityFailureKind.work,
     StepFailureClass failureClass = StepFailureClass.work,
     ({DateTime? startedAt, DateTime finishedAt, int? durationMs})? timing,
+    PersistedFailureEvidence? persisted,
   }) async {
     if (!_guardPersist('failure')) return;
     final retry = resolveRetryPolicy(
@@ -967,10 +992,26 @@ class CapabilityHostState extends State<CapabilityHost>
       circuitBackoff: seed.mount.backoff,
       circuitMaxRestarts: seed.mount.maxRestarts,
     );
-    final next = seed.mount.node.restartCount + 1;
-    final exhausted = next >= retry.maxRestarts;
+    final next = persisted?.incarnation ?? seed.mount.node.restartCount + 1;
+    final exhausted =
+        persisted?.restartBudget == 0 ||
+        (persisted == null && next >= retry.maxRestarts);
     final failureReason = reason.isEmpty ? null : reason;
-    final stamps = timing ?? _terminalTiming();
+    final ({DateTime? startedAt, DateTime finishedAt, int? durationMs}) stamps;
+    if (timing != null) {
+      stamps = timing;
+    } else if (persisted == null) {
+      stamps = _terminalTiming();
+    } else {
+      final finishedAt = _now();
+      stamps = (
+        startedAt: persisted.startedAt,
+        finishedAt: finishedAt,
+        durationMs: persisted.startedAt == null
+            ? null
+            : finishedAt.difference(persisted.startedAt!).inMilliseconds,
+      );
+    }
     // A dropped state-store write produced no gradeable work. Keep the
     // capability's declared WORK budget/backoff above, but never let that
     // classification's default latch strand an open session after the store
@@ -984,7 +1025,21 @@ class CapabilityHostState extends State<CapabilityHost>
         failureClass: failureClass,
         attempts: next,
         timing: stamps,
+        persisted: persisted,
       );
+      return;
+    }
+    if (exhausted &&
+        retry.onExhaustion == ExhaustionBehavior.latchFailed &&
+        persisted != null) {
+      final latch = seed.mount.onAdoptedLatch;
+      if (latch == null) {
+        throw StateError(
+          'Adopted failure at "$_nodePath" resolved to latchFailed without '
+          'SessionScope.onAdoptedLatch',
+        );
+      }
+      latch(_nodePath, reason);
       return;
     }
     final cooldown = exhausted
@@ -1033,49 +1088,71 @@ class CapabilityHostState extends State<CapabilityHost>
     required int attempts,
     required ({DateTime? startedAt, DateTime finishedAt, int? durationMs})
     timing,
-  }) => persistRaisedEscalation(
-    station: _ctx!,
-    services: _services,
-    request: EscalationRequest(
-      beadId: _beadId,
-      sessionId: _sessionId,
-      nodePath: _nodePath,
-      reason: failureClass == StepFailureClass.infra
-          ? harnessThrottleGateReason(
-              sessionId: _sessionId,
-              nodePath: _nodePath,
-              since: harnessThrottleSince(
-                priorReason: seed.mount.node.failureReason,
-                now: timing.finishedAt,
-              ),
-              silentExits: attempts,
-              exitOutputHead: _exitOutputHead(),
-              underlying: reason,
-            )
-          : nonResultGateReason(
-              failureClass: failureClass,
-              sessionId: _sessionId,
-              nodePath: _nodePath,
-              attempts: attempts,
-              reason: reason,
+    PersistedFailureEvidence? persisted,
+  }) {
+    final detail = failureClass == StepFailureClass.infra
+        ? harnessThrottleGateReason(
+            sessionId: _sessionId,
+            nodePath: _nodePath,
+            since: harnessThrottleSince(
+              priorReason: seed.mount.node.failureReason,
+              now: timing.finishedAt,
             ),
-      rewindCount: seed.mount.node.rewindCount,
-    ),
-    stepBeadId: _stepBeadId,
-    gatedMetadata: _moleculeMetadata(
-      StepState.gated,
-      restartCount: attempts,
-      failureReason: reason,
-      timing: timing,
-    ),
-    isActive: () => _persistIsActive,
-    failToSupervision: _persistFailure,
-    emitFlare: _emitFlare,
-    recorder: _recorder,
-    stepRound: _stepRound,
-    incarnation: attempts,
-    attemptId: _attemptId,
-  );
+            silentExits: attempts,
+            exitOutputHead: _exitOutputHead(),
+            underlying: reason,
+          )
+        : nonResultGateReason(
+            failureClass: failureClass,
+            sessionId: _sessionId,
+            nodePath: _nodePath,
+            attempts: attempts,
+            reason: reason,
+          );
+    final gateReason = persisted == null
+        ? detail
+        : exhaustionGateReason(
+            evidence: persisted,
+            nodePath: _nodePath,
+            detail: detail,
+          );
+    return persistRaisedEscalation(
+      station: _ctx!,
+      services: _services,
+      request: EscalationRequest(
+        beadId: _beadId,
+        sessionId: _sessionId,
+        nodePath: _nodePath,
+        reason: gateReason,
+        rewindCount: seed.mount.node.rewindCount,
+      ),
+      stepBeadId: _stepBeadId,
+      gatedMetadata: _moleculeMetadata(
+        StepState.gated,
+        restartCount: attempts,
+        failureReason: reason,
+        timing: timing,
+      ),
+      isActive: () => _persistIsActive,
+      failToSupervision: persisted == null
+          ? _persistFailure
+          : (failure) async {
+              final latch = seed.mount.onAdoptedLatch;
+              if (latch == null) {
+                throw StateError(
+                  'Adopted failure at "$_nodePath" could not park and has no '
+                  'SessionScope.onAdoptedLatch',
+                );
+              }
+              latch(_nodePath, failure);
+            },
+      emitFlare: _emitFlare,
+      recorder: _recorder,
+      stepRound: _stepRound,
+      incarnation: persisted?.incarnation ?? attempts,
+      attemptId: persisted?.attemptId ?? _attemptId,
+    );
+  }
 
   /// Supersedes this route node's obsolete human gate before completing it.
   Future<void> _persistAdvancedCompletion({

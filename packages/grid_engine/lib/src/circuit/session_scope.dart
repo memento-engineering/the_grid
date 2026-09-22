@@ -87,6 +87,7 @@ import '../sdk/route.dart' show EscalationRequest;
 import 'capability_host.dart' show persistRaisedEscalation;
 import 'capability_registry.dart';
 import 'circuit_scope.dart';
+import 'failure_policy.dart';
 import 'session_handle.dart';
 
 enum _DeliveryOutcome { delivered, commitOnly, missing }
@@ -2165,6 +2166,8 @@ class SessionScopeState extends State<SessionScope>
     var structuralDepthByPath = const <String, int>{};
     var spentRoundsByPath = const <String, int>{};
     var circuitRoundsByPath = const <String, int>{};
+    var adoptedFailures = const <String, PersistedFailureEvidence>{};
+    AdoptedFailureLatch? onAdoptedLatch;
     if (isMolecule) {
       final projected = projectMoleculeCursor(
         joined!.moleculeBeads,
@@ -2376,13 +2379,37 @@ class SessionScopeState extends State<SessionScope>
             circuitById: registry.circuit,
           );
           if (broken != null) {
-            // Capture-only (FT-1): record WHICH node exhausted + its reason (read
-            // from the cursor's persisted telemetry) beside the escalation marker.
-            // Read-only here; the write is scheduled off build (invariant 2).
             final reason = truncateReason(
               '${broken.nodePath}: ${broken.node.failureReason ?? ''}',
             );
-            _scheduleEscalation(id, reason);
+            final persisted = joined?.trajStepViews[broken.nodePath];
+            final evidence = persisted == null
+                ? null
+                : readPersistedFailureEvidence(persisted);
+            final cooldownElapsed =
+                evidence?.cooldownUntil == null ||
+                !registry.now().isBefore(evidence!.cooldownUntil!);
+            if (evidence != null &&
+                evidence.restartBudget == 0 &&
+                cooldownElapsed) {
+              // Adoption must re-enter the failing leaf's existing per-kind
+              // exhaustion evaluator BEFORE this pre-existing breaker closes
+              // the session. The leaf either parks through its one gate writer
+              // or returns `latchFailed` here, which reuses the admission-owned
+              // close below (`the_grid#admission-authority-in-process-cut`).
+              adoptedFailures = {broken.nodePath: evidence};
+              onAdoptedLatch = (nodePath, failureReason) {
+                _scheduleEscalation(
+                  id,
+                  truncateReason('$nodePath: $failureReason'),
+                );
+              };
+            } else {
+              // Capture-only (FT-1): record WHICH node exhausted + its reason
+              // beside the escalation marker. The authority owns the durable
+              // close; this build only schedules it off-tree.
+              _scheduleEscalation(id, reason);
+            }
           } else if (isCircuitComplete(
             seed.circuit,
             cursor,
@@ -2434,6 +2461,8 @@ class SessionScopeState extends State<SessionScope>
       cursor: cursor,
       nodePath: seed.bead.id,
       circuitRoundsByPath: circuitRoundsByPath,
+      adoptedFailures: adoptedFailures,
+      onAdoptedLatch: onAdoptedLatch,
     );
     return Nest(
       children: [

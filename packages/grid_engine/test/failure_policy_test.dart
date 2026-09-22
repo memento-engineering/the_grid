@@ -276,10 +276,15 @@ void main() {
       final startedAt = DateTime.utc(2026, 9, 21, 1);
       final cooldownUntil = DateTime.utc(2026, 9, 21, 2);
       final evidence = readPersistedFailureEvidence(
-        _StepRow(startedAt: startedAt, cooldownUntil: cooldownUntil),
+        _StepRow(
+          incarnation: 4,
+          attemptId: 'attempt-4',
+          startedAt: startedAt,
+          cooldownUntil: cooldownUntil,
+        ),
       )!;
-      expect(evidence.incarnation, 3);
-      expect(evidence.attemptId, 'attempt-3');
+      expect(evidence.incarnation, 4);
+      expect(evidence.attemptId, 'attempt-4');
       expect(evidence.startedAt, startedAt);
       expect(evidence.cooldownUntil, cooldownUntil);
       expect(evidence.restartBudget, 0);
