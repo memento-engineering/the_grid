@@ -1,3 +1,11 @@
+## 0.4.0-dev.12
+
+ - **FIX**(engine): gate adopted exhausted sessions (#507).
+ - **FIX**(trajectory): refresh P6 heartbeat after resume (#506).
+ - **FIX**(status): derive wedge counts from joined store facts (#498).
+ - **FIX**(rework): require minted successors for readiness holds (#495).
+ - **FEAT**(trajectory): emit G2 molecule and successor shadows (#503).
+
 ## 0.4.0-dev.11
 
  - **FIX**(gate): resume blocked steps on gate resolve and acknowledged re-arm (#486).

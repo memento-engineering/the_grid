@@ -1,3 +1,7 @@
+## 0.3.0-dev.6
+
+ - **FIX**: warm stores and report SQL boot fallbacks (#505).
+
 ## 0.3.0-dev.5
 
  - **FIX**(engine): publish closed external dependency targets (#494).
