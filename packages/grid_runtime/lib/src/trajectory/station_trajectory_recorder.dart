@@ -1567,7 +1567,8 @@ class StationTrajectoryRecorder {
   /// never observed the process end — so the provenance stays `reconstructed`.
   DerivedRecord buildTerminalReconciled({
     required String sessionId,
-    required String attemptId,
+    String? attemptId,
+    bool mintAttemptIfMissing = true,
     String? workBeadId,
     String? reason,
     TerminalOutcome outcome = TerminalOutcome.unknown,
@@ -1581,6 +1582,7 @@ class StationTrajectoryRecorder {
         ? kExternalCloseUnknownReason
         : null,
     healBasis: kTerminalReconcileBasis,
+    mintAttemptIfMissing: mintAttemptIfMissing,
   );
 
   /// The `worktree.reaped` record — the observation method's builder, and the
@@ -1973,11 +1975,12 @@ class StationTrajectoryRecorder {
     String? healBasis,
     String? resolvesRecordId,
     String mintedAttemptBasis = kRecorderMintedAttemptBasis,
+    bool mintAttemptIfMissing = true,
   }) {
     final parsed = workBeadId == null ? null : parseLegacyWorkKey(workBeadId);
     String? attemptIdBasis;
     var resolved = attemptId ?? _sessionAttempts[sessionId];
-    if (resolved == null) {
+    if (resolved == null && mintAttemptIfMissing) {
       // No breadcrumb, no cached mint, no seed: mint and SAY SO rather than
       // refuse — such rows are outside the shadow's comparable set (§2.1).
       resolved = _mintUlid();

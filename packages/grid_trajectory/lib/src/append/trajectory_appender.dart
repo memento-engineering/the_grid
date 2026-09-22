@@ -18,7 +18,7 @@
 ///      match the grant row's `fencing_token` and `expires_at > NOW(6)` —
 ///      a failed grant predicate is a per-append REFUSAL, never a halt;
 ///   2c. the RESOLVING PRE-READ for terminals (cut-wiring §0.3, r9–r11):
-///      the attempt's `traj_terminal_guard` row joined to its record's
+///      the terminal subject's `traj_terminal_guard` row joined to its record's
 ///      provenance decides, BEFORE the insert, whether this terminal converts
 ///      to settling form (observed/inferred over reconstructed testimony), is
 ///      refused as redundant testimony, or appends normally. Authoring the
@@ -485,7 +485,7 @@ class TrajectoryAppender {
       // — see [_resolveTerminals].
       _TerminalGuardState? preRead;
       if (_resolveTerminals && record.isTerminal && !record.isSettling) {
-        final subject = envelope.attemptId;
+        final subject = record.terminalGuardSubject;
         final existing = subject == null
             ? null
             : await _readTerminalGuard(subject);
@@ -494,10 +494,11 @@ class TrajectoryAppender {
           if (envelope.provenance == TrajectoryProvenance.reconstructed) {
             await _rollbackQuietly();
             return AppendRefusedTestimony(
-              attemptId: subject,
+              attemptId: subject.id,
               existingRecordId: existing.recordId,
               reason:
-                  'terminal guard: attempt $subject already carries a '
+                  'terminal guard: ${subject.kind.wire} ${subject.id} '
+                  'already carries a '
                   '${existing.provenance.wire} terminal '
                   '(${existing.recordId}) — reconstructed testimony yields '
                   'to it and is not appended',
@@ -530,7 +531,8 @@ class TrajectoryAppender {
             // independent terminal, and there is no idem row to yield to —
             // corruption class, named for what it is.
             return await _haltInTransaction(
-              'terminal guard: attempt $subject is already settled by '
+              'terminal guard: ${subject.kind.wire} ${subject.id} is already '
+              'settled by '
               '${existing.settledBy} (healing $subjectRecordId) and this '
               '${envelope.provenance.wire} ${envelope.recordType} settles '
               'nothing that landed — a second independent terminal',
@@ -541,8 +543,9 @@ class TrajectoryAppender {
             if (settling == null) {
               return await _haltInTransaction(
                 'terminal guard: ${envelope.recordType} must settle the '
-                'reconstructed terminal ${existing.recordId} for attempt '
-                '$subject but declares no settling form',
+                'reconstructed terminal ${existing.recordId} for '
+                '${subject.kind.wire} ${subject.id} but declares no settling '
+                'form',
               );
             }
             record = settling;
@@ -576,35 +579,40 @@ class TrajectoryAppender {
 
       // Step 4 — the terminal guard: unsettled terminals INSERT (a second
       // independent terminal dies on the PK); a settling one UPDATEs. The
-      // subject is the PROMOTED `attempt_id` column, and the two branches are
+      // subject is selected by the vocabulary, and the two branches are
       // interface properties on the sealed base — the mechanics never name
       // the terminal record type.
       if (record.isTerminal) {
-        final attemptId = envelope.attemptId;
-        if (attemptId == null) {
-          // Structurally unreachable: the guard's subject is exactly what
-          // makes a record terminal. Fail closed rather than guess a key.
+        final subject = record.terminalGuardSubject;
+        if (subject == null) {
           return await _haltInTransaction(
             'terminal guard: ${envelope.recordType} declares isTerminal but '
-            'carries no attempt_id — the guard row has no subject',
+            'declares no terminalGuardSubject',
           );
         }
         if (record.isSettling) {
           await _db.execute(
             'UPDATE traj_terminal_guard SET seq = :seq, '
-            'settled_by = :settled_by WHERE attempt_id = :attempt_id',
+            'settled_by = :settled_by WHERE subject_kind = :subject_kind '
+            'AND subject_id = :subject_id',
             {
               'seq': seq,
               'settled_by': envelope.recordId,
-              'attempt_id': attemptId,
+              'subject_kind': subject.kind.wire,
+              'subject_id': subject.id,
             },
           );
         } else {
           try {
             await _db.execute(
-              'INSERT INTO traj_terminal_guard (attempt_id, seq, settled_by) '
-              'VALUES (:attempt_id, :seq, NULL)',
-              {'attempt_id': attemptId, 'seq': seq},
+              'INSERT INTO traj_terminal_guard '
+              '(subject_kind, subject_id, seq, settled_by) '
+              'VALUES (:subject_kind, :subject_id, :seq, NULL)',
+              {
+                'subject_kind': subject.kind.wire,
+                'subject_id': subject.id,
+                'seq': seq,
+              },
             );
           } on MySQLServerException catch (error) {
             if (!isDuplicateEntry(error)) rethrow;
@@ -624,10 +632,12 @@ class TrajectoryAppender {
             final seen = preRead;
             return await _haltInTransaction(
               seen == null
-                  ? 'terminal guard: PK collision on attempt $attemptId after '
+                  ? 'terminal guard: PK collision on ${subject.kind.wire} '
+                        '${subject.id} after '
                         'a clean resolving pre-read — the serialized '
                         'single-writer invariant broke: $error'
-                  : 'terminal guard: attempt $attemptId already carries a '
+                  : 'terminal guard: ${subject.kind.wire} ${subject.id} '
+                        'already carries a '
                         '${seen.provenance.wire} terminal (${seen.recordId}) '
                         'and this ${envelope.provenance.wire} '
                         '${envelope.recordType} settles nothing — two '
@@ -900,12 +910,12 @@ class TrajectoryAppender {
     );
   }
 
-  /// The resolving pre-read's ONE statement: the attempt's
+  /// The resolving pre-read's ONE statement: the subject's
   /// `traj_terminal_guard` row joined to the record it points at.
   ///
   /// The guard row carries no provenance of its own — it carries the `seq` —
   /// so the JOIN is the stated read (r10, V4 note 1). Null means no terminal
-  /// has landed for this attempt.
+  /// has landed for this subject.
   ///
   /// `settledBy` and `resolvesRecordId` come back too, because the SETTLED
   /// state is a distinct pre-read answer (r12): once a settling record landed,
@@ -913,14 +923,16 @@ class TrajectoryAppender {
   /// own `resolves_record_id`. Without those two columns the pre-read cannot
   /// re-derive the conversion it already performed, and an at-least-once retry
   /// of the settling append reads as a brand-new terminal.
-  Future<_TerminalGuardState?> _readTerminalGuard(String attemptId) async {
+  Future<_TerminalGuardState?> _readTerminalGuard(
+    TerminalGuardSubject subject,
+  ) async {
     final result = await _db.execute(
       'SELECT t.record_id AS record_id, t.provenance AS provenance, '
       't.resolves_record_id AS resolves_record_id, '
       'g.settled_by AS settled_by '
       'FROM traj_terminal_guard g JOIN trajectory t ON t.seq = g.seq '
-      'WHERE g.attempt_id = :attempt_id',
-      {'attempt_id': attemptId},
+      'WHERE g.subject_kind = :subject_kind AND g.subject_id = :subject_id',
+      {'subject_kind': subject.kind.wire, 'subject_id': subject.id},
     );
     if (result.rows.isEmpty) return null;
     final row = result.rows.first;
@@ -1080,7 +1092,7 @@ class TrajectoryAppender {
   }
 }
 
-/// What the resolving pre-read found for one attempt's `traj_terminal_guard`
+/// What the resolving pre-read found for one subject's `traj_terminal_guard`
 /// row — the guard joined to the record it points at.
 ///
 /// Four facts, because the pre-read has to answer three different questions

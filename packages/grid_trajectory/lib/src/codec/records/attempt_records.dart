@@ -441,7 +441,7 @@ final class AttemptAdoptProved extends AttemptRecord {
 /// terminals.
 final class AttemptTerminal extends AttemptRecord {
   AttemptTerminal({
-    required this.attemptId,
+    this.attemptId,
     required this.outcome,
     this.sessionId,
     this.workBeadId,
@@ -452,6 +452,9 @@ final class AttemptTerminal extends AttemptRecord {
     this.substationBasis,
     this.healBasis,
   }) {
+    if (attemptId == null && sessionId == null) {
+      _refuse(recordType, 'requires attempt_id or session_id');
+    }
     if (outcome == TerminalOutcome.unknown && unknownReason == null) {
       _refuse(recordType, 'outcome unknown requires unknown_reason');
     }
@@ -461,7 +464,7 @@ final class AttemptTerminal extends AttemptRecord {
     TrajectoryEnvelope envelope,
     Map<String, Object?> payload,
   ) => AttemptTerminal(
-    attemptId: _envReq(envelope, 'attempt_id', envelope.attemptId),
+    attemptId: envelope.attemptId,
     sessionId: envelope.sessionId,
     workBeadId: envelope.workBeadId,
     // ck_terminal: outcome is a required envelope column here.
@@ -474,7 +477,7 @@ final class AttemptTerminal extends AttemptRecord {
     healBasis: _opt<String>(payload, 'heal_basis'),
   );
 
-  final String attemptId;
+  final String? attemptId;
   final String? sessionId;
   final String? workBeadId;
   final TerminalOutcome outcome;
@@ -514,6 +517,15 @@ final class AttemptTerminal extends AttemptRecord {
   /// one dies on the PK.
   @override
   bool get isTerminal => true;
+
+  @override
+  TerminalGuardSubject get terminalGuardSubject {
+    final attempt = attemptId;
+    if (attempt != null) {
+      return (kind: TerminalGuardSubjectKind.attempt, id: attempt);
+    }
+    return (kind: TerminalGuardSubjectKind.session, id: sessionId!);
+  }
 
   @override
   bool get isSettling => resolvesRecordId != null;
@@ -558,7 +570,7 @@ final class AttemptTerminal extends AttemptRecord {
 
   @override
   Map<String, Object?> correlationToJson() => {
-    'attempt_id': attemptId,
+    if (attemptId != null) 'attempt_id': attemptId,
     if (sessionId != null) 'session_id': sessionId,
     if (workBeadId != null) 'work_bead_id': workBeadId,
     'outcome': outcome.wire,
@@ -567,9 +579,16 @@ final class AttemptTerminal extends AttemptRecord {
   };
 
   @override
-  String idemKeyText(IdemContext context) => isSettling
-      ? 'terminal-resolve:$attemptId:$resolvesRecordId'
-      : '${healBasis ?? 'terminal'}:$attemptId';
+  String idemKeyText(IdemContext context) {
+    final subject = terminalGuardSubject;
+    final identity = switch (subject.kind) {
+      TerminalGuardSubjectKind.attempt => subject.id,
+      TerminalGuardSubjectKind.session => 'session:${subject.id}',
+    };
+    return isSettling
+        ? 'terminal-resolve:$identity:$resolvesRecordId'
+        : '${healBasis ?? 'terminal'}:$identity';
+  }
 }
 
 /// `attempt.round.retired` — bumps envelope `round` only; the operator

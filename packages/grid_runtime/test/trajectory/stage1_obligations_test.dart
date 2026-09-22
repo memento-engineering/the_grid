@@ -324,17 +324,20 @@ void main() {
 
     SessionClosure? closed(String _) => const SessionClosure();
 
-    test('scans the OPEN heads of THIS station whose attempt never reached '
-        'the terminal guard, oldest first — pre-spawn heads (no attempt id) '
-        'are left out so they cannot hold the window', () {
+    test('scans independent bounded attempt and pre-spawn windows, each '
+        'excluding its own terminal-guard subject', () {
       final query = build();
 
       expect(query.sql, contains("h.status = 'open'"));
       expect(query.sql, contains('h.attempt_id IS NOT NULL'));
+      expect(query.sql, contains('h.attempt_id IS NULL'));
       expect(query.sql, contains('LEFT JOIN traj_terminal_guard g'));
-      expect(query.sql, contains('g.attempt_id IS NULL'));
+      expect(query.sql, contains("g.subject_kind = 'attempt'"));
+      expect(query.sql, contains("g.subject_kind = 'session'"));
+      expect(query.sql, contains('g.subject_id IS NULL'));
       expect(query.sql, contains('h.rig = :station'));
-      expect(query.sql, contains('ORDER BY h.last_seq'));
+      expect('ORDER BY h.last_seq'.allMatches(query.sql), hasLength(2));
+      expect('LIMIT 64'.allMatches(query.sql), hasLength(2));
       expect(query.parameters, {'station': 'tranquility'});
     });
 
@@ -502,11 +505,93 @@ void main() {
       expect(append.provenance, TrajectoryProvenance.reconstructed);
     });
 
-    test('a row without an attempt id is skipped, never minted', () async {
+    test('a live pre-spawn row is skipped, never minted', () async {
       final query = build(closure: closed);
       clock.advance(const Duration(hours: 1));
       expect(await query.repair([row(attemptId: null)]), isEmpty);
     });
+
+    test('sixteen void-closed pre-spawn heads heal after one grace with '
+        'session-keyed lost terminals and no minted attempt', () async {
+      final query = build(
+        closure: (_) => SessionClosure(
+          closedAt: DateTime.utc(2026, 9, 14, 20, 35),
+          outcome: TerminalOutcome.lost,
+          reason: 'ledger close: void re-key',
+        ),
+      );
+      final rows = [
+        for (var index = 0; index < 16; index++)
+          row(sessionId: 'void-$index', attemptId: null),
+      ];
+
+      expect(await query.repair(rows), isEmpty);
+      expect(query.lastWithinGrace, 16);
+      clock.advance(kDefaultExternalCloseGrace);
+
+      final appends = await query.repair(rows);
+
+      expect(appends, hasLength(16));
+      for (final append in appends) {
+        final record = append.record as AttemptTerminal;
+        expect(record.attemptId, isNull);
+        expect(record.outcome, TerminalOutcome.lost);
+        expect(record.healBasis, kTerminalReconcileBasis);
+        expect(record.attemptIdBasis, isNull);
+        expect(record.reason, contains('void-closed this pre-spawn session'));
+        expect(
+          record.terminalGuardSubject.kind,
+          TerminalGuardSubjectKind.session,
+        );
+        expect(append.provenance, TrajectoryProvenance.reconstructed);
+        expect(append.provenanceBasis, kTerminalReconcileBasis);
+        expect(append.occurredAt, DateTime.utc(2026, 9, 14, 20, 35));
+      }
+    });
+
+    test('attempt-less candidates exclude open, absent, retired, and '
+        'non-void ledger shapes', () async {
+      final closures = <String, SessionClosure?>{
+        'open': null,
+        'absent': const SessionClosure.absent(),
+        'retired': const SessionClosure(
+          outcome: TerminalOutcome.lost,
+          retiredRound: true,
+        ),
+        'cancelled': const SessionClosure(outcome: TerminalOutcome.cancelled),
+      };
+      final query = build(closure: (id) => closures[id]);
+      final rows = [
+        for (final id in closures.keys) row(sessionId: id, attemptId: null),
+      ];
+
+      expect(await query.repair(rows), isEmpty);
+      clock.advance(kDefaultExternalCloseGrace + const Duration(seconds: 1));
+      expect(await query.repair(rows), isEmpty);
+    });
+
+    test(
+      'an attempt-less heal yields to a queued terminal for the session',
+      () async {
+        final asked = <({String sessionId, String? attemptId})>[];
+        var queued = true;
+        final query = build(
+          closure: (_) => const SessionClosure(outcome: TerminalOutcome.lost),
+          queued: ({required sessionId, required attemptId}) {
+            asked.add((sessionId: sessionId, attemptId: attemptId));
+            return queued;
+          },
+        );
+        final candidate = row(sessionId: 'void-queued', attemptId: null);
+        await query.repair([candidate]);
+        clock.advance(kDefaultExternalCloseGrace);
+
+        expect(await query.repair([candidate]), isEmpty);
+        expect(asked.single, (sessionId: 'void-queued', attemptId: null));
+        queued = false;
+        expect(await query.repair([candidate]), hasLength(1));
+      },
+    );
 
     // ── tg-nxov: the window must ADVANCE past the retired-round prefix ──
     //
@@ -720,7 +805,7 @@ void main() {
       ]);
 
       final marks = ':skip'.allMatches(query.sql).length;
-      expect(marks, 1024);
+      expect(marks, 2048, reason: 'the two bounded arms share 1024 ids');
       expect(
         query.parameters.keys.where((key) => key != 'station'),
         hasLength(1024),

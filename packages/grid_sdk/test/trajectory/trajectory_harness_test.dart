@@ -76,6 +76,10 @@ bool _isShapeProbe(String sql) =>
 /// at every posture including `dualRead: off`.
 bool _isJournalProbe(String sql) => sql.contains("table_name = 'trajectory'");
 
+/// The durable terminal guard's attempt-only → subject-key shape probe.
+bool _isTerminalGuardProbe(String sql) =>
+    sql.contains("table_name = 'traj_terminal_guard'");
+
 /// A scriptable [TrajectoryDb]: records statements, optionally throws.
 final class _FakeDb implements TrajectoryDb {
   _FakeDb({this.onExecute});
@@ -110,6 +114,19 @@ final class _FakeDb implements TrajectoryDb {
       return const SqlResult(
         rows: [
           {'name': 'substation'},
+        ],
+      );
+    }
+    // DEFAULT: the durable terminal guard is already subject-keyed. A stale
+    // attempt-only guard is a quiesced `traj replay` migration and refuses the
+    // arm before the epoch claim.
+    if (_isTerminalGuardProbe(sql)) {
+      return const SqlResult(
+        rows: [
+          {'name': 'subject_kind'},
+          {'name': 'subject_id'},
+          {'name': 'seq'},
+          {'name': 'settled_by'},
         ],
       );
     }
@@ -695,6 +712,31 @@ void main() {
       expect(h.status.cause, contains('traj replay'));
       expect(h.status.cause, contains('seat'));
       expect(flareNames(), contains('trajectory.degraded'));
+      expect(appender.calls, ['verify'], reason: 'claimEpoch never ran');
+      expect(h.status.epoch, isNull);
+      expect(connected.single.closed, isTrue);
+    });
+
+    test('an attempt-only terminal guard REFUSES before claim and names the '
+        'quiesced replay action', () async {
+      dbScript = (sql) => _isTerminalGuardProbe(sql)
+          ? const SqlResult(
+              rows: [
+                {'name': 'attempt_id'},
+                {'name': 'seq'},
+                {'name': 'settled_by'},
+              ],
+            )
+          : null;
+      final h = await harness();
+
+      await h.start();
+
+      expect(h.mode, TrajectoryHarnessMode.degraded);
+      expect(h.status.cause, contains('attempt-only key'));
+      expect(h.status.cause, contains('QUIESCED'));
+      expect(h.status.cause, contains('traj replay'));
+      expect(h.status.cause, contains('(subject_kind, subject_id)'));
       expect(appender.calls, ['verify'], reason: 'claimEpoch never ran');
       expect(h.status.epoch, isNull);
       expect(connected.single.closed, isTrue);
@@ -2468,19 +2510,19 @@ void main() {
         kWorktreeReapedBackfillObligation,
         kLivenessDetectorObligation,
       ]);
-      // EIGHT boot reads come first: the STALE-FOLD SHAPE PROBE (r12 — the
+      // NINE boot reads come first: the STALE-FOLD SHAPE PROBE (r12 — the
       // refusal that keeps a pre-cut home from dropping every terminal
       // append), the journal probe, then the fold boot seed's five (cut-wiring
       // C1 + C4 / §0.2): the lag rule, generation set, P1/P2/P6 scans, and
       // the era boundary — all before the mode goes live, so
       // no post-ACK delta can outrun them.
       final statements = connected.single.statements;
-      expect(statements.take(8), everyElement(startsWith('SELECT')));
+      expect(statements.take(9), everyElement(startsWith('SELECT')));
       expect(statements.first, contains('information_schema.columns'));
       // Then the boot pass ran the obligations: four SELECTs on the same
       // serial lane (the external-close heal joined the set in tg-ffl6), plus
       // the detector's pulse prune.
-      final passStatements = statements.skip(8);
+      final passStatements = statements.skip(9);
       expect(
         passStatements.where((sql) => sql.startsWith('SELECT')),
         hasLength(4),
@@ -2641,10 +2683,10 @@ void main() {
       await h.start();
 
       expect(h.tick!.queries, isEmpty);
-      // Only the stale-fold shape probe, the journal probe, plus the fold boot
-      // seed's own six reads (P1 + P2 + P6): an empty obligation set still issues
-      // nothing of its own.
-      expect(connected.single.statements, hasLength(8));
+      // Only the stale-fold, journal, and terminal-guard probes, plus the fold
+      // boot seed's own six reads (P1 + P2 + P6): an empty obligation set
+      // still issues nothing of its own.
+      expect(connected.single.statements, hasLength(9));
       expect(connected.single.statements, everyElement(startsWith('SELECT')));
     });
 
@@ -2658,7 +2700,8 @@ void main() {
       dbScript = (sql) =>
           sql.startsWith('SELECT') &&
               !_isShapeProbe(sql) &&
-              !_isJournalProbe(sql)
+              !_isJournalProbe(sql) &&
+              !_isTerminalGuardProbe(sql)
           ? StateError('store unavailable')
           : null;
       final h = await harness();
@@ -2683,7 +2726,8 @@ void main() {
       dbScript = (sql) =>
           sql.startsWith('SELECT') &&
               !_isShapeProbe(sql) &&
-              !_isJournalProbe(sql)
+              !_isJournalProbe(sql) &&
+              !_isTerminalGuardProbe(sql)
           ? StateError('store unavailable')
           : null;
       final h = await harness();
@@ -3636,11 +3680,46 @@ void main() {
       expect(h.hasQueuedAppendFor('C' * 26), isFalse);
     });
 
+    test('the attempt-or-session queue probe accepts a null attempt and sees '
+        'a queued terminal for the session', () async {
+      final h = await harness();
+      await h.start();
+      appender.appendNeverCompletes = true;
+      h
+        ..enqueue(_note(1))
+        ..enqueue(
+          TrajectoryAppendRequest(
+            AttemptTerminal(
+              sessionId: 'void-session',
+              outcome: TerminalOutcome.lost,
+              healBasis: 'terminal-reconcile',
+            ),
+          ),
+        );
+      await pumpEventQueue();
+
+      expect(
+        h.hasQueuedAppendForAttemptOrSession(
+          sessionId: 'void-session',
+          attemptId: null,
+        ),
+        isTrue,
+      );
+      expect(
+        h.hasQueuedAppendForAttemptOrSession(
+          sessionId: 'other-session',
+          attemptId: null,
+        ),
+        isFalse,
+      );
+    });
+
     test('THE GUARD PRE-CHECK (r9 — V3-B1): an existing terminal row for the '
         'attempt means the real record LANDED, so the heal SKIPS and counts — '
         'no append at all', () async {
       dbScript = (sql) {
-        if (sql.contains('traj_terminal_guard')) {
+        if (sql.contains('traj_terminal_guard') &&
+            !_isTerminalGuardProbe(sql)) {
           return const SqlResult(
             rows: [
               {'attempt_id': '01J8ATTEMPT000000000000009'},
@@ -3682,7 +3761,8 @@ void main() {
 
     test('a heal whose guard read THROWS reports failed and flares — the '
         'escalation rule keys on exactly that', () async {
-      dbScript = (sql) => sql.contains('traj_terminal_guard')
+      dbScript = (sql) =>
+          sql.contains('traj_terminal_guard') && !_isTerminalGuardProbe(sql)
           ? StateError('guard read exploded')
           : null;
       final h = await harness();

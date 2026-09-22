@@ -614,9 +614,34 @@ void main() {
       );
 
       final guard = h.db.matching('INSERT INTO traj_terminal_guard').single;
-      expect(guard.params!['attempt_id'], '01ATTEMPT000000000000000AA');
+      expect(guard.params!['subject_kind'], 'attempt');
+      expect(guard.params!['subject_id'], '01ATTEMPT000000000000000AA');
       expect(guard.params!['seq'], 101);
     });
+
+    test(
+      'an attempt-less terminal INSERTs a session-subject guard row',
+      () async {
+        final h = _Harness()
+          ..scriptClaimReads()
+          ..scriptFenceHeld()
+          ..scriptInsertSeq(103);
+        await h.claim();
+
+        await h.appender.append(
+          AttemptTerminal(
+            sessionId: 'tranquility-void',
+            outcome: TerminalOutcome.lost,
+            healBasis: 'terminal-reconcile',
+          ),
+        );
+
+        final guard = h.db.matching('INSERT INTO traj_terminal_guard').single;
+        expect(guard.params!['subject_kind'], 'session');
+        expect(guard.params!['subject_id'], 'tranquility-void');
+        expect(guard.params!['seq'], 103);
+      },
+    );
 
     test('a settling terminal UPDATEs seq and settled_by instead', () async {
       final h = _Harness()
@@ -637,6 +662,31 @@ void main() {
       final settle = h.db.matching('UPDATE traj_terminal_guard').single;
       expect(settle.params!['seq'], 102);
       expect(settle.params!['settled_by'], isNotNull);
+      expect(settle.params!['subject_kind'], 'attempt');
+      expect(settle.params!['subject_id'], '01ATTEMPT000000000000000AA');
+    });
+
+    test('an attempt-less settlement UPDATEs its session guard row', () async {
+      final h = _Harness()
+        ..scriptClaimReads()
+        ..scriptFenceHeld()
+        ..scriptInsertSeq(104);
+      await h.claim();
+
+      await h.appender.append(
+        AttemptTerminal(
+          sessionId: 'tranquility-void',
+          outcome: TerminalOutcome.settled,
+          resolvesRecordId: '01UNKNOWN000000000000000AA',
+        ),
+      );
+
+      expect(h.db.matching('INSERT INTO traj_terminal_guard'), isEmpty);
+      final settle = h.db.matching('UPDATE traj_terminal_guard').single;
+      expect(settle.params!['seq'], 104);
+      expect(settle.params!['settled_by'], isNotNull);
+      expect(settle.params!['subject_kind'], 'session');
+      expect(settle.params!['subject_id'], 'tranquility-void');
     });
   });
 

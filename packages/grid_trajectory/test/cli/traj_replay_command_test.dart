@@ -52,13 +52,38 @@ void main() {
   }
 
   /// P1 already at the current projection shape (the reshape is a no-op).
-  void seedCurrentShape() => db.on(
-    'information_schema.columns',
+  void seedCurrentShape() {
+    db
+      ..on(
+        "table_name = 'traj_terminal_guard'",
+        result: const SqlResult(
+          rows: [
+            {'name': 'subject_kind'},
+            {'name': 'subject_id'},
+            {'name': 'seq'},
+            {'name': 'settled_by'},
+          ],
+        ),
+      )
+      ..on(
+        'information_schema.columns',
+        result: const SqlResult(
+          rows: [
+            {'name': 'terminal_provenance'},
+            {'name': 'unknown_reason'},
+            {'name': 'substation'},
+          ],
+        ),
+      );
+  }
+
+  void seedStaleTerminalGuard() => db.on(
+    "table_name = 'traj_terminal_guard'",
     result: const SqlResult(
       rows: [
-        {'name': 'terminal_provenance'},
-        {'name': 'unknown_reason'},
-        {'name': 'substation'},
+        {'name': 'attempt_id'},
+        {'name': 'seq'},
+        {'name': 'settled_by'},
       ],
     ),
   );
@@ -161,15 +186,25 @@ void main() {
 
   group('the P1 reshape (r7 — V1-B1: DROP + re-CREATE, never ALTER)', () {
     test('a pre-cut home is reshaped, in order, before the replay', () async {
-      db.on(
-        'information_schema.columns',
-        result: const SqlResult(
-          rows: [
-            {'name': 'session_id'},
-            {'name': 'work_terminal_reason'},
-          ],
-        ),
-      );
+      db
+        ..on(
+          "table_name = 'traj_terminal_guard'",
+          result: const SqlResult(
+            rows: [
+              {'name': 'subject_kind'},
+              {'name': 'subject_id'},
+            ],
+          ),
+        )
+        ..on(
+          'information_schema.columns',
+          result: const SqlResult(
+            rows: [
+              {'name': 'session_id'},
+              {'name': 'work_terminal_reason'},
+            ],
+          ),
+        );
       expect(await replay(projections: const [sessionHeadProjection]), 0);
 
       final statements = db.log.map((call) => call.sql).toList();
@@ -256,6 +291,47 @@ void main() {
       expect(await replay(check: true), 0);
       expect(out.join('\n'), contains('migrate: PENDING'));
       expect(db.matching('ALTER TABLE'), isEmpty);
+    });
+  });
+
+  group('the terminal-guard subject-key migration', () {
+    test('a stale guard migrates in lossless order before replay', () async {
+      seedStaleTerminalGuard();
+      seedCurrentShape();
+
+      expect(await replay(), 0);
+
+      final alters = db.matching('ALTER TABLE traj_terminal_guard');
+      expect(alters.map((call) => call.sql), [
+        'ALTER TABLE traj_terminal_guard ADD COLUMN subject_kind '
+            "ENUM('attempt','session') NOT NULL DEFAULT 'attempt' FIRST",
+        'ALTER TABLE traj_terminal_guard DROP PRIMARY KEY',
+        'ALTER TABLE traj_terminal_guard CHANGE COLUMN attempt_id subject_id '
+            'VARCHAR(40) NOT NULL',
+        'ALTER TABLE traj_terminal_guard ADD PRIMARY KEY '
+            '(subject_kind, subject_id)',
+      ]);
+      expect(
+        db.log.indexOf(alters.last),
+        lessThan(db.log.indexWhere((call) => call.sql.contains('proj_'))),
+      );
+      expect(out.join('\n'), contains('existing rows preserved'));
+    });
+
+    test('--check reports the stale guard without mutating it', () async {
+      seedStaleTerminalGuard();
+      seedCurrentShape();
+
+      expect(await replay(check: true), 0);
+
+      expect(out.join('\n'), contains('attempt-only key'));
+      expect(db.matching('ALTER TABLE traj_terminal_guard'), isEmpty);
+    });
+
+    test('a current guard is left alone', () async {
+      seedCurrentShape();
+      expect(await replay(), 0);
+      expect(db.matching('ALTER TABLE traj_terminal_guard'), isEmpty);
     });
   });
 

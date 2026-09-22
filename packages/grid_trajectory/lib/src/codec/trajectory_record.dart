@@ -21,6 +21,18 @@ part 'records/verification_records.dart';
 part 'records/effect_records.dart';
 part 'records/step_records.dart';
 
+/// The durable identity axis used by `traj_terminal_guard`.
+enum TerminalGuardSubjectKind {
+  attempt,
+  session;
+
+  String get wire => name;
+}
+
+/// One terminal guard key. Attempt identity wins whenever it exists; session
+/// identity is reserved for a terminal reconstructed for a never-spawned head.
+typedef TerminalGuardSubject = ({TerminalGuardSubjectKind kind, String id});
+
 /// One trajectory record, pre-envelope: the typed fact plus the identity
 /// grammar. The service stamps everything else (§2.6 rule 7).
 @immutable
@@ -57,10 +69,12 @@ sealed class TrajectoryRecord {
   // Each getter below is a fact ABOUT a record type, so it is declared where
   // record types are declared, and the append path reads it off the base.
 
-  /// True for the record type the §5 terminal guard keys. A terminal always
-  /// carries the promoted `attempt_id` column — that is what the guard's
-  /// `traj_terminal_guard` row is keyed on.
+  /// True for the record type the §5 terminal guard keys.
   bool get isTerminal => false;
+
+  /// The durable subject guarded for this terminal, or null for records that
+  /// do not participate in the terminal guard.
+  TerminalGuardSubject? get terminalGuardSubject => null;
 
   /// True for a SETTLING record: it heals an earlier `unknown` through
   /// `resolves_record_id`, so the terminal guard UPDATEs the existing row
