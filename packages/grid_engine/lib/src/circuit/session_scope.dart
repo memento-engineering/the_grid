@@ -1751,6 +1751,15 @@ class SessionScopeState extends State<SessionScope>
         spentRounds: spentRounds,
         maxRounds: kMaxReworkRounds,
       );
+      if (ctx.g2EmissionMode != G2EmissionMode.off) {
+        await _recorder.stepSuperseded(
+          sessionId: sessionId,
+          stepPath: nodePath,
+          currentDepth: currentDepth,
+          spentRounds: spentRounds,
+          maxReworkRounds: kMaxReworkRounds,
+        );
+      }
       _stepSuccessorMintAttemptsByPath.remove(nodePath);
     } on Object catch (error) {
       final reason = truncateReason('$error');

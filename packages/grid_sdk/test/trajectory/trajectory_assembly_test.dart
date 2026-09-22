@@ -10,6 +10,7 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart'
     show
         DualReadMode,
+        G2EmissionMode,
         GridIssueTypes,
         Idle,
         JoinedSnapshot,
@@ -190,6 +191,8 @@ void main() {
       expect(cut.wiring.services.trajectoryAdmissionHalt, isNull);
       expect(shadow.wiring.trajectory!.admissionHalt, isNull);
       expect(shadow.wiring.services.trajectoryAdmissionHalt, isNull);
+      expect(cut.wiring.services.g2EmissionMode, G2EmissionMode.off);
+      expect(shadow.wiring.services.g2EmissionMode, G2EmissionMode.off);
     },
   );
 
@@ -233,6 +236,7 @@ void main() {
 
     expect(work.trajectory.config.g2Posture, G2Posture.off);
     expect(work.trajectory.config.g2G1PrerequisiteRefusal, isNull);
+    expect(work.wiring.services.g2EmissionMode, G2EmissionMode.off);
   });
 
   test(

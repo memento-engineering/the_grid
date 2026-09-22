@@ -293,23 +293,64 @@ final class _RefusingSuccessorRunner extends RecordingBdRunner {
   }
 }
 
-StationServices _ctxOver(RecordingBdRunner runner) => StationServices(
-  provider: FakeRuntimeProvider(),
+final class _SuccessorAckSink implements TrajectoryAckRecordSink {
+  _SuccessorAckSink({this.resultFor});
+
+  final TrajectoryAppendResult Function(TrajectoryRecord record)? resultFor;
+  final List<TrajectoryRecord> records = [];
+
+  @override
+  bool get accepting => true;
+
+  @override
+  void enqueue(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+  }) => records.add(record);
+
+  @override
+  Future<TrajectoryAppendResult> appendAcked(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+    required bool decisionBearing,
+  }) async {
+    expect(decisionBearing, isTrue);
+    records.add(record);
+    return resultFor?.call(record) ?? const TrajectoryAppendResult.acked();
+  }
+}
+
+StationServices _ctxOver(
+  RecordingBdRunner runner, {
+  required RuntimeProvider provider,
+  G2EmissionMode g2EmissionMode = G2EmissionMode.off,
+}) => StationServices(
+  provider: provider,
   writer: StationBeadWriter(
     bd: BdCliService(runner),
     reader: runner,
     ownership: BeadOwnershipPredicate(const {stateSubstation}),
   ),
   stateSubstation: stateSubstation,
+  g2EmissionMode: g2EmissionMode,
 );
 
-({TreeOwner owner, Fakes fakes}) _mount({
+({TreeOwner owner, Fakes fakes, StationTrajectoryRecorder recorder}) _mount({
   ServiceBundle services = const ServiceBundle(),
   Set<int> specifyVerdicts = const {0, 1, 2},
   SessionProjection? projection,
   RecordingBdRunner? runner,
   Circuit circuit = rootCircuit,
   Map<String, Circuit> circuits = const {'spec_review': specReviewCircuit},
+  G2EmissionMode g2EmissionMode = G2EmissionMode.off,
+  TrajectoryRecordSink? trajectorySink,
+  TrajectoryRecorderFlare? onRecorderFlare,
 }) {
   final fakes = buildFakes();
   final owner = TreeOwner();
@@ -317,20 +358,34 @@ StationServices _ctxOver(RecordingBdRunner runner) => StationServices(
       projection ?? _projection(specifyVerdicts: specifyVerdicts);
   final joined = _joined(effectiveProjection);
   final registry = RecordingCapabilityRegistry(circuits: circuits);
+  final recorder = trajectorySink == null
+      ? StationTrajectoryRecorder.disabled()
+      : StationTrajectoryRecorder(
+          sink: trajectorySink,
+          onFlare: onRecorderFlare,
+        );
+  final station = _ctxOver(
+    runner ?? fakes.runner,
+    provider: fakes.provider,
+    g2EmissionMode: g2EmissionMode,
+  );
   owner.mountRoot(
     ProviderScope(
       child: InheritedSeed<JoinedSnapshotNotifier>(
         value: joined,
         child: InheritedSeed<StationServices>(
-          value: runner == null ? fakes.ctx : _ctxOver(runner),
+          value: station,
           child: InheritedSeed<ServiceBundle>(
             value: services,
             child: InheritedSeed<CapabilityRegistry>(
               value: registry,
-              child: SessionScope(
-                bead: bead('tg-lt2a'),
-                circuit: circuit,
-                existingSession: effectiveProjection,
+              child: InheritedSeed<TrajectoryRecorderScope>(
+                value: TrajectoryRecorderScope(recorder),
+                child: SessionScope(
+                  bead: bead('tg-lt2a'),
+                  circuit: circuit,
+                  existingSession: effectiveProjection,
+                ),
               ),
             ),
           ),
@@ -338,7 +393,7 @@ StationServices _ctxOver(RecordingBdRunner runner) => StationServices(
       ),
     ),
   );
-  return (owner: owner, fakes: fakes);
+  return (owner: owner, fakes: fakes, recorder: recorder);
 }
 
 Future<void> _drain() async {
@@ -510,6 +565,162 @@ void main() {
     expect(handler.requests.single.nodePath, specifyPath);
     expect(handler.requests.single.rewindCount, 3);
     expect(handler.requests.single.reason, 'rework cap reached (3/3)');
+  });
+
+  test('G2 off mints a successor without observing it', () async {
+    final sink = _SuccessorAckSink();
+    final mounted = _mount(
+      projection: _persistedInvalidationProjection(
+        sourceCircuit: 'spec_review',
+      ),
+      trajectorySink: sink,
+    );
+    addTearDown(mounted.owner.dispose);
+
+    await _pumpUntil(
+      mounted.owner,
+      () => mounted.fakes.runner
+          .callsFor('dep')
+          .any((call) => call.length > 1 && call[1] == 'add'),
+    );
+
+    expect(sink.records, isEmpty);
+    expect(mounted.recorder.stats.derived, 0);
+  });
+
+  test('fresh and existing successors append the same G2 fact', () async {
+    Future<TrajectoryRecord> observe({required bool existing}) async {
+      final runner = RecordingBdRunner();
+      if (existing) {
+        runner.exportBeads = [
+          _stepBead(
+            id: 'tgdog-existing-successor',
+            stepId: 'specify',
+            capability: 'specify',
+            path: specifyPath,
+            state: StepState.pending,
+          ),
+        ];
+        runner.exportDependencies = const [
+          BeadDependency(
+            issueId: 'tgdog-existing-successor',
+            dependsOnId: 'tgdog-spec_review-target',
+            type: DependencyType.supersedes,
+          ),
+        ];
+      }
+      final sink = _SuccessorAckSink();
+      final mounted = _mount(
+        projection: _persistedInvalidationProjection(
+          sourceCircuit: 'spec_review',
+        ),
+        runner: runner,
+        g2EmissionMode: G2EmissionMode.shadow,
+        trajectorySink: sink,
+      );
+      addTearDown(mounted.owner.dispose);
+
+      await _pumpUntil(
+        mounted.owner,
+        () => sink.records.any(
+          (record) => record.correlationToJson()['step_path'] == specifyPath,
+        ),
+      );
+      final record = sink.records.singleWhere(
+        (record) => record.correlationToJson()['step_path'] == specifyPath,
+      );
+      if (existing) {
+        expect(
+          runner
+              .callsFor('create')
+              .where(
+                (call) =>
+                    call.contains(GridIssueTypes.step.wire) &&
+                    call.contains('specify'),
+              ),
+          isEmpty,
+        );
+      } else {
+        expect(
+          runner
+              .callsFor('create')
+              .where(
+                (call) =>
+                    call.contains(GridIssueTypes.step.wire) &&
+                    call.contains('specify'),
+              ),
+          hasLength(1),
+        );
+      }
+      return record;
+    }
+
+    final fresh = await observe(existing: false);
+    final existing = await observe(existing: true);
+    const context = IdemContext(station: 'station', bootEpoch: 1);
+    for (final record in [fresh, existing]) {
+      expect(record.recordType, 'step.superseded');
+      expect(
+        record.idemKeyText(context),
+        'supersede:$sessionId:0:$specifyPath:0',
+      );
+      expect(record.payloadToJson(), {
+        'cause': 'validation-failed',
+        'budget_remaining': 2,
+        'old_step_round': 0,
+        'new_step_round': 1,
+      });
+    }
+  });
+
+  test('a failed G2 append does not retry a successful successor', () async {
+    final runner = RecordingBdRunner();
+    final sink = _SuccessorAckSink(
+      resultFor: (record) =>
+          record.correlationToJson()['step_path'] == specifyPath
+          ? const TrajectoryAppendResult.dropped()
+          : const TrajectoryAppendResult.acked(),
+    );
+    final recorderFlares = <(String, Map<String, String>)>[];
+    final transport = RecordingExplorationTransport();
+    final mounted = _mount(
+      projection: _persistedInvalidationProjection(
+        sourceCircuit: 'spec_review',
+      ),
+      runner: runner,
+      g2EmissionMode: G2EmissionMode.shadow,
+      trajectorySink: sink,
+      onRecorderFlare: (name, data) => recorderFlares.add((name, data)),
+      services: ServiceBundle(transport: transport),
+    );
+    addTearDown(mounted.owner.dispose);
+
+    await _pumpUntil(
+      mounted.owner,
+      () => sink.records.any(
+        (record) => record.correlationToJson()['step_path'] == specifyPath,
+      ),
+    );
+    await _drain();
+
+    expect(
+      runner
+          .callsFor('create')
+          .where(
+            (call) =>
+                call.contains(GridIssueTypes.step.wire) &&
+                call.contains('specify'),
+          ),
+      hasLength(1),
+    );
+    expect(transport.named('session.stepSuccessorMintFailed'), isEmpty);
+    expect(mounted.recorder.stats.g2ShadowAppendDivergences, 1);
+    expect(
+      recorderFlares.where(
+        (flare) => flare.$1 == 'trajectory.g2ShadowAppendDivergence',
+      ),
+      hasLength(1),
+    );
   });
 
   for (final sourceCircuit in ['spec_review', 'discovery']) {

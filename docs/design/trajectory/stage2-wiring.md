@@ -120,6 +120,13 @@ The earlier intake path
 observation seam; in this checkout `SessionScope` lives under `src/circuit`.
 There is one observation site, `SessionScope._mintStepSuccessor`, not two.
 
+This placement also follows
+`the_grid#pause-is-a-non-terminal-blocking-disposition`: the pause marker “adds
+neither a branch-owned mint site nor another admission authority.” The
+`molecule.poured` observation stays inside the existing single
+`StationAdmissionAuthority`; it is neither a second mint site nor a second
+authority.
+
 G2-1 adds the missing `MoleculePoured` edge delta through the same
 incremental-SQL and in-memory-replay delta architecture already used by P1 and
 P2. The record-to-delta function is shared by live append and replay, and the
