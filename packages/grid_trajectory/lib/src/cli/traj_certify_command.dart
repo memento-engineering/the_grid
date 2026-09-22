@@ -1,4 +1,4 @@
-/// `traj certify` — the §W2.5 soak certificate as a PASS/FAIL verb.
+/// `traj certify` — the §W2.5 soak certificate plus report-only diagnostics.
 ///
 /// Read-only and cross-session, like `traj committee-report`: it reads the
 /// `traj_epoch` ledger, takes the last `--boots N` claims, reads each one's
@@ -89,7 +89,8 @@ class TrajCertifyCommand extends Command<int> {
   @override
   final String description =
       'Certify the last N boot epochs against the §W2.5 soak table — posture, '
-      'clean counters, shape coverage, would-refuse, consecutive.';
+      'clean counters, shape coverage, would-refuse, consecutive — and report '
+      'G2 round diagnostics without gating the verdict.';
 
   @override
   Future<int> run() async {

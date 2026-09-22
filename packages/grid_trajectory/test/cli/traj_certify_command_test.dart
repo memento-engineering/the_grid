@@ -841,4 +841,39 @@ void main() {
       expect(reader.closed, isTrue);
     });
   });
+
+  test('positive G2 diagnostics preserve the certificate verdict', () async {
+    final (baselineCode, baselineLines) = await _certify();
+    final (tableCode, tableLines) = await _certify(
+      dirty: const {
+        52: {
+          'g2_successor_depth_mismatches': 2,
+          'g2_successor_depth_mismatches_in_window': 2,
+          'g2_successor_depth_mismatches_historical': 0,
+        },
+      },
+    );
+    expect(tableCode, baselineCode);
+    for (final row in CertificateRow.values) {
+      expect(
+        _statusOf(tableLines, row.wire),
+        _statusOf(baselineLines, row.wire),
+      );
+    }
+    expect(tableLines.join('\n'), contains('g2 round epoch 52'));
+    expect(tableLines.join('\n'), contains('g2_successor_depth_mismatches 2'));
+
+    final (jsonCode, jsonLines) = await _certify(
+      asJson: true,
+      dirty: const {
+        52: {'g2_successor_depth_mismatches': 2},
+      },
+    );
+    expect(jsonCode, 0);
+    final json = jsonDecode(jsonLines.join('\n')) as Map<String, Object?>;
+    expect(json['certified'], isTrue);
+    expect(json['exit_code'], 0);
+    final boots = (json['boots']! as List).cast<Map<String, Object?>>();
+    expect(boots.last['g2_round_diagnostics'], isNotEmpty);
+  });
 }

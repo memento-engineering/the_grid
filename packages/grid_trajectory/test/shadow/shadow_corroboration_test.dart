@@ -409,6 +409,11 @@ void main() {
       expect(foldLagsLedger('step_state', 'running', 'complete'), isFalse);
       expect(foldLagsLedger('step_state', 'weird', 'running'), isFalse);
       expect(foldLagsLedger('legacy_attempt_count', '3', null), isTrue);
+      expect(foldLagsLedger('g2_append_presence', 'present', 'absent'), isTrue);
+      expect(
+        foldLagsLedger('g2_append_presence', 'present', 'present'),
+        isFalse,
+      );
       expect(foldLagsLedger('cooldown_until', 'a', 'b'), isFalse);
     });
   });

@@ -196,6 +196,11 @@ void main() {
     expect(explicit.p2MissTotal, explicit.p2Miss);
   });
 
+  test('G2 counters stay absent until a G2 round runs', () {
+    final json = DualReadAccounting().toCertificationJson();
+    expect(json.keys.where((key) => key.startsWith('g2_')), isEmpty);
+  });
+
   test('three epochs partition every cumulative divergence counter', () {
     final accounting = DualReadAccounting(soakWindowEpoch: 10);
     _recordDivergences(accounting);
@@ -508,5 +513,53 @@ void main() {
       isNot(containsPair('divergences_by_field_historical', anything)),
       reason: 'the scoped maps inherit the legacy map row semantics',
     );
+  });
+
+  test('G2 counters are cumulative windowed diagnostics', () {
+    final accounting = DualReadAccounting(soakWindowEpoch: 10);
+    for (final epoch in const [9, 10, 11]) {
+      for (final kind in G2ShadowFailureKind.values) {
+        accounting.recordG2Failure(kind, headEpoch: epoch);
+      }
+      for (final cause in const [
+        DualReadDivergenceCause.moleculeGraphMismatch,
+        DualReadDivergenceCause.graphApplyPlanMismatch,
+        DualReadDivergenceCause.successorRelationshipMismatch,
+        DualReadDivergenceCause.successorDepthMismatch,
+        DualReadDivergenceCause.nonAtomicCrashGap,
+        DualReadDivergenceCause.unexplained,
+      ]) {
+        accounting.recordG2Mismatch(
+          mismatchKey: 'g2:$epoch:${cause.name}',
+          sessionId: 'session-$epoch',
+          coordinate: cause.name,
+          field: 'field',
+          legacyValue: 'legacy',
+          foldValue: 'record',
+          cause: cause,
+          headEpoch: epoch,
+        );
+      }
+    }
+    final json = accounting.toCertificationJson();
+    for (final base in const [
+      'g2_append_failures',
+      'g2_fold_failures',
+      'g2_comparison_failures',
+      'g2_projection_fallbacks',
+      'g2_molecule_graph_mismatches',
+      'g2_graph_apply_plan_mismatches',
+      'g2_successor_relationship_mismatches',
+      'g2_successor_depth_mismatches',
+      'g2_non_atomic_crash_gaps',
+      'g2_unexplained_mismatches',
+    ]) {
+      expect(json[base], 3, reason: base);
+      expect(json['${base}_in_window'], 2, reason: base);
+      expect(json['${base}_historical'], 1, reason: base);
+    }
+    expect(json['step_divergences'], 0);
+    expect(json['step_unexplained_divergences_in_window'], 0);
+    expect(json.keys, isNot(contains('g2_clean_round_streak')));
   });
 }

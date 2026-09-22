@@ -166,6 +166,36 @@ const Map<String, String> kDualReadCounterSemantics = <String, String>{
   'append_queue_depth': 'gauge',
   'append_ack_p99_ms': 'gauge',
   'barrier_would_refuse': 'cumulative',
+  'g2_append_failures': 'cumulative',
+  'g2_append_failures_in_window': 'cumulative',
+  'g2_append_failures_historical': 'cumulative',
+  'g2_fold_failures': 'cumulative',
+  'g2_fold_failures_in_window': 'cumulative',
+  'g2_fold_failures_historical': 'cumulative',
+  'g2_comparison_failures': 'cumulative',
+  'g2_comparison_failures_in_window': 'cumulative',
+  'g2_comparison_failures_historical': 'cumulative',
+  'g2_projection_fallbacks': 'cumulative',
+  'g2_projection_fallbacks_in_window': 'cumulative',
+  'g2_projection_fallbacks_historical': 'cumulative',
+  'g2_molecule_graph_mismatches': 'cumulative',
+  'g2_molecule_graph_mismatches_in_window': 'cumulative',
+  'g2_molecule_graph_mismatches_historical': 'cumulative',
+  'g2_graph_apply_plan_mismatches': 'cumulative',
+  'g2_graph_apply_plan_mismatches_in_window': 'cumulative',
+  'g2_graph_apply_plan_mismatches_historical': 'cumulative',
+  'g2_successor_relationship_mismatches': 'cumulative',
+  'g2_successor_relationship_mismatches_in_window': 'cumulative',
+  'g2_successor_relationship_mismatches_historical': 'cumulative',
+  'g2_successor_depth_mismatches': 'cumulative',
+  'g2_successor_depth_mismatches_in_window': 'cumulative',
+  'g2_successor_depth_mismatches_historical': 'cumulative',
+  'g2_non_atomic_crash_gaps': 'cumulative',
+  'g2_non_atomic_crash_gaps_in_window': 'cumulative',
+  'g2_non_atomic_crash_gaps_historical': 'cumulative',
+  'g2_unexplained_mismatches': 'cumulative',
+  'g2_unexplained_mismatches_in_window': 'cumulative',
+  'g2_unexplained_mismatches_historical': 'cumulative',
 };
 
 /// The flare a served-tuple mismatch raises. Axis-tagged, because C4 adds a
@@ -487,6 +517,24 @@ enum DualReadDivergenceCause {
   /// were compared side by side during the soak.
   foldBackedMountFacts('fold-backed-mount-facts'),
 
+  /// A `molecule.poured` graph disagreed with the legacy bead graph.
+  moleculeGraphMismatch('molecule-graph-mismatch'),
+
+  /// A `molecule.poured` graph disagreed with the graph applied by the
+  /// incumbent writer from the same canonical value.
+  graphApplyPlanMismatch('graph-apply-plan-mismatch'),
+
+  /// A `step.superseded` successor was absent or named a different
+  /// predecessor through its supersedes relationship.
+  successorRelationshipMismatch('successor-relationship-mismatch'),
+
+  /// A `step.superseded` successor disagreed on its structural generation.
+  successorDepthMismatch('successor-depth-mismatch'),
+
+  /// The legacy graph write landed but the trajectory append did not, with
+  /// the crash shape corroborated by the existing allow-list classifier.
+  nonAtomicCrashGap('non-atomic-crash-gap'),
+
   /// Q9's accepted shape: legacy re-keyed the identity-matched session to a
   /// positive retired `#rN` key, while the P1 head deliberately remains open
   /// until a terminal record exists.
@@ -509,6 +557,7 @@ enum DualReadDivergenceCause {
 @immutable
 final class DualReadDivergenceDetail {
   const DualReadDivergenceDetail({
+    required this.mismatchKey,
     required this.axis,
     required this.sessionId,
     required this.field,
@@ -519,7 +568,10 @@ final class DualReadDivergenceDetail {
     required this.cause,
   });
 
-  /// Comparator axis (`session` or `step`).
+  /// Complete stable identity used to deduplicate this mismatch.
+  final String mismatchKey;
+
+  /// Comparator axis (`session`, `step`, or report-only `g2`).
   final String axis;
 
   /// Identity of the compared session.
@@ -545,6 +597,7 @@ final class DualReadDivergenceDetail {
 
   /// JSON shape embedded in every durable dual-read round summary.
   Map<String, Object?> toJson() => <String, Object?>{
+    'mismatch_key': mismatchKey,
     'axis': axis,
     'session_id': sessionId,
     'field': field,
@@ -554,6 +607,44 @@ final class DualReadDivergenceDetail {
     'active_step_path': activeStepPath,
     'cause': cause.wire,
   };
+}
+
+/// Non-mismatch failures that can make a G2 shadow round incomplete.
+enum G2ShadowFailureKind {
+  appendFailure('append_failure'),
+  foldFailure('fold_failure'),
+  comparisonFailure('comparison_failure'),
+  projectionFallback('projection_fallback');
+
+  const G2ShadowFailureKind(this.wire);
+
+  /// Stable diagnostic spelling.
+  final String wire;
+}
+
+/// Immutable cumulative and in-window G2 diagnostic counters.
+@immutable
+final class G2ShadowCounterSnapshot {
+  G2ShadowCounterSnapshot({
+    required Map<G2ShadowFailureKind, int> failures,
+    required Map<G2ShadowFailureKind, int> failuresInWindow,
+    required Map<DualReadDivergenceCause, int> mismatches,
+    required Map<DualReadDivergenceCause, int> mismatchesInWindow,
+  }) : failures = Map.unmodifiable(failures),
+       failuresInWindow = Map.unmodifiable(failuresInWindow),
+       mismatches = Map.unmodifiable(mismatches),
+       mismatchesInWindow = Map.unmodifiable(mismatchesInWindow);
+
+  final Map<G2ShadowFailureKind, int> failures;
+  final Map<G2ShadowFailureKind, int> failuresInWindow;
+  final Map<DualReadDivergenceCause, int> mismatches;
+  final Map<DualReadDivergenceCause, int> mismatchesInWindow;
+
+  int failure(G2ShadowFailureKind kind) => failures[kind] ?? 0;
+  int failureInWindow(G2ShadowFailureKind kind) => failuresInWindow[kind] ?? 0;
+  int mismatch(DualReadDivergenceCause cause) => mismatches[cause] ?? 0;
+  int mismatchInWindow(DualReadDivergenceCause cause) =>
+      mismatchesInWindow[cause] ?? 0;
 }
 
 /// The result of comparing one legacy projection against its identity-matched
@@ -958,6 +1049,20 @@ class DualReadAccounting {
   int stepFoldAheadOfLegacyDivergences = 0;
   int stepFoldAheadOfLegacyDivergencesInWindow = 0;
 
+  final Map<G2ShadowFailureKind, int> _g2Failures = {
+    for (final kind in G2ShadowFailureKind.values) kind: 0,
+  };
+  final Map<G2ShadowFailureKind, int> _g2FailuresInWindow = {
+    for (final kind in G2ShadowFailureKind.values) kind: 0,
+  };
+  final Map<DualReadDivergenceCause, int> _g2Mismatches = {
+    for (final cause in _g2MismatchCauses) cause: 0,
+  };
+  final Map<DualReadDivergenceCause, int> _g2MismatchesInWindow = {
+    for (final cause in _g2MismatchCauses) cause: 0,
+  };
+  bool _g2Observed = false;
+
   final Map<String, int> divergencesByField = <String, int>{};
   final Map<String, int> divergencesByFieldInWindow = <String, int>{};
   final List<DualReadDivergenceDetail> divergenceDetails =
@@ -1180,6 +1285,12 @@ class DualReadAccounting {
         case DualReadDivergenceCause.foldBackedMountFacts:
           foldBackedMountFactDivergences += 1;
           if (inWindow) foldBackedMountFactDivergencesInWindow += 1;
+        case DualReadDivergenceCause.moleculeGraphMismatch:
+        case DualReadDivergenceCause.graphApplyPlanMismatch:
+        case DualReadDivergenceCause.successorRelationshipMismatch:
+        case DualReadDivergenceCause.successorDepthMismatch:
+        case DualReadDivergenceCause.nonAtomicCrashGap:
+          throw StateError('G2-only cause passed session-axis validation');
         // The session comparator cannot mint `foldAheadOfLegacy`; if a future
         // caller does, it lands in the bucket that asks for adjudication.
         case DualReadDivergenceCause.retiredRoundOpenByDesign:
@@ -1194,6 +1305,7 @@ class DualReadAccounting {
       }
       divergenceDetails.add(
         DualReadDivergenceDetail(
+          mismatchKey: 'session:${comparison.sessionId}:${mismatch.field}',
           axis: 'session',
           sessionId: comparison.sessionId,
           field: mismatch.field,
@@ -1216,6 +1328,7 @@ class DualReadAccounting {
     required String legacyValue,
     required String foldValue,
     required DualReadDivergenceCause cause,
+    String? mismatchKey,
     int headEpoch = 0,
   }) {
     if (cause == DualReadDivergenceCause.retiredRoundOpenByDesign ||
@@ -1226,7 +1339,8 @@ class DualReadAccounting {
         'session-only divergence cause cannot be recorded on the step axis',
       );
     }
-    if (!noteEvent('stepDivergence:$sessionId:$stepPath')) return false;
+    final completeKey = mismatchKey ?? 'step:$sessionId:$stepPath:$field';
+    if (!noteEvent('stepDivergence:$completeKey')) return false;
     final inWindow = _isInWindow(headEpoch);
     stepDivergences += 1;
     if (inWindow) stepDivergencesInWindow += 1;
@@ -1240,6 +1354,12 @@ class DualReadAccounting {
       case DualReadDivergenceCause.foldBackedMountFacts:
         foldBackedMountFactDivergences += 1;
         if (inWindow) foldBackedMountFactDivergencesInWindow += 1;
+      case DualReadDivergenceCause.moleculeGraphMismatch:
+      case DualReadDivergenceCause.graphApplyPlanMismatch:
+      case DualReadDivergenceCause.successorRelationshipMismatch:
+      case DualReadDivergenceCause.successorDepthMismatch:
+      case DualReadDivergenceCause.nonAtomicCrashGap:
+        break;
       case DualReadDivergenceCause.retiredRoundOpenByDesign:
       case DualReadDivergenceCause.legacyTerminalNoFoldTerminal:
         throw StateError('session-only cause passed step-axis validation');
@@ -1249,6 +1369,7 @@ class DualReadAccounting {
     }
     divergenceDetails.add(
       DualReadDivergenceDetail(
+        mismatchKey: completeKey,
         axis: 'step',
         sessionId: sessionId,
         field: field,
@@ -1260,6 +1381,64 @@ class DualReadAccounting {
       ),
     );
     return true;
+  }
+
+  /// Counts a non-fatal G2 shadow failure.
+  void recordG2Failure(G2ShadowFailureKind kind, {required int headEpoch}) {
+    _g2Observed = true;
+    _g2Failures[kind] = (_g2Failures[kind] ?? 0) + 1;
+    if (_isInWindow(headEpoch)) {
+      _g2FailuresInWindow[kind] = (_g2FailuresInWindow[kind] ?? 0) + 1;
+    }
+  }
+
+  /// Counts one keyed G2 mismatch without contaminating G1 gating counters.
+  bool recordG2Mismatch({
+    required String mismatchKey,
+    required String sessionId,
+    required String coordinate,
+    required String field,
+    required String legacyValue,
+    required String foldValue,
+    required DualReadDivergenceCause cause,
+    required int headEpoch,
+  }) {
+    if (!_g2MismatchCauses.contains(cause)) {
+      throw ArgumentError.value(cause, 'cause', 'not a G2 mismatch cause');
+    }
+    _g2Observed = true;
+    if (!noteEvent('g2Divergence:$mismatchKey')) return false;
+    _g2Mismatches[cause] = (_g2Mismatches[cause] ?? 0) + 1;
+    if (_isInWindow(headEpoch)) {
+      _g2MismatchesInWindow[cause] = (_g2MismatchesInWindow[cause] ?? 0) + 1;
+    }
+    divergenceDetails.add(
+      DualReadDivergenceDetail(
+        mismatchKey: mismatchKey,
+        axis: 'g2',
+        sessionId: sessionId,
+        field: field,
+        legacyValue: legacyValue,
+        foldValue: foldValue,
+        occurredAt: _clock().toUtc(),
+        activeStepPath: coordinate,
+        cause: cause,
+      ),
+    );
+    return true;
+  }
+
+  /// Plain immutable snapshot used by the SDK's per-round diagnostic adapter.
+  G2ShadowCounterSnapshot get g2Snapshot => G2ShadowCounterSnapshot(
+    failures: _g2Failures,
+    failuresInWindow: _g2FailuresInWindow,
+    mismatches: _g2Mismatches,
+    mismatchesInWindow: _g2MismatchesInWindow,
+  );
+
+  /// Marks an actually-executed G2 comparison, including a clean one.
+  void beginG2Round() {
+    _g2Observed = true;
   }
 
   /// Every LAG class's live population — §0.3's gate (b), "all lag classes
@@ -1278,6 +1457,7 @@ class DualReadAccounting {
     DateTime? firstEpochClaimedAt,
     int appendAckP99Ms = 0,
   }) {
+    final g2 = g2Snapshot;
     final divergencesByFieldHistorical = <String, int>{
       for (final entry in divergencesByField.entries)
         entry.key: entry.value - (divergencesByFieldInWindow[entry.key] ?? 0),
@@ -1379,6 +1559,20 @@ class DualReadAccounting {
       'first_epoch_claimed_at': firstEpochClaimedAt?.toUtc().toIso8601String(),
       'append_ack_p99_ms': appendAckP99Ms,
       'barrier_would_refuse': barrierWouldRefuse,
+      if (_g2Observed) ...{
+        for (final kind in G2ShadowFailureKind.values) ...{
+          'g2_${kind.wire}s': g2.failure(kind),
+          'g2_${kind.wire}s_in_window': g2.failureInWindow(kind),
+          'g2_${kind.wire}s_historical':
+              g2.failure(kind) - g2.failureInWindow(kind),
+        },
+        for (final cause in _g2MismatchCauses) ...{
+          _g2CounterKey(cause): g2.mismatch(cause),
+          '${_g2CounterKey(cause)}_in_window': g2.mismatchInWindow(cause),
+          '${_g2CounterKey(cause)}_historical':
+              g2.mismatch(cause) - g2.mismatchInWindow(cause),
+        },
+      },
     };
   }
 
@@ -1451,7 +1645,10 @@ class DualReadAccounting {
     'divergence_details': [
       for (final detail in divergenceDetails) detail.toJson(),
     ],
-    'counter_semantics': Map<String, String>.from(kDualReadCounterSemantics),
+    'counter_semantics': <String, String>{
+      for (final entry in kDualReadCounterSemantics.entries)
+        if (_g2Observed || !entry.key.startsWith('g2_')) entry.key: entry.value,
+    },
   };
 
   /// The note body — the JSON above, encoded. Deterministic key order (the
@@ -1484,6 +1681,29 @@ class DualReadAccounting {
     ),
   );
 }
+
+const Set<DualReadDivergenceCause> _g2MismatchCauses = {
+  DualReadDivergenceCause.moleculeGraphMismatch,
+  DualReadDivergenceCause.graphApplyPlanMismatch,
+  DualReadDivergenceCause.successorRelationshipMismatch,
+  DualReadDivergenceCause.successorDepthMismatch,
+  DualReadDivergenceCause.nonAtomicCrashGap,
+  DualReadDivergenceCause.unexplained,
+};
+
+String _g2CounterKey(DualReadDivergenceCause cause) => switch (cause) {
+  DualReadDivergenceCause.moleculeGraphMismatch =>
+    'g2_molecule_graph_mismatches',
+  DualReadDivergenceCause.graphApplyPlanMismatch =>
+    'g2_graph_apply_plan_mismatches',
+  DualReadDivergenceCause.successorRelationshipMismatch =>
+    'g2_successor_relationship_mismatches',
+  DualReadDivergenceCause.successorDepthMismatch =>
+    'g2_successor_depth_mismatches',
+  DualReadDivergenceCause.nonAtomicCrashGap => 'g2_non_atomic_crash_gaps',
+  DualReadDivergenceCause.unexplained => 'g2_unexplained_mismatches',
+  _ => throw ArgumentError.value(cause, 'cause', 'not a G2 mismatch cause'),
+};
 
 // ── the terminal-reconcile trigger (r8 — V2-B1, r9 — V3-B1) ───────────────
 

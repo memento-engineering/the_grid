@@ -6,7 +6,8 @@ library;
 
 import 'dart:io';
 
-import 'package:beads_dart/beads_dart.dart' show Bead, BeadStatus, IssueType;
+import 'package:beads_dart/beads_dart.dart'
+    show Bead, BeadDependency, BeadStatus, DependencyType, IssueType;
 import 'package:grid_cli/grid_cli.dart';
 import 'package:grid_trajectory/grid_trajectory.dart'
     show
@@ -253,6 +254,63 @@ void main() {
     test('no record is null — a first-try mount, not a zero', () async {
       final reader = BdLegacyMountAttemptReader((_) async => const []);
       expect(await reader.attemptCount('tg-9abc'), isNull);
+    });
+  });
+
+  group('BdLegacyG2Reader', () {
+    final oldBuild = stepBead(
+      id: 'step-old',
+      metadata: const {
+        'grid.step.session': 'tranquility-1',
+        'grid.step.path': 'build',
+      },
+    );
+    final newBuild = stepBead(
+      id: 'step-new',
+      metadata: const {
+        'grid.step.session': 'tranquility-1',
+        'grid.step.path': 'build',
+      },
+    );
+    final verify = stepBead(
+      id: 'step-verify',
+      metadata: const {
+        'grid.step.session': 'tranquility-1',
+        'grid.step.path': 'verify',
+      },
+    );
+    final dependencies = <BeadDependency>[
+      const BeadDependency(
+        issueId: 'step-new',
+        dependsOnId: 'step-old',
+        type: DependencyType.supersedes,
+      ),
+      const BeadDependency(
+        issueId: 'step-new',
+        dependsOnId: 'step-verify',
+        type: DependencyType.blocks,
+      ),
+    ];
+    final reader = BdLegacyG2Reader.fromFetch(
+      (_) async =>
+          (beads: [oldBuild, newBuild, verify], dependencies: dependencies),
+    );
+
+    test('normalizes the legacy semantic graph', () async {
+      final graph = await reader.graphView('tranquility-1');
+      expect(graph!.nodes, {'build', 'verify'});
+      expect(graph.edges, hasLength(1));
+      expect(graph.edges.single.fromPath, 'build');
+      expect(graph.edges.single.toPath, 'verify');
+      expect(graph.edges.single.kind, 'blocks');
+    });
+
+    test('normalizes successor relationship and depth', () async {
+      final successors = await reader.successorViews('tranquility-1');
+      expect(successors, hasLength(1));
+      expect(successors.single.stepPath, 'build');
+      expect(successors.single.supersedesId, 'step-old');
+      expect(successors.single.depth, 1);
     });
   });
 }

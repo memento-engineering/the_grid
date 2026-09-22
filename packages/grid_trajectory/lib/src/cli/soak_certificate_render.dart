@@ -92,6 +92,17 @@ List<String> renderSoakCertificate(SoakCertificate certificate) {
         '${boot.unjoinedRounds == 0 ? '' : ' · unjoined ${boot.unjoinedRounds}'}'
         '${boot.nonRoundNotes == 0 ? '' : ' · non-round summaries ${boot.nonRoundNotes}'}',
       );
+    for (final note in boot.g2DiagnosticRounds) {
+      final nonzero = <String>[
+        for (final key in kG2DiagnosticCounters)
+          if ((note.intOf(key) ?? 0) > 0) '$key ${note.intOf(key)}',
+      ];
+      lines.add(
+        '      g2 round epoch ${boot.epoch} · seq ${note.seq} · session '
+        '${note.sessionId} · taxonomy '
+        '${nonzero.isEmpty ? 'none' : nonzero.join(' · ')}',
+      );
+    }
   }
   lines.addAll(renderCertificateChecklist());
   return lines;
