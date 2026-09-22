@@ -85,7 +85,7 @@ void main() {
     );
     final state = FakeSnapshotSource(_graph(const []));
     final bridge = StationJoinBridge(work: work, state: state)..start();
-    final driver = StationDriver(bridge: bridge);
+    final driver = StationDriver(bridge: bridge, clock: () => _now);
     addTearDown(driver.dispose);
     addTearDown(work.close);
     addTearDown(state.close);
