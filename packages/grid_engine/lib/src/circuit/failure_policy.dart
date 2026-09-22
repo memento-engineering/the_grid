@@ -11,7 +11,87 @@ import 'package:grid_runtime/grid_runtime.dart' show StepFailureClass;
 import '../sdk/capability_failure.dart';
 import '../sdk/circuit.dart' show Backoff;
 import '../sdk/supervision_policy.dart';
+import '../domain/trajectory_views.dart' show StepCursorView;
 import 'harness_throttle.dart';
+
+/// The durable facts needed to re-evaluate one adopted failed step.
+///
+/// This value deliberately carries no exhaustion verdict. Adoption feeds its
+/// [kind] and [failureClass] back through [resolveRetryPolicy], the same policy
+/// authority a live failure uses.
+final class PersistedFailureEvidence {
+  /// Creates decoded evidence from one collapsed `step.transition` tail.
+  const PersistedFailureEvidence({
+    required this.failureClass,
+    required this.kind,
+    required this.incarnation,
+    required this.attemptId,
+    required this.startedAt,
+    required this.cooldownUntil,
+    required this.restartBudget,
+  });
+
+  /// The engine-owned durable failure class.
+  final StepFailureClass failureClass;
+
+  /// The existing capability-policy lane corresponding to [failureClass].
+  final CapabilityFailureKind kind;
+
+  /// The failed transition's incarnation (the persisted restart count).
+  final int incarnation;
+
+  /// The attempt that authored the failed transition, when recorded.
+  final String? attemptId;
+
+  /// When that attempt started, when recorded.
+  final DateTime? startedAt;
+
+  /// The durable retry cooldown, when the failure retained budget.
+  final DateTime? cooldownUntil;
+
+  /// The remaining restart budget recorded on the failed transition.
+  final int restartBudget;
+}
+
+/// Decodes policy-neutral failure evidence from a collapsed trajectory tail.
+///
+/// Only a complete `failed` row participates. Unknown failure classes are
+/// refused rather than guessed; adoption must never invent a retry lane.
+PersistedFailureEvidence? readPersistedFailureEvidence(StepCursorView view) {
+  if (view.stepState != 'failed' ||
+      view.failureClass == null ||
+      view.restartBudget == null) {
+    return null;
+  }
+  final failureClass = switch (view.failureClass!) {
+    'work' => StepFailureClass.work,
+    'no_result' => StepFailureClass.noResult,
+    'invalid_result' => StepFailureClass.invalidResult,
+    'store_unavailable' => StepFailureClass.storeUnavailable,
+    'infra' => StepFailureClass.infra,
+    'unknown' || _ => null,
+  };
+  if (failureClass == null) return null;
+  final kind = switch (failureClass) {
+    StepFailureClass.infra ||
+    StepFailureClass.noResult => CapabilityFailureKind.noResult,
+    StepFailureClass.invalidResult => CapabilityFailureKind.invalidResult,
+    StepFailureClass.work ||
+    StepFailureClass.storeUnavailable => CapabilityFailureKind.work,
+    StepFailureClass.unknown => throw StateError(
+      'unknown failure class passed the decoder guard',
+    ),
+  };
+  return PersistedFailureEvidence(
+    failureClass: failureClass,
+    kind: kind,
+    incarnation: view.incarnation,
+    attemptId: view.attemptId,
+    startedAt: view.startedAt,
+    cooldownUntil: view.cooldownUntil,
+    restartBudget: view.restartBudget!,
+  );
+}
 
 /// The durable class for a reported [kind] plus the host's [ranFor] evidence.
 ///
@@ -97,3 +177,16 @@ String nonResultGateReason({
       'session $sessionId, step $nodePath'
       '${reason.isEmpty ? '' : ' — $reason'}';
 }
+
+/// Builds the adoption-time gate reason for exhausted durable evidence.
+///
+/// [detail] is the existing throttle/non-result diagnostic produced by the
+/// leaf host. This helper appends the durable facts every adopted exhaustion
+/// reason must expose without choosing whether the failure parks or latches.
+String exhaustionGateReason({
+  required PersistedFailureEvidence evidence,
+  required String nodePath,
+  required String detail,
+}) =>
+    '$detail — step $nodePath, failure_class=${evidence.failureClass.wire}, '
+    'restart_budget=${evidence.restartBudget} (spent)';
