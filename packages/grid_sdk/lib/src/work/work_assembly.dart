@@ -1071,9 +1071,10 @@ typedef StationWorkDriverBuilder =
 /// resource without acquiring the default; once returned, that resource's
 /// lifetime transfers to this assembly. Null builders invoke their default
 /// exactly once in the existing acquisition order.
-/// [endpointWarmRunnerFactory] is a boot-only, read-only seam for the one
-/// bounded bd query that materializes an ephemeral proxied endpoint before
-/// initial resolution. It does not participate in later sync or reconnects.
+/// [endpointWarmRunnerFactory] is a boot-only, read-only seam for the bounded
+/// bd calls that materialize an ephemeral proxied endpoint and verify that the
+/// resolved binary can serve the store's dolt mode. It does not participate in
+/// later sync or reconnects.
 ///
 /// [registryBuilder] retains the original one-argument capability seam.
 /// [registryBuilderWithSpecWriter] adds the SPECIFY-authored prose seam without
@@ -1251,6 +1252,22 @@ Future<StationWorkRuntime> assembleStationWork({
     );
   }
 
+  final bdModeCapabilities = <String, Future<void>>{};
+  for (final entry in workspacesByName.entries) {
+    await _requireBdModeCapability(
+      storeLabel: 'assembleStationWork: substation "${entry.key}"',
+      workspace: entry.value,
+      endpointWarmRunnerFactory: endpointWarmRunnerFactory,
+      capabilities: bdModeCapabilities,
+    );
+  }
+  await _requireBdModeCapability(
+    storeLabel: 'assembleStationWork: state store',
+    workspace: stateWs,
+    endpointWarmRunnerFactory: endpointWarmRunnerFactory,
+    capabilities: bdModeCapabilities,
+  );
+
   final refusalSink = onRefusal ?? (String m) => stdout.writeln(m);
   final MaintenanceSink stateStorePruneSink =
       onStateStorePruneReceipt ?? (String message) => stdout.writeln(message);
@@ -1288,6 +1305,8 @@ Future<StationWorkRuntime> assembleStationWork({
       workspacesByName: workspacesByName,
       stateWorkspace: stateWs,
       stateSubstation: stateSubstation,
+      endpointWarmRunnerFactory: endpointWarmRunnerFactory,
+      bdModeCapabilities: bdModeCapabilities,
       refusalSink: refusalSink,
       disposers: disposers,
     );
@@ -1335,6 +1354,8 @@ Future<StationWorkRuntime> _acquireStationWork({
   required Map<String, BeadsWorkspace> workspacesByName,
   required BeadsWorkspace stateWorkspace,
   required String stateSubstation,
+  required EndpointWarmRunnerFactory? endpointWarmRunnerFactory,
+  required Map<String, Future<void>> bdModeCapabilities,
   required void Function(String message) refusalSink,
   required List<({String step, FutureOr<void> Function() dispose})> disposers,
 }) async {
@@ -2110,17 +2131,25 @@ Future<StationWorkRuntime> _acquireStationWork({
     rootsByName: rootsByName,
     specsByName: <String, SubstationWorkSpec>{},
     dryRun: dryRun,
-    buildMember: (workspace, storeName) => GridRuntimeFactory.build(
-      workspace: workspace,
-      preferSql: preferSql,
-      syncFloorInterval: syncFloorInterval,
-      lifecycleTypes: {...IssueType.coreTypes, ...GridIssueTypes.all},
-      onDirtySourceClosed: (source) => transport?.flare(
-        'sync.dirtySignalsClosed',
-        {'substation': storeName, 'source': source},
-      ),
-      onReadRefusal: (message) => unresolvedSink('[$storeName] $message'),
-    ),
+    buildMember: (workspace, storeName) async {
+      await _requireBdModeCapability(
+        storeLabel: 'attach "$storeName"',
+        workspace: workspace,
+        endpointWarmRunnerFactory: endpointWarmRunnerFactory,
+        capabilities: bdModeCapabilities,
+      );
+      return GridRuntimeFactory.build(
+        workspace: workspace,
+        preferSql: preferSql,
+        syncFloorInterval: syncFloorInterval,
+        lifecycleTypes: {...IssueType.coreTypes, ...GridIssueTypes.all},
+        onDirtySourceClosed: (source) => transport?.flare(
+          'sync.dirtySignalsClosed',
+          {'substation': storeName, 'source': source},
+        ),
+        onReadRefusal: (message) => unresolvedSink('[$storeName] $message'),
+      );
+    },
     buildWorkWriter: (spec, bundle) => StationBeadWriter(
       bd: BdCliService(
         // Runtime-attached dry seats obey the same ownership rule as coded
@@ -2139,6 +2168,28 @@ Future<StationWorkRuntime> _acquireStationWork({
   runtime._bindRoster(roster);
   commands.bindRoster(roster);
   return runtime;
+}
+
+Future<void> _requireBdModeCapability({
+  required String storeLabel,
+  required BeadsWorkspace workspace,
+  required EndpointWarmRunnerFactory? endpointWarmRunnerFactory,
+  required Map<String, Future<void>> capabilities,
+}) async {
+  if (workspace.mode != DoltMode.proxiedServer) return;
+
+  final runner =
+      endpointWarmRunnerFactory?.call(workspace.root) ??
+      ProcessBdRunner(workspaceRoot: workspace.root);
+  final bd = BdCliService(runner, doltMode: workspace.mode);
+  final key = '${bd.resolvedExecutable}\u0000proxied-server';
+  await capabilities.putIfAbsent(key, () async {
+    try {
+      await bd.ensureDoltModeSupported(storePath: workspace.root);
+    } on BdGuardrailRefused catch (error) {
+      throw StoreRefusal('$storeLabel: ${error.message}');
+    }
+  });
 }
 
 /// The station's WORK-SIGNAL probe — the live binding of the engine's COMPLETION
