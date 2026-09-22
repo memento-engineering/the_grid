@@ -135,15 +135,75 @@ void main() {
       );
     });
 
-    test('every keyFor emission is a valid bd metadata key', () {
+    test('keyFor preserves legal A42 field literals byte-for-byte', () {
+      expect(
+        ResultKeys.keyFor('tg-1/land', 'pr_url'),
+        'grid.result.tg_h1_sland.pr_url',
+      );
+      expect(
+        ResultKeys.keyFor('tg-1/route', 'route_verdict'),
+        'grid.result.tg_h1_sroute.route_verdict',
+      );
+      expect(
+        ResultKeys.keyFor('tg-1/deliver', 'merged_sha'),
+        'grid.result.tg_h1_sdeliver.merged_sha',
+      );
+
       for (final path in [
         'pow-1rn.3/spec_review/intake',
         'tg-1/review/test-coverage',
         'tg-burn/follower',
       ]) {
-        final key = ResultKeys.keyFor(path, ResultKeys.grade);
-        expect(bdKeyCharset.hasMatch(key), isTrue, reason: key);
+        for (final field in ['result', 'result_2', 'a0_b9']) {
+          final key = ResultKeys.keyFor(path, field);
+          expect(bdKeyCharset.hasMatch(key), isTrue, reason: key);
+        }
       }
+    });
+
+    test('keyFor refuses an invalid field with its exact cause', () {
+      expect(
+        () => ResultKeys.keyFor('tg-1/agent', 'source-state'),
+        throwsA(
+          isA<ArgumentError>()
+              .having((error) => error.name, 'name', 'field')
+              .having(
+                (error) => error.invalidValue,
+                'invalidValue',
+                'source-state',
+              )
+              .having((error) => '$error', 'message', contains('tg-1/agent'))
+              .having(
+                (error) => '$error',
+                'offending character',
+                contains('"-"'),
+              )
+              .having((error) => '$error', 'grammar', contains('[a-z0-9_]+')),
+        ),
+      );
+      expect(
+        () => ResultKeys.keyFor('tg-1/agent', ''),
+        throwsA(
+          isA<ArgumentError>()
+              .having((error) => error.name, 'name', 'field')
+              .having((error) => '$error', 'node path', contains('tg-1/agent'))
+              .having((error) => '$error', 'empty marker', contains('<empty>'))
+              .having((error) => '$error', 'grammar', contains('[a-z0-9_]+')),
+        ),
+      );
+      expect(
+        () => ResultKeys.keyFor('tg-1/agent', 'sourceState'),
+        throwsA(
+          isA<ArgumentError>()
+              .having((error) => '$error', 'field', contains('sourceState'))
+              .having(
+                (error) => '$error',
+                'offending character',
+                contains('"S"'),
+              )
+              .having((error) => '$error', 'grammar', contains('[a-z0-9_]+')),
+        ),
+      );
     });
 
     test('decode is lenient on RAW legacy paths (historical beads): unknown '

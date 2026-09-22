@@ -243,11 +243,32 @@ abstract final class ResultKeys {
   /// The flat-key namespace for the per-node step result.
   static const prefix = 'grid.result.';
 
+  static final RegExp _fieldCharacter = RegExp(r'^[a-z0-9_]$');
+
   /// The flat key for [field] of the node at [nodePath]
   /// (`grid.result.{encoded nodePath}.{field}` — see [encodeNodePathKey] for
-  /// why the path segment is encoded, tg-6e4j).
-  static String keyFor(String nodePath, String field) =>
-      '$prefix${encodeNodePathKey(nodePath)}.$field';
+  /// why the path segment is encoded, tg-6e4j). The A42 field segment remains
+  /// raw and therefore must already be a bd-safe result identifier.
+  static String keyFor(String nodePath, String field) {
+    String? offending;
+    for (final scalar in field.runes) {
+      final character = String.fromCharCode(scalar);
+      if (!_fieldCharacter.hasMatch(character)) {
+        offending = character;
+        break;
+      }
+    }
+    if (field.isEmpty || offending != null) {
+      throw ArgumentError.value(
+        field,
+        'field',
+        'invalid result field "$field" for node path "$nodePath": '
+            'offending character "${offending ?? '<empty>'}"; '
+            'expected [a-z0-9_]+',
+      );
+    }
+    return '$prefix${encodeNodePathKey(nodePath)}.$field';
+  }
 
   /// The committee VERDICT payload fields the code asset's `route` step reads
   /// off each critic lane's result node (`grid.result.<lane>.<field>`). the_grid

@@ -60,24 +60,29 @@ void main() {
       expect(back!.kind, kDefaultKind);
     });
 
-    test('rides the SAME disjoint result namespace every other step result '
-        'does — merges without collision alongside nodeResultMetadata', () {
+    test('legacy camel-case claim fields are refused by the result writer', () {
       const grant = LeaseGrant(
         leaseId: 'lease-9',
         station: 'peer.local',
         ttlSeconds: 30,
         fencingToken: 2,
       );
-      final merged = nodeResultMetadata(
-        'tg-burn/follower',
-        leaseGrantToResultPayload(grant),
+      expect(
+        () => nodeResultMetadata(
+          'tg-burn/follower',
+          leaseGrantToResultPayload(grant),
+        ),
+        throwsA(
+          isA<ArgumentError>()
+              .having((error) => error.invalidValue, 'field', 'leaseId')
+              .having(
+                (error) => '$error',
+                'node path',
+                contains('tg-burn/follower'),
+              )
+              .having((error) => '$error', 'grammar', contains('[a-z0-9_]+')),
+        ),
       );
-      expect(merged, {
-        'grid.result.tg_hburn_sfollower.leaseId': 'lease-9',
-        'grid.result.tg_hburn_sfollower.claimedBy': 'peer.local',
-        'grid.result.tg_hburn_sfollower.fencingToken': '2',
-        'grid.result.tg_hburn_sfollower.kind': kDefaultKind,
-      });
     });
   });
 }

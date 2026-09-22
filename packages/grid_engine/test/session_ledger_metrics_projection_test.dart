@@ -4,15 +4,18 @@ import 'package:test/test.dart';
 
 import 'fixtures/session_ledger_metrics_snapshot.dart';
 
+String _legacyResultKey(String nodePath, String field) =>
+    '${ResultKeys.prefix}${encodeNodePathKey(nodePath)}.$field';
+
 Bead _landedMetricsSession(String id, String nodePath) => Bead(
   id: id,
   issueType: GridIssueTypes.session,
   status: BeadStatus.closed,
   metadata: <String, dynamic>{
     SessionBeadKeys.workBead: 'tg-work-2',
-    ResultKeys.keyFor(nodePath, ResultKeys.delivery): 'pr',
-    ResultKeys.keyFor(nodePath, ResultMetricFields.costUsd): '10',
-    ResultKeys.keyFor(nodePath, ResultMetricFields.tokensIn): '50',
+    _legacyResultKey(nodePath, ResultKeys.delivery): 'pr',
+    _legacyResultKey(nodePath, ResultMetricFields.costUsd): '10',
+    _legacyResultKey(nodePath, ResultMetricFields.tokensIn): '50',
   },
 );
 
