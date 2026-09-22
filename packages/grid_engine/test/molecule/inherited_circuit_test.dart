@@ -23,7 +23,7 @@ void main() {
     };
 
     test(
-      '== is true for independently-built instances with the same (root, cursor)',
+      '== is true for independently-built instances with the same values',
       () {
         final first = InheritedCircuit(
           root: BeadPathKey(List.of(root.crumbs)),
@@ -107,6 +107,29 @@ void main() {
         cursor: cursorA,
       );
       expect(a, isNot(b));
+    });
+
+    test('!= when a projected lease changes', () {
+      final before = InheritedCircuit(
+        root: root,
+        beadIdByNodePath: const {},
+        cursor: cursorA,
+        projectedLeases: const {'build': ProjectionAttemptLeaseAbsent()},
+      );
+      final after = InheritedCircuit(
+        root: root,
+        beadIdByNodePath: const {},
+        cursor: cursorA,
+        projectedLeases: const {
+          'build': ProjectionAttemptLeaseHeld(
+            attemptId: 'attempt-1',
+            pid: 42,
+            pgid: 41,
+          ),
+        },
+      );
+
+      expect(before, isNot(after));
     });
 
     test('cursor equality is independent of Map insertion order', () {

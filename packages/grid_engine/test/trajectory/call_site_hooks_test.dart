@@ -980,7 +980,7 @@ void main() {
       final b = _vendor(sink: sink);
       final swept = await b.vendor.sweepOrphanedLeases(
         candidates: [
-          (
+          LeaseSweepCandidate(
             stepBeadId: _stepBeadId,
             willRemount: true,
             metadata: {
@@ -1011,7 +1011,7 @@ void main() {
       // still happens; there is simply nothing to key a record on.
       final swept = await b.vendor.sweepOrphanedLeases(
         candidates: [
-          (
+          LeaseSweepCandidate(
             stepBeadId: _stepBeadId,
             willRemount: true,
             metadata: {

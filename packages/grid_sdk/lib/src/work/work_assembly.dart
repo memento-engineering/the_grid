@@ -1653,6 +1653,11 @@ Future<StationWorkRuntime> _acquireStationWork({
   // the bridge or the reconciler, so the composition below is the pre-cut
   // composition, not a gated version of the new one.
   final dualReadArmed = trajectoryConfig.dualRead != DualReadMode.off;
+  final g2ReadArmed = trajectoryConfig.g2Posture != G2Posture.off;
+  final g2ReadAuthoritative = switch (trajectoryConfig.g2Posture) {
+    G2Posture.cut => true,
+    G2Posture.off || G2Posture.shadow => false,
+  };
   // THE SESSION-AXIS DUAL READ (cut-wiring C2/C3) — ONE accounting per boot,
   // shared by the join bridge's comparator pass and the restart reconciler's,
   // because the durable round summary must not report two different truths for
@@ -1863,6 +1868,37 @@ Future<StationWorkRuntime> _acquireStationWork({
     recorder: recorder,
     transportServices: ServiceBundle(transport: transport),
   );
+  ProjectionGraphRead? projectionGraphFor(String sessionId) {
+    if (!g2ReadAuthoritative) return null;
+    final steps = trajectory.stepCursors;
+    final edges = trajectory.moleculeEdges;
+    final processes = trajectory.processIdentities;
+    if (edges == null ||
+        steps.health != TrajectorySnapshotHealth.live ||
+        edges.health != TrajectorySnapshotHealth.live ||
+        processes.health != TrajectorySnapshotHealth.live) {
+      return null;
+    }
+    var round = 0;
+    for (final row in steps.byP2SessionId(sessionId)) {
+      if (row.round > round) round = row.round;
+    }
+    for (final edge in edges.bySessionId(sessionId)) {
+      if (edge.round > round) round = edge.round;
+    }
+    for (final identity in processes.bySessionId(sessionId)) {
+      if (identity.round > round) round = identity.round;
+    }
+    return ProjectionGraphRead(
+      sessionId: sessionId,
+      round: round,
+      steps: steps,
+      edges: edges,
+      processIdentities: processes,
+      isAuthoritative: true,
+    );
+  }
+
   final commands = StationCommandHandler(
     stateSource: stateSource,
     refreshState: stateBundle.runtime.requery,
@@ -1881,6 +1917,7 @@ Future<StationWorkRuntime> _acquireStationWork({
     // constructor — the same three inputs the bridge derives engagement from.
     // UNWIRED at `off` (r13): the handler never reaches the mirror at all.
     stepSnapshot: dualReadArmed ? () => trajectory.stepCursors : null,
+    projectionGraphFor: g2ReadAuthoritative ? projectionGraphFor : null,
     headEpochForSession: dualReadArmed
         ? (sessionId) =>
               sessionHeadEpochOf(trajectory.sessionHeads.bySessionId(sessionId))
@@ -1936,6 +1973,7 @@ Future<StationWorkRuntime> _acquireStationWork({
     // pass, teardown-replay observer append included.
     headSnapshot: dualReadArmed ? () => trajectory.sessionHeads : null,
     stepSnapshot: dualReadArmed ? () => trajectory.stepCursors : null,
+    projectionGraphFor: g2ReadAuthoritative ? projectionGraphFor : null,
     dualReadAccounting: dualReadAccounting,
     // C3: the reconciler serves the SAME overlay under the SAME posture — a
     // disposition must not depend on which pass asked for it.
@@ -1975,6 +2013,14 @@ Future<StationWorkRuntime> _acquireStationWork({
         : (listener) =>
               trajectory.onStepCursorsChanged(listener, fireImmediately: false),
     stepDualRead: stepDualRead,
+    edgeSnapshot: g2ReadArmed ? () => trajectory.moleculeEdges! : null,
+    onEdgeChanges: !g2ReadArmed
+        ? null
+        : (listener) => trajectory.onMoleculeEdgesChanged(
+            listener,
+            fireImmediately: false,
+          )!,
+    projectionGraphAuthoritative: g2ReadAuthoritative,
     // THE BARRIER's third mirror (§W2.4 W2-B): the pre-fetched P6
     // process/worktree identity read, on the same terms as P1 and P2 — a
     // value the pure join takes, null at `off` so the clause stays disarmed.
@@ -1982,10 +2028,10 @@ Future<StationWorkRuntime> _acquireStationWork({
     // the SAME JoinedSnapshot and bead-scoped eligibility revision consumed by
     // StationAdmissionAuthority (admission-authority-in-process-cut), so a
     // resumed heartbeat cannot leave the authority evaluating a stale basis.
-    processIdentitySnapshot: dualReadArmed
+    processIdentitySnapshot: dualReadArmed || g2ReadArmed
         ? () => trajectory.processIdentities
         : null,
-    onProcessIdentityChanges: !dualReadArmed
+    onProcessIdentityChanges: !(dualReadArmed || g2ReadArmed)
         ? null
         : (listener) => trajectory.onProcessIdentitiesChanged(
             listener,

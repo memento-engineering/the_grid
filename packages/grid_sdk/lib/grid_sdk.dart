@@ -182,6 +182,7 @@ export 'src/trajectory/session_head_mirror.dart';
 // The P2 MIRROR (C4) — the same surface for the step axis, implementing the
 // engine's `TrajectoryStepSnapshot` seam and its `byP2SessionId` index.
 export 'src/trajectory/step_cursor_mirror.dart';
+export 'src/trajectory/molecule_edge_mirror.dart';
 export 'src/trajectory/trajectory_config.dart';
 export 'src/trajectory/process_identity_mirror.dart';
 export 'src/trajectory/attempt_liveness_recovery.dart';

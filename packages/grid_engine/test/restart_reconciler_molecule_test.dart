@@ -156,11 +156,12 @@ GraphSnapshot _stateSnapshotOf(List<Bead> beads) => GraphSnapshot.fromParts(
   capturedAt: DateTime(2026, 7, 19),
 );
 
-final class _FoldStepRow implements StepCursorView {
+final class _FoldStepRow implements StepTransitionCursorView {
   const _FoldStepRow({
     required this.sessionId,
     required this.stepPath,
     required this.stepState,
+    this.attemptId,
   });
 
   @override
@@ -176,7 +177,7 @@ final class _FoldStepRow implements StepCursorView {
   @override
   int get incarnation => 0;
   @override
-  String? get attemptId => null;
+  final String? attemptId;
   @override
   int? get supersededByStepRound => null;
   @override
@@ -192,7 +193,76 @@ final class _FoldStepRow implements StepCursorView {
   @override
   String? get failureClass => null;
   @override
+  Map<String, Object?>? get result => null;
+  @override
   int get lastSeq => 1;
+}
+
+final class _EmptyEdges implements TrajectoryStepEdgeSnapshot {
+  const _EmptyEdges();
+  @override
+  int get version => 1;
+  @override
+  TrajectorySnapshotHealth get health => TrajectorySnapshotHealth.live;
+  @override
+  DateTime? get seededAt => DateTime(2026, 9, 22);
+  @override
+  Iterable<TrajectoryStepEdgeView> get rows => const [];
+  @override
+  Iterable<TrajectoryStepEdgeView> bySessionId(String sessionId) => const [];
+}
+
+final class _ProcessRow implements ProcessIdentityView {
+  const _ProcessRow({required this.attemptId});
+  @override
+  final String attemptId;
+  @override
+  String get sessionId => 'tgdog-m1';
+  @override
+  int get round => 0;
+  @override
+  String get stepPath => 'tg-w1/job';
+  @override
+  int get stepRound => 0;
+  @override
+  int get incarnation => 0;
+  @override
+  int? get pid => 4243;
+  @override
+  int? get pgid => 4242;
+  @override
+  String? get leaseState => 'held';
+  @override
+  String? get worktree => null;
+  @override
+  String? get branch => null;
+  @override
+  String? get baseSha => null;
+  @override
+  bool? get adoptedExisting => null;
+  @override
+  String? get worktreeState => null;
+  @override
+  String? get predecessorAttemptId => null;
+  @override
+  int get lastSeq => 1;
+}
+
+final class _Processes implements TrajectoryProcessIdentitySnapshot {
+  const _Processes(this.rows);
+  @override
+  final List<ProcessIdentityView> rows;
+  @override
+  int get version => 1;
+  @override
+  TrajectorySnapshotHealth get health => TrajectorySnapshotHealth.live;
+  @override
+  DateTime? get seededAt => DateTime(2026, 9, 22);
+  @override
+  DateTime? get lastTickAt => DateTime(2026, 9, 22);
+  @override
+  Iterable<ProcessIdentityView> bySessionId(String sessionId) =>
+      rows.where((row) => row.sessionId == sessionId);
 }
 
 final class _FoldStepSnapshot implements TrajectoryStepSnapshot {
@@ -292,6 +362,7 @@ _harness({
   TrajectoryStepSnapshot? stepSnapshot,
   DualReadAccounting? dualReadAccounting,
   DualReadMode dualReadMode = DualReadMode.off,
+  ProjectionGraphRead? Function(String sessionId)? projectionGraphFor,
 }) {
   final git = _FakeGit(worktrees: worktrees ?? [_wt('tg-w1')]);
   final groups = _FakeProcessGroupController(alivePids: alivePids);
@@ -331,6 +402,7 @@ _harness({
     stepSnapshot: stepSnapshot == null ? null : () => stepSnapshot,
     dualReadAccounting: dualReadAccounting,
     dualReadMode: dualReadMode,
+    projectionGraphFor: projectionGraphFor,
     onOrphan: loud.add,
   );
   return (
@@ -348,6 +420,43 @@ const _daemonLease = ProcessHandle(pgid: 5252, pid: 5253, token: 'tok-daemon');
 
 void main() {
   group('RestartReconciler — molecule crash recovery (tg-eli phase 1)', () {
+    test('projection lease drives restart recovery', () async {
+      const attemptId = '01JPROJECTIONATTEMPT000001';
+      final steps = _FoldStepSnapshot(const [
+        _FoldStepRow(
+          sessionId: 'tgdog-m1',
+          stepPath: 'tg-w1/job',
+          stepState: 'running',
+          attemptId: attemptId,
+        ),
+      ], health: TrajectorySnapshotHealth.live);
+      final graph = ProjectionGraphRead(
+        sessionId: 'tgdog-m1',
+        round: 0,
+        steps: steps,
+        edges: const _EmptyEdges(),
+        processIdentities: const _Processes([
+          _ProcessRow(attemptId: attemptId),
+        ]),
+        isAuthoritative: true,
+      );
+      final h = _harness(
+        stateBeads: [
+          _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1'),
+          _stepBead(id: 'tgdog-step-1', sessionId: 'tgdog-m1'),
+        ],
+        alivePids: {4243},
+        alivePgids: const {},
+        projectionGraphFor: (_) => graph,
+      );
+
+      final report = await h.reconciler.reconcile();
+
+      expect(h.groups.signals.first, (4242, ProcessSignal.sigterm));
+      expect(report.sweptLeases.single.handle.attemptId, attemptId);
+      expect(report.sweptLeases.single.handle.token, attemptId);
+    });
+
     test('(a) an orphaned live JOB group: killed through the REAL guarded '
         'terminateGroup, breadcrumb cleared through the chokepoint, reported '
         'LOUD — and the worktree stays respawn-pending for the frontier '

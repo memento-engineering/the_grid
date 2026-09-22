@@ -93,6 +93,7 @@ List<UnclaimedStep> unclaimedSteps(
   required CapabilityFacts stationFacts,
   required Circuit? Function(String circuitId) circuitById,
   required DateTime now,
+  DependencyPathsFor? dependencyPathsFor,
 }) {
   final unclaimed = <UnclaimedStep>[];
   for (final step in eligibleSteps(
@@ -101,6 +102,7 @@ List<UnclaimedStep> unclaimedSteps(
     nodePath,
     circuitById: circuitById,
     now: now,
+    dependencyPathsFor: dependencyPathsFor,
   )) {
     switch (step) {
       case CapabilityStep(:final requires):
@@ -127,6 +129,7 @@ List<UnclaimedStep> unclaimedSteps(
             stationFacts: stationFacts,
             circuitById: circuitById,
             now: now,
+            dependencyPathsFor: dependencyPathsFor,
           ),
         );
     }

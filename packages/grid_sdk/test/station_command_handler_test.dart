@@ -2517,6 +2517,7 @@ void main() {
       TrajectorySnapshotHealth health = TrajectorySnapshotHealth.live,
       DualReadAccounting? accounting,
       int headEpoch = 0,
+      ProjectionGraphRead? graph,
     }) {
       final state = _Source(
         _snapshot([
@@ -2547,6 +2548,7 @@ void main() {
         stateRunner: _RecordingRunner(),
         workRunner: _RecordingRunner(),
         stepSnapshot: () => _StepSnapshot(rows, health: health),
+        projectionGraphFor: graph == null ? null : (_) => graph,
         dualReadMode: mode,
         dualReadAccounting: accounting,
         headEpochForSession: (_) => headEpoch,
@@ -2600,6 +2602,25 @@ void main() {
           rows: [_StepRow(stepPath: 'build', stepState: 'gated')],
           mode: DualReadMode.primary,
         ),
+        isA<GridCommandCompleted>(),
+      );
+    });
+
+    test('G2 graph authority serves the projected park cursor', () async {
+      final steps = _StepSnapshot([
+        _StepRow(stepPath: 'build', stepState: 'gated'),
+      ]);
+      final graph = ProjectionGraphRead(
+        sessionId: 'tgdog-session',
+        round: 0,
+        steps: steps,
+        edges: const _EmptyEdgeSnapshot(),
+        processIdentities: const _EmptyProcessSnapshot(),
+        isAuthoritative: true,
+      );
+
+      expect(
+        await park(beadState: StepState.running, rows: const [], graph: graph),
         isA<GridCommandCompleted>(),
       );
     });
@@ -2781,6 +2802,38 @@ final class _StepSnapshot implements TrajectoryStepSnapshot {
     for (final row in _rows)
       if (row.sessionId == sessionId) row,
   ];
+}
+
+final class _EmptyEdgeSnapshot implements TrajectoryStepEdgeSnapshot {
+  const _EmptyEdgeSnapshot();
+
+  @override
+  Iterable<TrajectoryStepEdgeView> bySessionId(String sessionId) => const [];
+  @override
+  Iterable<TrajectoryStepEdgeView> get rows => const [];
+  @override
+  int get version => 1;
+  @override
+  TrajectorySnapshotHealth get health => TrajectorySnapshotHealth.live;
+  @override
+  DateTime? get seededAt => null;
+}
+
+final class _EmptyProcessSnapshot implements TrajectoryProcessIdentitySnapshot {
+  const _EmptyProcessSnapshot();
+
+  @override
+  Iterable<ProcessIdentityView> bySessionId(String sessionId) => const [];
+  @override
+  Iterable<ProcessIdentityView> get rows => const [];
+  @override
+  int get version => 1;
+  @override
+  TrajectorySnapshotHealth get health => TrajectorySnapshotHealth.live;
+  @override
+  DateTime? get seededAt => null;
+  @override
+  DateTime? get lastTickAt => null;
 }
 
 Bead _session(
@@ -3192,6 +3245,7 @@ StationCommandHandler _handler({
   Map<String, WorkCommandStore> additionalWorkStores = const {},
   StationTrajectoryRecorder? recorder,
   TrajectoryStepSnapshot Function()? stepSnapshot,
+  ProjectionGraphRead? Function(String sessionId)? projectionGraphFor,
   int Function(String sessionId)? headEpochForSession,
   StationAdmissionCeilingSetter? setAdmissionCeiling,
   DualReadMode dualReadMode = DualReadMode.observe,
@@ -3201,6 +3255,7 @@ StationCommandHandler _handler({
   refreshState: refreshState ?? () async {},
   // CONSUMER 3 of the step dual read (cut-wiring C4) — the park check.
   stepSnapshot: stepSnapshot,
+  projectionGraphFor: projectionGraphFor,
   headEpochForSession: headEpochForSession,
   setAdmissionCeiling: setAdmissionCeiling,
   dualReadMode: dualReadMode,

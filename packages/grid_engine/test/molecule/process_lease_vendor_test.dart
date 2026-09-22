@@ -180,9 +180,11 @@ ProcessLeaseRequest _request(
   FakeRuntimeProvider? transport,
   AllocationSink sink = _ignoreAllocationReport,
   ProcessCapability? capability,
+  ProjectionAttemptLeaseRead? projectedLease,
 }) => ProcessLeaseRequest(
   stepBeadId: stepBeadId,
   capability: capability ?? const _FakeProcessCap(),
+  projectedLease: projectedLease,
   inputs: AllocationInputs(
     args: stepArgs('tg-1/lease'),
     transport: transport ?? FakeRuntimeProvider(),
@@ -667,6 +669,85 @@ void main() {
       },
     );
 
+    test('projected held lease adopts without reading bead metadata', () async {
+      final fakes = buildFakes();
+      var metadataReads = 0;
+      final vendor = StationProcessLeaseVendor(
+        writer: fakes.ctx.writer,
+        spawn: _neverSpawn,
+        dispatch: _neverDispatch,
+        metadataOf: (_) async {
+          metadataReads += 1;
+          return null;
+        },
+        liveness: (fence) => true,
+      );
+      final allocation = _alloc(
+        vendor.leaseFor(
+          _request(
+            'tgdog-step-1',
+            projectedLease: const ProjectionAttemptLeaseHeld(
+              attemptId: 'attempt-projected',
+              pid: 222,
+              pgid: 111,
+            ),
+          ),
+        ),
+        sink: (_) {},
+      );
+
+      await allocation.startMounted(FakeTreeContext());
+
+      expect(allocation.adopted, isTrue);
+      expect(
+        allocation.handle,
+        const ProcessHandle(
+          pgid: 111,
+          pid: 222,
+          token: 'attempt-projected',
+          attemptId: 'attempt-projected',
+        ),
+      );
+      expect(metadataReads, 0);
+      expect(fakes.runner.callsFor('update'), isEmpty);
+    });
+
+    test(
+      'projected absent lease reacquires without metadata fallback',
+      () async {
+        final fakes = buildFakes();
+        var metadataReads = 0;
+        const fresh = ProcessHandle(pgid: 9, pid: 10, token: 'fresh');
+        final vendor = StationProcessLeaseVendor(
+          writer: fakes.ctx.writer,
+          spawn: (request, context, args) async => fresh,
+          dispatch: (handle, request, context, args) async => const Ok({}),
+          metadataOf: (_) async {
+            metadataReads += 1;
+            return leaseBreadcrumb(
+              const ProcessHandle(pgid: 111, pid: 222, token: 'legacy'),
+            );
+          },
+          liveness: (fence) => true,
+        );
+        final allocation = _alloc(
+          vendor.leaseFor(
+            _request(
+              'tgdog-step-1',
+              projectedLease: const ProjectionAttemptLeaseAbsent(),
+            ),
+          ),
+          sink: (_) {},
+        );
+
+        await allocation.startMounted(FakeTreeContext());
+
+        expect(allocation.adopted, isFalse);
+        expect(allocation.handle, fresh);
+        expect(metadataReads, 0);
+      },
+    );
+
     test('a prior breadcrumb that FAILS the liveness proof — acquires fresh '
         '(never adopt blind)', () async {
       final fakes = buildFakes();
@@ -860,6 +941,43 @@ void main() {
       expect(alloc.state, AllocationState.gone);
       expect(requestTransport.stopped, ['tgdog-s/tg-1/lease']);
     });
+  });
+
+  test('projected absence never falls back to bead lease metadata', () async {
+    final fakes = buildFakes();
+    final vendor = StationProcessLeaseVendor(
+      writer: fakes.ctx.writer,
+      spawn: _neverSpawn,
+      dispatch: _neverDispatch,
+      metadataOf: (_) async => null,
+    );
+    var terminated = false;
+    final swept = await vendor.sweepOrphanedLeases(
+      candidates: [
+        LeaseSweepCandidate(
+          stepBeadId: 'tgdog-step-projected-absent',
+          willRemount: true,
+          projectedLease: const ProjectionAttemptLeaseAbsent(),
+          metadata: {
+            MoleculeStepKeys.kind: StepKind.job.name,
+            MoleculeStepKeys.state: StepState.running.name,
+            ...leaseBreadcrumb(
+              const ProcessHandle(pgid: 41, pid: 42, token: 'legacy-token'),
+            ),
+          },
+        ),
+      ],
+      alive: ({required pgid, required leaderPid}) => true,
+      terminate: ({required pgid, required leaderPid}) async {
+        terminated = true;
+        return GroupTerminateResult.exitedOnTerm;
+      },
+      onOrphan: (_) {},
+    );
+
+    expect(swept, isEmpty);
+    expect(terminated, isFalse);
+    expect(fakes.runner.callsFor('update'), isEmpty);
   });
 
   group('single-writer STRUCTURAL FALSIFIER — grid.lease.* helpers', () {

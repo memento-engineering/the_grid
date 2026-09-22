@@ -170,6 +170,24 @@ void main() {
       // The projected cursor itself was never touched (no write exists here).
       expect(_committeeProjected['tg-1/build']!.state, StepState.complete);
     });
+
+    test('projected validates edges drive invalidation', () {
+      final frontier = liveFrontier(
+        _committee,
+        _committeeProjected,
+        _committeeResults(['critic-correctness']),
+        'tg-1',
+        circuitById: _none,
+        supersedesDepthByPath: const {},
+        now: _clock(),
+        validatesPathsFor: (sourcePath) =>
+            sourcePath.endsWith('/critic-correctness')
+            ? const ['tg-1/build']
+            : const [],
+      );
+
+      expect(frontier.map((step) => step.stepId), ['build']);
+    });
   });
 
   group('generation-atomic waves (tg-ev2w) — a predecessor-generation '

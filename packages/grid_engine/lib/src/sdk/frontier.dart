@@ -22,6 +22,9 @@ library;
 import 'cursor.dart';
 import 'circuit.dart';
 
+/// Returns the projected dependency paths blocked by one full step path.
+typedef DependencyPathsFor = Iterable<String> Function(String stepPath);
+
 /// The full path of [stepId] within a circuit rooted at [nodePath]
 /// (`'$nodePath/$stepId'`, or just [stepId] at an empty root).
 String stepPath(String nodePath, String stepId) =>
@@ -67,11 +70,22 @@ bool depsSatisfied(
   CircuitCursor cursor,
   String nodePath, {
   required Circuit? Function(String circuitId) circuitById,
+  DependencyPathsFor? dependencyPathsFor,
 }) {
+  final projectedPaths = dependencyPathsFor?.call(
+    stepPath(nodePath, step.stepId),
+  );
+  if (projectedPaths != null) {
+    for (final path in projectedPaths) {
+      if (!cursorNodeAt(cursor, path).isPositiveTerminal) return false;
+    }
+    return true;
+  }
   for (final depId in step.dependsOn) {
     final path = depTerminalPath(circuit, nodePath, depId, circuitById);
-    if (path == null) return false;
-    if (!cursorNodeAt(cursor, path).isPositiveTerminal) return false;
+    if (path == null || !cursorNodeAt(cursor, path).isPositiveTerminal) {
+      return false;
+    }
   }
   return true;
 }
@@ -136,6 +150,7 @@ List<CircuitStep> eligibleSteps(
   String nodePath, {
   required Circuit? Function(String circuitId) circuitById,
   required DateTime now,
+  DependencyPathsFor? dependencyPathsFor,
 }) => [
   for (final step in circuit.steps)
     if (depsSatisfied(
@@ -144,6 +159,7 @@ List<CircuitStep> eligibleSteps(
           cursor,
           nodePath,
           circuitById: circuitById,
+          dependencyPathsFor: dependencyPathsFor,
         ) &&
         !isRetired(step, cursor, nodePath) &&
         !isStepBroken(circuit, step, cursor, nodePath) &&

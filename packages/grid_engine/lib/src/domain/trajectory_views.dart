@@ -166,6 +166,11 @@ abstract interface class StepCursorView {
   int get lastSeq;
 }
 
+/// The additive P2 fields authored by `StepTransition` and retained through G4.
+abstract interface class StepTransitionCursorView implements StepCursorView {
+  Map<String, Object?>? get result;
+}
+
 /// A snapshot's trustworthiness, wave-1 semantics (§0.2, r4 — J6-B3/J7-M3).
 enum TrajectorySnapshotHealth {
   /// Seeded clean and maintained post-ACK — the only health the overlay ever
@@ -231,6 +236,24 @@ abstract interface class TrajectoryStepSnapshot {
   /// [TrajectoryHeadSnapshot.bySessionId], distinctly named because the two
   /// mirrors are separate (r7 — V1-M5).
   Iterable<StepCursorView> byP2SessionId(String sessionId);
+}
+
+/// One semantic dependency edge from `proj_step_edges`.
+abstract interface class TrajectoryStepEdgeView {
+  String get sessionId;
+  int get round;
+  String get fromPath;
+  String get toPath;
+  String get kind;
+}
+
+/// One immutable, versioned read of `proj_step_edges`.
+abstract interface class TrajectoryStepEdgeSnapshot {
+  int get version;
+  TrajectorySnapshotHealth get health;
+  DateTime? get seededAt;
+  Iterable<TrajectoryStepEdgeView> get rows;
+  Iterable<TrajectoryStepEdgeView> bySessionId(String sessionId);
 }
 
 /// One dependency-neutral P6 process/worktree identity row.

@@ -69,7 +69,7 @@ LeaseSweepCandidate _candidate(
   StepState? state = StepState.running,
   ProcessHandle? lease,
   bool willRemount = true,
-}) => (
+}) => LeaseSweepCandidate(
   stepBeadId: stepBeadId,
   willRemount: willRemount,
   metadata: {
@@ -327,7 +327,7 @@ void main() {
         final swept = await _vendor(fakes).sweepOrphanedLeases(
           candidates: [
             _candidate('tgdog-step-a'), // no lease keys at all
-            (
+            LeaseSweepCandidate(
               stepBeadId: 'tgdog-step-b', // the cleared sentinel
               willRemount: true,
               metadata: {

@@ -428,6 +428,8 @@ CircuitCursor effectiveStepCursor(
   required CircuitCursor siteCursor,
   CircuitCursor? beadCursor,
 }) {
+  final graph = session.trajectoryGraph;
+  if (graph != null && graph.isAuthoritative) return graph.cursor;
   final traj = session.trajCursor;
   if (traj == null) return siteCursor;
   return mergeStepCursor(

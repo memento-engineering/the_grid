@@ -2,6 +2,7 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../sdk/cursor.dart';
+import 'projection_graph_read.dart';
 import 'session_bead.dart';
 import 'trajectory_views.dart';
 
@@ -224,5 +225,8 @@ abstract class SessionProjection with _$SessionProjection {
     /// the durable incarnation-round structure, so `live_frontier.dart` derives
     /// generation from graph structure rather than from mutable metadata.
     @Default(<BeadDependency>[]) List<BeadDependency> moleculeDependencies,
+
+    /// The G2 P2+edge+P6 candidate. Null at the default off posture.
+    ProjectionGraphRead? trajectoryGraph,
   }) = _SessionProjection;
 }

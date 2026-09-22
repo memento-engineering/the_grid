@@ -37,6 +37,7 @@ import 'dart:convert';
 import 'package:meta/meta.dart';
 
 import 'session_projection.dart';
+import 'projection_graph_read.dart';
 import 'step_cursor_read.dart';
 import 'trajectory_views.dart';
 
@@ -420,11 +421,17 @@ SessionOverlayResult resolveSessionOverlay(
 /// rules at the read boundary. All five trajectory fields are copied together
 /// by the join, so a projection cannot mix a cursor from one fold read with a
 /// fence identity from another.
+///
+/// Q9's open-retired P1 shape is deliberately orthogonal: attaching a G2 graph
+/// candidate never closes or supersedes a session head, and an absent P2 row
+/// remains only [ProjectionStepNotMaterialized]. Terminality continues to come
+/// exclusively from the unchanged P1 overlay above.
 SessionProjection foldBackedSessionProjection(
   SessionProjection legacy,
   SessionHeadView head,
-  List<StepCursorView> rows,
-) {
+  List<StepCursorView> rows, {
+  ProjectionGraphRead? trajectoryGraph,
+}) {
   final projection = resolveSessionOverlay(legacy, head).projection;
   return projection.copyWith(
     trajCursor: trajCursorOf(rows),
@@ -432,6 +439,7 @@ SessionProjection foldBackedSessionProjection(
     trajPgid: head.pgid,
     trajPid: head.pid,
     trajAttemptId: head.attemptId,
+    trajectoryGraph: trajectoryGraph,
   );
 }
 

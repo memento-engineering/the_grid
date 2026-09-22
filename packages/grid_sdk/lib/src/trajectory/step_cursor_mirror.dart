@@ -38,7 +38,7 @@ import 'package:state_notifier/state_notifier.dart' show RemoveListener;
 /// a miss rather than a default, and the two enums never have to be declared
 /// equal by an adapter that could get it wrong silently.
 @immutable
-final class StepCursorRowView implements StepCursorView {
+final class StepCursorRowView implements StepTransitionCursorView {
   const StepCursorRowView(this.row);
 
   final StepCursorRow row;
@@ -84,6 +84,9 @@ final class StepCursorRowView implements StepCursorView {
 
   @override
   String? get failureClass => row.failureClass;
+
+  @override
+  Map<String, Object?>? get result => row.result;
 
   @override
   int get lastSeq => row.lastSeq;

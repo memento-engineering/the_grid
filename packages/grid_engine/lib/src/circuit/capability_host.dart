@@ -454,6 +454,9 @@ class CapabilityHostState extends State<CapabilityHost>
             stepBeadId: target,
             capability: capability,
             inputs: inputs,
+            projectedLease: context
+                .read<InheritedCircuit>()
+                ?.projectedLeases[_nodePath],
           ),
         );
         return lease.createAllocation(inputs);

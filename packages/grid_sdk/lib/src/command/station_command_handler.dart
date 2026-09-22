@@ -57,6 +57,7 @@ final class StationCommandHandler implements GridCommandHandler {
     Map<String, RootCheckout> workRootsByIdentity = const {},
     StationTrajectoryRecorder? recorder,
     TrajectoryStepSnapshot Function()? stepSnapshot,
+    ProjectionGraphRead? Function(String sessionId)? projectionGraphFor,
     int Function(String sessionId)? headEpochForSession,
     StationAdmissionCeilingSetter? setAdmissionCeiling,
     DualReadMode dualReadMode = DualReadMode.off,
@@ -67,6 +68,7 @@ final class StationCommandHandler implements GridCommandHandler {
        _stateOwnership = stateOwnership,
        _recorder = recorder ?? StationTrajectoryRecorder.disabled(),
        _stepSnapshot = stepSnapshot,
+       _projectionGraphFor = projectionGraphFor,
        _headEpochForSession = headEpochForSession,
        _setAdmissionCeiling = setAdmissionCeiling,
        _dualReadMode = dualReadMode,
@@ -99,6 +101,7 @@ final class StationCommandHandler implements GridCommandHandler {
   /// from, and they are read the same way: `primary`, snapshot health `live`,
   /// and a boot that has not disengaged.
   final TrajectoryStepSnapshot Function()? _stepSnapshot;
+  final ProjectionGraphRead? Function(String sessionId)? _projectionGraphFor;
   final int Function(String sessionId)? _headEpochForSession;
   final StationAdmissionCeilingSetter? _setAdmissionCeiling;
   final DualReadMode _dualReadMode;
@@ -1314,21 +1317,22 @@ final class StationCommandHandler implements GridCommandHandler {
       (gate) => _meta(gate, 'node') == '$beadId/spec_review/readiness-route',
     );
     if (!session.isClosed) {
-      final beadCursor =
-          _meta(session, SessionBeadKeys.model) == kSessionModelMolecule
-          ? projectMoleculeCursor(
-              state.beads.where(
-                (bead) =>
-                    bead.issueType == GridIssueTypes.step &&
-                    _meta(bead, MoleculeStepKeys.session) == session.id,
-              ),
-              dependencies: state.dependencies,
-            ).cursor
-          : const <String, NodeCursor>{};
       // CONSUMER 3 of the step dual read (cut-wiring C4) — the park check.
       // The site's today-read IS the bead recompute, so the unengaged branch
       // is the identity and `observe` leaves this verb byte-identical.
-      final cursor = _effectiveParkCursor(session.id, beadCursor);
+      final cursor = _effectiveParkCursor(
+        session.id,
+        () => _meta(session, SessionBeadKeys.model) == kSessionModelMolecule
+            ? projectMoleculeCursor(
+                state.beads.where(
+                  (bead) =>
+                      bead.issueType == GridIssueTypes.step &&
+                      _meta(bead, MoleculeStepKeys.session) == session.id,
+                ),
+                dependencies: state.dependencies,
+              ).cursor
+            : const <String, NodeCursor>{},
+      );
       final states = cursor.values.map((node) => node.state);
       // THE PARK PREDICATE KEYS ON THE OPEN GATE, NEVER ON CURSOR ABSENCE
       // (tg-aec / tg-ehht / tg-xpgx). Minting a gate bead whose `blocks`
@@ -1838,13 +1842,14 @@ final class StationCommandHandler implements GridCommandHandler {
         );
       }
 
-      final stepResults = <String, Map<String, String>>{};
-      for (final stepId in projected.beadIdByNodePath.values) {
-        final step = state.bead(stepId);
-        if (step != null) {
-          stepResults.addAll(projectCircuitResults(step));
-        }
-      }
+      final graph = _projectionGraphFor?.call(sessionId!);
+      final stepResults = graph?.isAuthoritative ?? false
+          ? graph!.results
+          : <String, Map<String, String>>{
+              for (final stepId in projected.beadIdByNodePath.values)
+                if (state.bead(stepId) case final step?)
+                  ...projectCircuitResults(step),
+            };
       var effectiveResults = mergeOperatorRulings(
         stepResults,
         projectCircuitResults(session),
@@ -1952,8 +1957,13 @@ final class StationCommandHandler implements GridCommandHandler {
   /// gates read.
   CircuitCursor _effectiveParkCursor(
     String sessionId,
-    CircuitCursor beadCursor,
+    CircuitCursor Function() legacyCursor,
   ) {
+    final projection = _projectionGraphFor?.call(sessionId);
+    if (projection != null && projection.isAuthoritative) {
+      return projection.cursor;
+    }
+    final beadCursor = legacyCursor();
     final read = _stepSnapshot;
     if (read == null || _dualReadMode != DualReadMode.primary) {
       return beadCursor;

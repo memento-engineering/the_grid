@@ -60,12 +60,14 @@ import 'package:grid_engine/grid_engine.dart'
         TerminalReconcileRequest,
         TrajectoryHeadSnapshot,
         TrajectoryProcessIdentitySnapshot,
+        TrajectoryStepEdgeSnapshot,
         TrajectoryStepSnapshot,
         kWorktreeOutstandingStaleAfter;
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:meta/meta.dart';
 import 'package:state_notifier/state_notifier.dart' show RemoveListener;
 
+import 'molecule_edge_mirror.dart';
 import 'process_identity_mirror.dart';
 import 'session_head_mirror.dart';
 import 'step_cursor_mirror.dart';
@@ -587,6 +589,9 @@ class TrajectoryHarness {
   /// from an honest inventory; wave-1 consumers read only the cursor state.
   final StepCursorMirror _stepCursors = StepCursorMirror();
 
+  /// G2's semantic edge mirror. It stays unseeded at the default off posture.
+  final MoleculeEdgeMirror _moleculeEdges = MoleculeEdgeMirror();
+
   /// P6's process/worktree identity mirror, on the same post-ACK rails.
   final ProcessIdentityMirror _processIdentities = ProcessIdentityMirror();
 
@@ -623,6 +628,18 @@ class TrajectoryHarness {
     void Function(TrajectoryStepSnapshot snapshot) listener, {
     bool fireImmediately = false,
   }) => _stepCursors.addListener(listener, fireImmediately: fireImmediately);
+
+  /// The current G2 edge value, absent when the once-resolved posture is off.
+  TrajectoryStepEdgeSnapshot? get moleculeEdges =>
+      config.g2Posture == G2Posture.off ? null : _moleculeEdges.snapshot;
+
+  /// The G2 edge change seam, absent when the posture is off.
+  RemoveListener? onMoleculeEdgesChanged(
+    void Function(TrajectoryStepEdgeSnapshot snapshot) listener, {
+    bool fireImmediately = false,
+  }) => config.g2Posture == G2Posture.off
+      ? null
+      : _moleculeEdges.addListener(listener, fireImmediately: fireImmediately);
 
   /// The current typed P6 snapshot.
   TrajectoryProcessIdentitySnapshot get processIdentities =>
@@ -1033,8 +1050,8 @@ class TrajectoryHarness {
   // ── the fold mirrors (cut-wiring C1 + C4 / §0.2) ─────────────────────────
 
   /// The boot seed: the lag rule, the generation set, the era boundary, and
-  /// one scan each of P1, P2, and P6 — all on the serialized connection and
-  /// under one verdict.
+  /// one scan each of P1, P2, G2 edges, and P6 — all on the serialized
+  /// connection and under one verdict.
   ///
   /// The lag rule reads the shared `'fold'` `proj_meta` row ONLY (the
   /// appender's live cursor); the `'step_cursor'`/`'process_identity'` rows
@@ -1052,12 +1069,15 @@ class TrajectoryHarness {
         () => readProjectionGenerations(_requireDb()),
       );
       final rows = await _serialize(() => scanSessionHeads(_requireDb()));
-      // The P2/P6 seeds ride the SAME lag verdict, the SAME generation set,
-      // and the SAME serialized lane — one boot read, three mirrors. Reading
-      // step rows here rather than on their own pass is what keeps the two
+      // The P2/edge/P6 seeds ride the SAME lag verdict, the SAME generation
+      // set, and the SAME serialized lane — one boot read, four mirrors.
+      // Reading step rows here rather than on their own pass is what keeps the
       // snapshots consistent with each other at the instant the mode goes
       // live: a step row can never describe a session the head seed missed.
       final stepRows = await _serialize(() => scanStepCursors(_requireDb()));
+      final edgeRows = config.g2Posture == G2Posture.off
+          ? const <MoleculeEdgeRow>[]
+          : await _serialize(() => scanMoleculeEdges(_requireDb()));
       final processRows = await _serialize(
         () => scanProcessIdentityRows(_requireDb()),
       );
@@ -1077,6 +1097,13 @@ class TrajectoryHarness {
         stale: lag.isStale,
         firstEpochClaimedAt: firstEpochAt,
       );
+      if (config.g2Posture != G2Posture.off) {
+        _moleculeEdges.seed(
+          rows: edgeRows,
+          seededAt: seededAt,
+          stale: lag.isStale,
+        );
+      }
       _processIdentities.seed(
         rows: processRows,
         seededAt: seededAt,
@@ -1375,6 +1402,9 @@ class TrajectoryHarness {
         if (!row.isOpen) row.sessionId,
     };
     _stepCursors.evictClosedSessions(closed);
+    if (config.g2Posture != G2Posture.off) {
+      _moleculeEdges.evictClosedSessions(closed);
+    }
   }
 
   /// THE FOLD-GENERATION RESEED GUARD (§0.2, r4 — J7-B2): re-reads the full
@@ -1404,6 +1434,9 @@ class TrajectoryHarness {
       if (_setsEqual(current, seeded)) return;
       final rows = await _serialize(() => scanSessionHeads(_requireDb()));
       final stepRows = await _serialize(() => scanStepCursors(_requireDb()));
+      final edgeRows = config.g2Posture == G2Posture.off
+          ? const <MoleculeEdgeRow>[]
+          : await _serialize(() => scanMoleculeEdges(_requireDb()));
       final processRows = await _serialize(
         () => scanProcessIdentityRows(_requireDb()),
       );
@@ -1418,6 +1451,9 @@ class TrajectoryHarness {
       // its sibling adopted the new one is two folds in one process.
       _sessionHeads.reseed(rows: rows, seededAt: seededAt);
       _stepCursors.reseed(rows: stepRows, seededAt: seededAt);
+      if (config.g2Posture != G2Posture.off) {
+        _moleculeEdges.reseed(rows: edgeRows, seededAt: seededAt);
+      }
       _processIdentities.reseed(
         rows: processRows,
         seededAt: seededAt,
@@ -1449,8 +1485,10 @@ class TrajectoryHarness {
     if (!_dualReadArmed) return;
     final head = _sessionHeads.latchCompromised();
     final step = _stepCursors.latchCompromised();
+    final edge =
+        config.g2Posture != G2Posture.off && _moleculeEdges.latchCompromised();
     final process = _processIdentities.latchCompromised();
-    if (!head && !step && !process) return;
+    if (!head && !step && !edge && !process) return;
     _flare('trajectory.dualReadCompromised', {
       'reason': reason,
       'dropped': '$_droppedTotal',
@@ -1893,6 +1931,9 @@ class TrajectoryHarness {
     final decoded = converted ? null : record;
     _sessionHeads.applyAppended(envelope, seq: seq, decoded: decoded);
     _stepCursors.applyAppended(envelope, seq: seq, decoded: decoded);
+    if (config.g2Posture != G2Posture.off) {
+      _moleculeEdges.applyAppended(envelope, seq: seq, decoded: decoded);
+    }
     _processIdentities.applyAppended(envelope, seq: seq, decoded: decoded);
   }
 

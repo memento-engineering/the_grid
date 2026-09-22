@@ -7,6 +7,7 @@ import '../domain/eligibility_basis_revision.dart';
 import '../domain/joined_snapshot.dart';
 import '../domain/linked_sessions.dart';
 import '../domain/mount_attempt.dart';
+import '../domain/projection_graph_read.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
 import '../domain/trajectory_views.dart';
@@ -28,6 +29,11 @@ typedef _JoinedStepIncarnation = ({Bead bead, int ordinal});
 typedef ProcessIdentitySnapshotSubscribe =
     void Function() Function(
       void Function(TrajectoryProcessIdentitySnapshot snapshot) listener,
+    );
+
+typedef StepEdgeSnapshotSubscribe =
+    void Function() Function(
+      void Function(TrajectoryStepEdgeSnapshot snapshot) listener,
     );
 
 /// The JOIN bridge — the **only** subscription into the snapshot pipelines
@@ -81,8 +87,11 @@ class StationJoinBridge {
     TrajectoryStepSnapshot Function()? stepSnapshot,
     StepSnapshotSubscribe? onStepChanges,
     DualReadStepObserver? stepDualRead,
+    TrajectoryStepEdgeSnapshot Function()? edgeSnapshot,
+    StepEdgeSnapshotSubscribe? onEdgeChanges,
     TrajectoryProcessIdentitySnapshot Function()? processIdentitySnapshot,
     ProcessIdentitySnapshotSubscribe? onProcessIdentityChanges,
+    bool projectionGraphAuthoritative = false,
   }) {
     final revisions = EligibilityBasisRevisions();
     final seed = _join(
@@ -90,9 +99,11 @@ class StationJoinBridge {
       state.current,
       headSnapshot?.call(),
       stepSnapshot?.call(),
+      edgeSnapshot?.call(),
       processIdentitySnapshot?.call(),
       dualRead: dualRead,
       stepDualRead: stepDualRead,
+      projectionGraphAuthoritative: projectionGraphAuthoritative,
       revisions: revisions,
     );
     return StationJoinBridge._(
@@ -107,8 +118,11 @@ class StationJoinBridge {
       stepSnapshot: stepSnapshot,
       onStepChanges: onStepChanges,
       stepDualRead: stepDualRead,
+      edgeSnapshot: edgeSnapshot,
+      onEdgeChanges: onEdgeChanges,
       processIdentitySnapshot: processIdentitySnapshot,
       onProcessIdentityChanges: onProcessIdentityChanges,
+      projectionGraphAuthoritative: projectionGraphAuthoritative,
       revisions: revisions,
     );
   }
@@ -125,9 +139,12 @@ class StationJoinBridge {
     required TrajectoryStepSnapshot Function()? stepSnapshot,
     required StepSnapshotSubscribe? onStepChanges,
     required DualReadStepObserver? stepDualRead,
+    required TrajectoryStepEdgeSnapshot Function()? edgeSnapshot,
+    required StepEdgeSnapshotSubscribe? onEdgeChanges,
     required TrajectoryProcessIdentitySnapshot Function()?
     processIdentitySnapshot,
     required ProcessIdentitySnapshotSubscribe? onProcessIdentityChanges,
+    required bool projectionGraphAuthoritative,
     required EligibilityBasisRevisions revisions,
   }) : _work = work,
        _state = state,
@@ -139,8 +156,11 @@ class StationJoinBridge {
        _stepSnapshot = stepSnapshot,
        _onStepChanges = onStepChanges,
        _stepDualRead = stepDualRead,
+       _edgeSnapshot = edgeSnapshot,
+       _onEdgeChanges = onEdgeChanges,
        _processIdentitySnapshot = processIdentitySnapshot,
        _onProcessIdentityChanges = onProcessIdentityChanges,
+       _projectionGraphAuthoritative = projectionGraphAuthoritative,
        _revisions = revisions;
 
   final SnapshotSource _work;
@@ -170,12 +190,17 @@ class StationJoinBridge {
   /// The step comparator's bookkeeper. Under `observe` it only counts.
   final DualReadStepObserver? _stepDualRead;
 
+  final TrajectoryStepEdgeSnapshot Function()? _edgeSnapshot;
+  final StepEdgeSnapshotSubscribe? _onEdgeChanges;
+  void Function()? _removeEdgeListener;
+
   /// THE BARRIER'S THIRD MIRROR (cut-wiring §W2.4 W2-B): the pre-fetched,
   /// immutable P6 process/worktree identity read. Same terms as the P1 and P2
   /// reads — a value the pure join takes, never an inline await — and null on
   /// any composition that arms no dual read, which leaves the barrier's read
   /// disarmed and the clause refusing nothing.
   final TrajectoryProcessIdentitySnapshot Function()? _processIdentitySnapshot;
+  final bool _projectionGraphAuthoritative;
 
   final ProcessIdentitySnapshotSubscribe? _onProcessIdentityChanges;
   void Function()? _removeProcessIdentityListener;
@@ -248,6 +273,9 @@ class StationJoinBridge {
     if (_stepDualRead?.armed ?? false) {
       _removeStepListener = _onStepChanges?.call((_) => _push(_rejoin()));
     }
+    if (_edgeSnapshot != null) {
+      _removeEdgeListener = _onEdgeChanges?.call((_) => _push(_rejoin()));
+    }
     // P6 owns the heartbeat that the worktree-outstanding gate reads. A
     // heartbeat publication must therefore rebuild the immutable read and its
     // bead-scoped eligibility basis even when work, state, P1, and P2 are all
@@ -264,9 +292,11 @@ class StationJoinBridge {
     state ?? _state.current,
     _headSnapshot?.call(),
     _stepSnapshot?.call(),
+    _edgeSnapshot?.call(),
     _processIdentitySnapshot?.call(),
     dualRead: _dualRead,
     stepDualRead: _stepDualRead,
+    projectionGraphAuthoritative: _projectionGraphAuthoritative,
     revisions: _revisions,
   );
 
@@ -309,6 +339,8 @@ class StationJoinBridge {
     _removeHeadListener = null;
     _removeStepListener?.call();
     _removeStepListener = null;
+    _removeEdgeListener?.call();
+    _removeEdgeListener = null;
     _removeProcessIdentityListener?.call();
     _removeProcessIdentityListener = null;
     // THE CLEAN-DOWN FIXPOINT (§0.4): one boot-final round summary, riding the
@@ -353,9 +385,11 @@ class StationJoinBridge {
     GraphSnapshot? state,
     TrajectoryHeadSnapshot? head,
     TrajectoryStepSnapshot? steps,
+    TrajectoryStepEdgeSnapshot? edges,
     TrajectoryProcessIdentitySnapshot? processIdentities, {
     DualReadSessionObserver? dualRead,
     DualReadStepObserver? stepDualRead,
+    bool projectionGraphAuthoritative = false,
     EligibilityBasisRevisions? revisions,
   }) {
     if (work == null) return JoinedSnapshot.empty();
@@ -440,6 +474,39 @@ class StationJoinBridge {
           trajAttemptId: overlay.trajAttemptId,
         );
       });
+    }
+    if (steps != null &&
+        edges != null &&
+        processIdentities != null &&
+        steps.health == TrajectorySnapshotHealth.live &&
+        edges.health == TrajectorySnapshotHealth.live &&
+        processIdentities.health == TrajectorySnapshotHealth.live) {
+      for (final entry in sessions.entries.toList()) {
+        final projection = entry.value;
+        final sessionId = projection.sessionId;
+        if (!projection.isMolecule || sessionId == null) continue;
+        final rows = steps.byP2SessionId(sessionId).toList(growable: false);
+        var round = 0;
+        for (final row in rows) {
+          if (row.round > round) round = row.round;
+        }
+        for (final edge in edges.bySessionId(sessionId)) {
+          if (edge.round > round) round = edge.round;
+        }
+        for (final identity in processIdentities.bySessionId(sessionId)) {
+          if (identity.round > round) round = identity.round;
+        }
+        sessions[entry.key] = projection.copyWith(
+          trajectoryGraph: ProjectionGraphRead(
+            sessionId: sessionId,
+            round: round,
+            steps: steps,
+            edges: edges,
+            processIdentities: processIdentities,
+            isAuthoritative: projectionGraphAuthoritative,
+          ),
+        );
+      }
     }
     // THE BARRIER'S READ (§W2.4 W2-B) and the bead-scoped eligibility basis
     // revision it keys its record on. Both are computed HERE, on the finished
