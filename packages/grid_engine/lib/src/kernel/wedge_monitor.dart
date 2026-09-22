@@ -157,12 +157,14 @@ class WedgeMonitor {
         if (since != null) 'since': since.toIso8601String(),
         'reason': sample.reason,
         'live': '${sample.live}',
+        'paused': '${sample.paused}',
         'running': '${sample.running}',
         'gated': '${sample.gated}',
         'cooling': '${sample.cooling}',
         if (previousSample != null) ...{
           'frozenSessionIds': jsonEncode(sample.frozenSessionIds),
           'previousLive': '${previousSample.live}',
+          'previousPaused': '${previousSample.paused}',
           'previousRunning': '${previousSample.running}',
           'previousGated': '${previousSample.gated}',
           'previousCooling': '${previousSample.cooling}',
@@ -200,6 +202,7 @@ class WedgeMonitor {
 
 bool _tupleChanged(WedgeSample previous, WedgeSample current) =>
     previous.live != current.live ||
+    previous.paused != current.paused ||
     previous.running != current.running ||
     previous.gated != current.gated ||
     previous.cooling != current.cooling;
