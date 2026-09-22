@@ -520,6 +520,11 @@ class StationJoinBridge {
   /// `copyWith`. A gate whose `blocks` matches no known session is ignored.
   /// Like the session scan, this is the JOIN's job (`projectSession` stays pure
   /// — a session bead never names its own gate).
+  ///
+  /// The `the_grid#admission-authority-boundary` decision does not constrain
+  /// this read-side projection: it grants no attempt and mints no durable
+  /// transition. It only joins already-observed state-store facts into an
+  /// immutable value.
   static void _attachGateState(
     GraphSnapshot state,
     Map<String, SessionProjection> sessions,
@@ -546,16 +551,24 @@ class StationJoinBridge {
     }
 
     final openByWorkBead = <String, Set<String>>{};
+    final openCountByWorkBead = <String, int>{};
     final closedByWorkBead = <String, Map<String, int>>{};
     for (final bead in state.beadsById.values) {
       if (bead.issueType != GridIssueTypes.gate) continue;
-      final blocks = bead.metadata['blocks'] as String?;
-      final nodePath = bead.metadata['node'] as String?;
-      if (blocks == null || nodePath == null) continue;
+      final blocks = bead.metadata['blocks'];
+      final nodePath = bead.metadata['node'];
+      if (blocks is! String ||
+          blocks.isEmpty ||
+          nodePath is! String ||
+          nodePath.isEmpty) {
+        continue;
+      }
       final workBeadId = workBeadBySessionId[blocks];
       if (workBeadId == null) continue;
       if (!bead.isClosed) {
         (openByWorkBead[workBeadId] ??= <String>{}).add(nodePath);
+        openCountByWorkBead[workBeadId] =
+            (openCountByWorkBead[workBeadId] ?? 0) + 1;
         continue;
       }
       final owner = _incarnationForGate(
@@ -570,6 +583,7 @@ class StationJoinBridge {
     for (final entry in sessions.entries.toList()) {
       sessions[entry.key] = entry.value.copyWith(
         openGateNodes: openByWorkBead[entry.key] ?? const <String>{},
+        openGateBeadCount: openCountByWorkBead[entry.key] ?? 0,
         closedGateCountByNodePath:
             closedByWorkBead[entry.key] ?? const <String, int>{},
       );

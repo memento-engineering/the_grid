@@ -73,6 +73,10 @@ abstract class WedgeSample with _$WedgeSample {
     /// Live (non-terminal) sessions.
     @Default(0) int live,
 
+    /// Live sessions deliberately parked by an operator. They remain visible
+    /// as durable, non-terminal store rows but are not currently driveable.
+    @Default(0) int paused,
+
     /// Live sessions with at least one node in [StepState.running] — the ONLY
     /// evidence of an active stage. [StepState.ready] does NOT count: it is a
     /// POSITIVE TERMINAL (a daemon signalled up, its dep satisfied), so a
@@ -80,8 +84,9 @@ abstract class WedgeSample with _$WedgeSample {
     /// downstream mounting is genuinely not advancing.
     @Default(0) int running,
 
-    /// Live sessions parked at a gate (>=1 node [StepState.gated]) with no
-    /// running node.
+    /// Exact OPEN gate-bead count from the joined state store. Historical or
+    /// synthetic projections with no joined gate evidence contribute a
+    /// one-per-session cursor fallback when gated and not running.
     @Default(0) int gated,
 
     /// Live sessions with a failed node whose `cooldownUntil` is still in the
@@ -96,26 +101,36 @@ abstract class WedgeSample with _$WedgeSample {
 
   const WedgeSample._();
 
+  /// Live sessions the station may currently drive.
+  int get active => live - paused;
+
   /// The wedge predicate: work is live, nothing is in an active stage, and
   /// nothing is scheduled to restart.
-  bool get isStalled => live > 0 && running == 0 && cooling == 0;
+  bool get isStalled => active > 0 && running == 0 && cooling == 0;
 
   /// The human-readable escalation reason carried on the wire and in the flare.
   String get reason {
     if (live == 0) return 'no live session';
-    if (!isStalled) return '$running of $live live session(s) running';
-    if (gated > 0) {
-      final parked = gated == live ? 'ALL $live' : '$gated of $live';
-      return '$parked live session(s) parked at a gate; 0 running, 0 cooling '
-          'down — no forward progress';
+    if (active == 0) {
+      return 'all $live live session(s) operator-paused; 0 active';
     }
-    return '$live live session(s); 0 running, 0 gated, 0 cooling down — no '
-        'session is in an active stage';
+    if (!isStalled) {
+      return '$running of $active active session(s) running '
+          '($live live, $paused paused)';
+    }
+    if (gated > 0) {
+      return '$gated open gate bead(s) across $active active session(s) leave '
+          'work parked at a gate; 0 running, 0 cooling down — no forward '
+          'progress';
+    }
+    return '$active active session(s) ($live live, $paused paused); 0 running, '
+        '0 gated, 0 cooling down — no session is in an active stage';
   }
 
   /// The counts as they ride the status surface's wedge block.
   Map<String, Object?> toJson() => <String, Object?>{
     'live': live,
+    'paused': paused,
     'running': running,
     'gated': gated,
     'cooling': cooling,
@@ -203,17 +218,24 @@ const kNotWedged = Flowing(sample: kNoWedgeSample);
 /// holding one can ripen into a visible stall instead of a silent wedge.
 WedgeSample sampleWedge(JoinedSnapshot snapshot, {required DateTime now}) {
   var live = 0;
+  var paused = 0;
   var running = 0;
   var gated = 0;
   var cooling = 0;
   final frozenSessionIds = <String>[];
   for (final session in snapshot.sessionsByWorkBead.values) {
-    // A paused session is deliberately not being driven and cannot contribute
-    // running work or mask a real station wedge.
-    if (session.isTerminal || session.pauseState == SessionPauseState.paused) {
+    // Terminal disposition wins over every stale marker and contributes no
+    // live state-store fact.
+    if (session.isTerminal) continue;
+
+    live++;
+    // Durable gate beads are counted exactly, before the driveability split.
+    // A paused row is still live and may still own open gate state.
+    gated += session.openGateBeadCount;
+    if (session.pauseState == SessionPauseState.paused) {
+      paused++;
       continue;
     }
-    live++;
     // The model split is the EXPLICIT discriminator, never inferred from the
     // buckets (`DESIGN-tg-pm6.md` §12): a molecule pour that crashed before
     // its first step bead landed still samples down the molecule arm (an
@@ -258,7 +280,10 @@ WedgeSample sampleWedge(JoinedSnapshot snapshot, {required DateTime now}) {
     }
     if (isRunning) running++;
     if (isCooling) cooling++;
-    if (isGated && !isRunning) gated++;
+    // Synthetic and historical projections may carry only cursor evidence.
+    // Preserve that fallback, but never add it on top of exact joined gate
+    // evidence.
+    if (session.openGateBeadCount == 0 && isGated && !isRunning) gated++;
     final sessionId = session.sessionId;
     if (!isRunning && !isCooling && sessionId != null) {
       frozenSessionIds.add(sessionId);
@@ -267,6 +292,7 @@ WedgeSample sampleWedge(JoinedSnapshot snapshot, {required DateTime now}) {
   frozenSessionIds.sort();
   return WedgeSample(
     live: live,
+    paused: paused,
     running: running,
     gated: gated,
     cooling: cooling,
