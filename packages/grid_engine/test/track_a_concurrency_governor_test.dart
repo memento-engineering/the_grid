@@ -12,6 +12,12 @@ import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
+const _bootBurstGateCircuit = Circuit(
+  id: 'boot-burst-gate',
+  terminalStepId: 'route',
+  steps: [CapabilityStep(stepId: 'route', capabilityId: 'route')],
+);
+
 class _Recorder {
   final List<String> events = [];
   final List<String> resolverCalls = [];
@@ -87,6 +93,76 @@ Bead _bead(String id, {int priority = 0}) => Bead(
   priority: priority,
 );
 
+Bead _residentApprovedBead(String id) => Bead(
+  id: id,
+  title: 'approved resident work $id',
+  issueType: IssueType.task,
+  status: BeadStatus.open,
+  labels: const ['grid.approved'],
+  metadata: const {
+    'grid.approved_at': '2026-09-22T00:00:00Z',
+    'grid.approved_by': 'governor',
+    'grid.approved_rev': 'approved-revision',
+    'validation_plan': 'dart test',
+  },
+);
+
+SessionProjection _moleculeRound({
+  required String workBeadId,
+  required String sessionId,
+  StepState routeState = StepState.pending,
+  bool isTerminal = false,
+  bool completed = false,
+}) => SessionProjection(
+  workBeadId: workBeadId,
+  sessionId: sessionId,
+  isTerminal: isTerminal,
+  completed: completed,
+  isMolecule: true,
+  moleculeBeads: [
+    Bead(
+      id: '$sessionId-route',
+      issueType: GridIssueTypes.step,
+      status: BeadStatus.open,
+      metadata: {
+        'rig': stateSubstation,
+        MoleculeStepKeys.stepId: 'route',
+        MoleculeStepKeys.capability: 'route',
+        MoleculeStepKeys.kind: StepKind.job.name,
+        MoleculeStepKeys.path: '$workBeadId/route',
+        MoleculeStepKeys.session: sessionId,
+        MoleculeStepKeys.state: routeState.name,
+      },
+    ),
+  ],
+);
+
+List<List<String>> _plainCreatesOfType(
+  RecordingBdRunner runner,
+  IssueType type,
+) => runner.callsFor('create').where((args) {
+  final typeIndex = args.indexOf('--type');
+  return (args.length < 2 || args[1] != '--graph') &&
+      typeIndex >= 0 &&
+      typeIndex + 1 < args.length &&
+      args[typeIndex + 1] == type.wire;
+}).toList();
+
+Future<void> _pumpMicrotasksUntil(
+  bool Function() condition, {
+  int maxTurns = 500,
+}) async {
+  for (var turn = 0; turn < maxTurns; turn += 1) {
+    if (condition()) return;
+    await Future<void>.value();
+  }
+  if (!condition()) {
+    throw StateError(
+      'condition did not settle after $maxTurns microtask turns',
+    );
+  }
+}
+
 JoinedSnapshot _joined({
   required List<Bead> beads,
   required Set<String> ready,
@@ -112,6 +188,7 @@ Seed _root({
   required SubstationConfigNotifier substationConfig,
   ServiceBundle services = const ServiceBundle(),
   StationServices? stationServices,
+  CapabilityRegistry? registry,
   bool includeStationServices = true,
 }) {
   Seed root = InheritedSeed<JoinedSnapshotNotifier>(
@@ -127,6 +204,9 @@ Seed _root({
       ]),
     ),
   );
+  if (registry != null) {
+    root = InheritedSeed<CapabilityRegistry>(value: registry, child: root);
+  }
   if (!includeStationServices) return root;
   return InheritedSeed<StationServices>(
     value: stationServices ?? buildFakes().ctx,
@@ -538,6 +618,150 @@ void main() {
       expect(skipped.data['sessionId'], 'tgdog-tg-1');
       expect(skipped.data['disposition'], 'done');
     });
+
+    test(
+      'resident refills a released boot-burst slot within one service tick',
+      () async {
+        final beads = [
+          _residentApprovedBead('tg-1'),
+          _residentApprovedBead('tg-2'),
+          _residentApprovedBead('tg-3'),
+        ];
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: beads,
+            ready: {for (final bead in beads) bead.id},
+            sessions: {
+              'tg-1': _moleculeRound(
+                workBeadId: 'tg-1',
+                sessionId: 'tgdog-round-1',
+              ),
+              'tg-2': _moleculeRound(
+                workBeadId: 'tg-2',
+                sessionId: 'tgdog-round-2',
+              ),
+            },
+          ),
+        );
+        final fakes = buildFakes(
+          createdId: 'tgdog-round-3',
+          maxConcurrentWork: 2,
+        );
+        final owner = TreeOwner();
+        addTearDown(() async {
+          owner.dispose();
+          fakes.ctx.dispose();
+          await fakes.provider.close();
+        });
+        final root = owner.mountRoot(
+          ProviderScope(
+            child: _root(
+              joined: joined,
+              resolver: CircuitResolver((_) => _bootBurstGateCircuit),
+              registry: DefaultCapabilityRegistry(
+                capabilities: const {
+                  'route': FixedRouteCapability(Escalate('all lanes failed')),
+                },
+              ),
+              substationConfig: SubstationConfigNotifier(
+                const SubstationConfig(
+                  substationId: 'tg',
+                  ownedSubstations: {'tg'},
+                  resident: true,
+                  maxConcurrentWork: 2,
+                ),
+              ),
+              stationServices: fakes.ctx,
+            ),
+          ),
+        );
+
+        await _pumpMicrotasksUntil(
+          () =>
+              _plainCreatesOfType(fakes.runner, GridIssueTypes.gate).length ==
+              2,
+        );
+
+        expect(_mountedWorkIds(root), {'tg-1', 'tg-2'});
+        expect(
+          _plainCreatesOfType(fakes.runner, GridIssueTypes.gate),
+          hasLength(2),
+        );
+        expect(
+          _plainCreatesOfType(fakes.runner, GridIssueTypes.session),
+          isEmpty,
+          reason: 'both boot-burst rounds were adopted',
+        );
+
+        joined.push(
+          _joined(
+            beads: beads,
+            ready: {for (final bead in beads) bead.id},
+            sessions: {
+              'tg-1': _moleculeRound(
+                workBeadId: 'tg-1',
+                sessionId: 'tgdog-round-1',
+                routeState: StepState.gated,
+                isTerminal: true,
+                completed: true,
+              ),
+              'tg-2': _moleculeRound(
+                workBeadId: 'tg-2',
+                sessionId: 'tgdog-round-2',
+                routeState: StepState.gated,
+              ),
+            },
+          ),
+        );
+        owner.flush();
+
+        await _pumpMicrotasksUntil(() {
+          if (_plainCreatesOfType(
+                fakes.runner,
+                GridIssueTypes.session,
+              ).length !=
+              1) {
+            return false;
+          }
+          for (
+            var index = 0;
+            index < fakes.runner.workUpdates.length;
+            index += 1
+          ) {
+            if (fakes.runner.metadataOfUpdate(
+                  index,
+                )[SessionBeadKeys.workBead] ==
+                'tg-3') {
+              return true;
+            }
+          }
+          return false;
+        });
+
+        expect(_mountedWorkIds(root), {'tg-2', 'tg-3'});
+        expect(
+          _plainCreatesOfType(fakes.runner, GridIssueTypes.session),
+          hasLength(1),
+        );
+        final sessionBirthUpdates = [
+          for (
+            var index = 0;
+            index < fakes.runner.workUpdates.length;
+            index += 1
+          )
+            if (fakes.runner.metadataOfUpdate(
+                  index,
+                )[SessionBeadKeys.workBead] ==
+                'tg-3')
+              fakes.runner.metadataOfUpdate(index),
+        ];
+        expect(sessionBirthUpdates, hasLength(1));
+        expect(
+          sessionBirthUpdates.single,
+          containsPair(SessionBeadKeys.workBead, 'tg-3'),
+        );
+      },
+    );
 
     test('a substation override CANNOT raise the station-wide ceiling — the '
         'ambient StationServices default/ceiling wins the min()', () async {
