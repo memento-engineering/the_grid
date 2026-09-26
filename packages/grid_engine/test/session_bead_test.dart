@@ -135,14 +135,76 @@ void main() {
       );
     });
 
-    test('every keyFor emission is a valid bd metadata key', () {
-      for (final path in [
-        'pow-1rn.3/spec_review/intake',
-        'tg-1/review/test-coverage',
-        'tg-burn/follower',
-      ]) {
-        final key = ResultKeys.keyFor(path, ResultKeys.grade);
+    test('keyFor preserves legal A42 field literals byte-for-byte', () {
+      expect(
+        ResultKeys.keyFor('tg-1/land', 'pr_url'),
+        'grid.result.tg_h1_sland.pr_url',
+      );
+      expect(
+        ResultKeys.keyFor('tg-1/route', 'route_verdict'),
+        'grid.result.tg_h1_sroute.route_verdict',
+      );
+      expect(
+        ResultKeys.keyFor('tg-1/deliver', 'merged_sha'),
+        'grid.result.tg_h1_sdeliver.merged_sha',
+      );
+
+      const legalFields = [
+        'source_state',
+        'sourceState',
+        '_private',
+        'field.with.dot',
+        'committeeShadowSampleId',
+        'leaseId',
+      ];
+      for (final field in legalFields) {
+        final key = ResultKeys.keyFor('pow-1rn.3/spec_review/intake', field);
+        expect(key, 'grid.result.pow_h1rn.3_sspec_ureview_sintake.$field');
         expect(bdKeyCharset.hasMatch(key), isTrue, reason: key);
+      }
+    });
+
+    test('keyFor refuses invalid fields with their exact cause', () {
+      const cases = <({String field, String offending})>[
+        (field: 'source-state', offending: '-'),
+        (field: '1source', offending: '1'),
+        (field: '.source', offending: '.'),
+        (field: '', offending: '<empty>'),
+      ];
+      for (final invalid in cases) {
+        expect(
+          () => ResultKeys.keyFor('tg-1/agent', invalid.field),
+          throwsA(
+            isA<ArgumentError>()
+                .having((error) => error.name, 'name', 'field')
+                .having(
+                  (error) => error.invalidValue,
+                  'invalidValue',
+                  invalid.field,
+                )
+                .having(
+                  (error) => '$error',
+                  'complete field',
+                  contains('invalid result field "${invalid.field}"'),
+                )
+                .having(
+                  (error) => '$error',
+                  'node path',
+                  contains('node path "tg-1/agent"'),
+                )
+                .having(
+                  (error) => '$error',
+                  'offending character',
+                  contains('offending character "${invalid.offending}"'),
+                )
+                .having(
+                  (error) => '$error',
+                  'grammar',
+                  contains(r'^[a-zA-Z_][a-zA-Z0-9_.]*$'),
+                ),
+          ),
+          reason: invalid.field,
+        );
       }
     });
 

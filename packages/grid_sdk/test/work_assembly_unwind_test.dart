@@ -146,7 +146,7 @@ final class _RecordingStateRunner implements BdRunner {
     if (args case ['close', final id, ...]) state.close(id);
     return const BdResult(
       exitCode: 0,
-      stdout: '{"schema_version":1,"data":{}}',
+      stdout: '{"schema_version":1,"data":[]}',
       stderr: '',
     );
   }

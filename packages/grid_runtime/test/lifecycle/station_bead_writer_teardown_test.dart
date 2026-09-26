@@ -38,15 +38,34 @@ void main() {
 
       await writer.sessionsAwaitingTeardown();
 
-      expect(runner.openBeadCalls, hasLength(2));
-      for (final probe in runner.openBeadCalls) {
-        expect(probe.types, {GridIssueTypes.session});
-      }
+      expect(runner.openBeadCalls, isEmpty);
       expect(
-        runner.openBeadCalls.map((probe) => probe.metadataAll),
+        runner.calls,
         [
-          {'grid.outcome': 'complete'},
-          {'grid.outcome': 'commit_only'},
+          [
+            'list',
+            '-t',
+            'session',
+            '--status',
+            'open',
+            '--metadata-field',
+            'grid.outcome=complete',
+            '--json',
+            '--limit',
+            '0',
+          ],
+          [
+            'list',
+            '-t',
+            'session',
+            '--status',
+            'open',
+            '--metadata-field',
+            'grid.outcome=commit_only',
+            '--json',
+            '--limit',
+            '0',
+          ],
         ],
         reason:
             'a Dart-side filter would reintroduce exactly the unbounded '
@@ -89,11 +108,8 @@ void main() {
       'tgdog-complete',
       'tgdog-commit-only',
     ]);
-    expect(runner.openBeadCalls, hasLength(2));
-    expect(runner.openBeadCalls.map((probe) => probe.metadataAll), [
-      {'grid.outcome': 'complete'},
-      {'grid.outcome': 'commit_only'},
-    ]);
+    expect(runner.openBeadCalls, isEmpty);
+    expect(runner.callsFor('list'), hasLength(2));
   });
 
   group('sessionDispositionOfMetadata — the ONE shared derivation', () {

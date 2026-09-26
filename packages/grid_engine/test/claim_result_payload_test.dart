@@ -60,24 +60,28 @@ void main() {
       expect(back!.kind, kDefaultKind);
     });
 
-    test('rides the SAME disjoint result namespace every other step result '
-        'does — merges without collision alongside nodeResultMetadata', () {
-      const grant = LeaseGrant(
-        leaseId: 'lease-9',
-        station: 'peer.local',
-        ttlSeconds: 30,
-        fencingToken: 2,
-      );
-      final merged = nodeResultMetadata(
-        'tg-burn/follower',
-        leaseGrantToResultPayload(grant),
-      );
-      expect(merged, {
-        'grid.result.tg_hburn_sfollower.leaseId': 'lease-9',
-        'grid.result.tg_hburn_sfollower.claimedBy': 'peer.local',
-        'grid.result.tg_hburn_sfollower.fencingToken': '2',
-        'grid.result.tg_hburn_sfollower.kind': kDefaultKind,
-      });
-    });
+    test(
+      'rides the unchanged result namespace with camel-case claim fields',
+      () {
+        const grant = LeaseGrant(
+          leaseId: 'lease-9',
+          station: 'peer.local',
+          ttlSeconds: 30,
+          fencingToken: 2,
+        );
+        expect(
+          nodeResultMetadata(
+            'tg-burn/follower',
+            leaseGrantToResultPayload(grant),
+          ),
+          {
+            'grid.result.tg_hburn_sfollower.leaseId': 'lease-9',
+            'grid.result.tg_hburn_sfollower.claimedBy': 'peer.local',
+            'grid.result.tg_hburn_sfollower.fencingToken': '2',
+            'grid.result.tg_hburn_sfollower.kind': kDefaultKind,
+          },
+        );
+      },
+    );
   });
 }

@@ -192,12 +192,36 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
       );
     }
     if (sub == 'list') {
+      final typeIndex = args.indexOf('-t');
+      final type = typeIndex >= 0 ? IssueType(args[typeIndex + 1]) : null;
+      final statusIndex = args.indexOf('--status');
+      final status = statusIndex >= 0
+          ? BeadStatus(args[statusIndex + 1])
+          : null;
       final externalRefIndex = args.indexOf('--external-ref');
       final externalRef = externalRefIndex >= 0
           ? args[externalRefIndex + 1]
           : null;
+      final metadataFields = <String, String>{};
+      for (var i = 0; i < args.length - 1; i++) {
+        if (args[i] != '--metadata-field') continue;
+        final assignment = args[i + 1];
+        final separator = assignment.indexOf('=');
+        if (separator < 0) continue;
+        metadataFields[assignment.substring(0, separator)] = assignment
+            .substring(separator + 1);
+      }
       var matches = exportBeads
-          .where((bead) => bead.externalRef == externalRef)
+          .where((bead) {
+            if (type != null && bead.issueType != type) return false;
+            if (status != null && bead.status != status) return false;
+            if (externalRef != null && bead.externalRef != externalRef) {
+              return false;
+            }
+            return metadataFields.entries.every(
+              (entry) => bead.metadata[entry.key] == entry.value,
+            );
+          })
           .toList(growable: false);
       if (externalRef?.startsWith('grid:state-store-prune-shield:') ?? false) {
         _shieldListCount++;

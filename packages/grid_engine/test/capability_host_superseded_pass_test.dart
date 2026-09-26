@@ -338,7 +338,7 @@ _host(ServiceBundle services) {
   return (owner: owner, root: root, fakes: fakes, registryState: registryState);
 }
 
-Fakes _fakesWithRunner(_TimeoutCompleteRunner runner) {
+Fakes _fakesWithRunner(RecordingBdRunner runner) {
   final provider = FakeRuntimeProvider();
   final git = RecordingGitRunner();
   final pr = FakePrOpener();
@@ -368,10 +368,7 @@ Fakes _fakesWithRunner(_TimeoutCompleteRunner runner) {
   _MutableCapabilityRegistryState registryState,
   _PersistCursorHarnessState cursorState,
 })
-_persistHost(
-  _TimeoutCompleteRunner runner, {
-  required DateTime Function() clock,
-}) {
+_persistHost(RecordingBdRunner runner, {required DateTime Function() clock}) {
   const capability = _ManualAdvanceCapability();
   CapabilityRegistry registry() => DefaultCapabilityRegistry(
     capabilities: const {'agent': capability},
@@ -777,6 +774,122 @@ void main() {
         h.transport.flares.where((flare) => flare.name == 'step.persistFailed'),
         hasLength(3),
       );
+    });
+
+    test('an invalid advance result is named and supervised before any gate '
+        'close or complete write', () async {
+      var now = DateTime.utc(2026, 9, 21);
+      final runner = RecordingBdRunner(createdId: 'tgdog-unused')
+        ..exportBeads = [
+          sessionBead(id: 'tgdog-s', workBeadId: 'tg-1'),
+          const Bead(
+            id: 'tgdog-route-gate',
+            issueType: GridIssueTypes.gate,
+            status: BeadStatus.open,
+            metadata: {
+              'rig': stateSubstation,
+              'blocks': 'tgdog-s',
+              'node': 'tg-1/agent',
+              'reason': 'route review requested changes',
+            },
+          ),
+        ];
+      final h = _persistHost(runner, clock: () => now);
+      addTearDown(() {
+        h.owner.dispose();
+        h.fakes.ctx.dispose();
+        unawaited(h.fakes.provider.close());
+      });
+      await _pump();
+
+      for (var attempt = 0; attempt < 3; attempt++) {
+        final host = _hostBranch(h.root);
+        final state = (host as StatefulBranch).state as CapabilityHostState;
+        state.deliverReportForTest(
+          const AllocationAdvanced({'source-state': 'accepted'}),
+        );
+        await _waitUntil(
+          () =>
+              h.transport.flares
+                  .where((flare) => flare.name == 'step.persistFailed')
+                  .length ==
+              attempt + 1,
+          reason: 'invalid result attempt ${attempt + 1} was not flared',
+        );
+
+        if (attempt < 2) {
+          await _waitUntil(
+            () => _stepUpdates(runner, StepState.failed).length == attempt + 1,
+            reason: 'invalid result restart ${attempt + 1} was not persisted',
+          );
+          final failed = _stepUpdates(runner, StepState.failed).last;
+          final cooldown = DateTime.parse(
+            '${failed[MoleculeStepKeys.cooldownUntil]}',
+          );
+          now = cooldown.add(const Duration(milliseconds: 1));
+          h.cursorState.projectUpdate(failed);
+          h.owner.flush();
+          await _pump();
+        }
+      }
+
+      await _waitUntil(
+        () => _stepUpdates(runner, StepState.gated).length == 1,
+        reason: 'invalid result exhaustion did not park the route',
+      );
+
+      final persistFailures = h.transport.flares
+          .where((flare) => flare.name == 'step.persistFailed')
+          .toList();
+      expect(persistFailures, hasLength(3));
+      for (final flare in persistFailures) {
+        expect(flare.data['op'], 'advance');
+        expect(flare.data['error'], contains('source-state'));
+        expect(flare.data['error'], contains('tg-1/agent'));
+        expect(flare.data['error'], contains('-'));
+        expect(flare.data['error'], contains(r'^[a-zA-Z_][a-zA-Z0-9_.]*$'));
+      }
+
+      expect(
+        _stepUpdates(runner, StepState.complete),
+        isEmpty,
+        reason: 'validation must precede the complete transition',
+      );
+      expect(
+        runner.callsFor('close'),
+        isEmpty,
+        reason: 'validation must precede superseded-gate closure',
+      );
+      expect(
+        h.transport.flares.where(
+          (flare) => flare.name == 'gate.supersededByAdvance',
+        ),
+        isEmpty,
+      );
+
+      final routeGateUpdates = <Map<String, dynamic>>[];
+      final updates = runner.workUpdates;
+      for (var i = 0; i < updates.length; i++) {
+        if (updates[i][1] == 'tgdog-route-gate') {
+          routeGateUpdates.add(runner.metadataOfUpdate(i));
+        }
+      }
+      expect(routeGateUpdates, hasLength(1));
+      final exhaustionReason = '${routeGateUpdates.single['reason']}';
+      expect(exhaustionReason, startsWith('persist-exhausted:'));
+      expect(exhaustionReason, contains('source-state'));
+      expect(exhaustionReason, contains('tg-1/agent'));
+      expect(exhaustionReason, contains('-'));
+      expect(exhaustionReason, contains(r'^[a-zA-Z_][a-zA-Z0-9_.]*$'));
+
+      for (var i = 0; i < updates.length; i++) {
+        final metadata = runner.metadataOfUpdate(i);
+        expect(metadata.keys, isNot(contains('source-state')));
+        expect(
+          metadata.keys,
+          isNot(contains('grid.result.tg_h1_sagent.source-state')),
+        );
+      }
     });
 
     test('true teardown drops persist recovery loudly', () async {
