@@ -65,7 +65,22 @@ enum ShadowMismatchClass {
   /// A gate-cleared successor row was appended, but later re-run transitions
   /// were correlated to its superseded predecessor. Fixed rounds compare
   /// clean; this class identifies banked pre-fix shadow-window evidence.
-  uninstrumentedResume('uninstrumented_resume');
+  uninstrumentedResume('uninstrumented_resume'),
+
+  /// NOT a gap and NOT evidence: an UNSHADOWABLE step fact the comparator
+  /// stops sampling (tg-ul2v).
+  ///
+  /// Under `discipline: cut` the station RETIRES two legacy step-bead writes —
+  /// the `running` write at a step's start and the gate-cleared
+  /// `gated`→`pending` rearm write — so the `step.transition` record is the
+  /// ONLY carrier of those transitions and the bead is structurally behind the
+  /// fold for exactly them. There is no legacy oracle left to shadow them
+  /// against. The row is still PRINTED, with the retired write named in its
+  /// basis, so the classification is on the record; it counts toward neither
+  /// the unexplained tally nor the allow-list. Assigned ONLY with positive
+  /// evidence (the session's cut stamp plus the pair's own proof — see
+  /// `retiredLegacyStepCarrier`), never on the state words alone.
+  legacyCarrierRetired('legacy_carrier_retired');
 
   const ShadowMismatchClass(this.wire);
 
@@ -74,8 +89,99 @@ enum ShadowMismatchClass {
   /// parses it.
   final String wire;
 
-  /// True for every class that is NOT [unexplained] — the §9 allow-list.
-  bool get isNamedGap => this != ShadowMismatchClass.unexplained;
+  /// True for the §9 allow-list: every class that is neither [unexplained]
+  /// nor [isUnshadowable].
+  bool get isNamedGap =>
+      this != ShadowMismatchClass.unexplained && !isUnshadowable;
+
+  /// True for a class that names a fact the comparator does not SAMPLE —
+  /// printed, never counted as a mismatch either way.
+  bool get isUnshadowable => this == ShadowMismatchClass.legacyCarrierRetired;
+}
+
+/// THE NAMED NON-ATOMIC-CRASH ALLOW-LIST — schema §9's "named allow-list for
+/// the known non-atomic-crash class" (tg-ul2v AC-3).
+///
+/// Its entries are the [ShadowMismatchClass.nonAtomicCrash] rows. One crash
+/// usually leaves SEVERAL rows behind (every fact the lost append carried), so
+/// the operator adjudicates the SESSION once rather than being re-prompted per
+/// row or per run: [admit] opens exactly one [NonAtomicCrashAdjudication] the
+/// first time a session shows a crash row, and every later row for that
+/// session — in the same run or a later run through the same instance — JOINS
+/// it without prompting again.
+///
+/// Scope is ONE PROCESS, deliberately: the instance is held by the verb (or
+/// handed to [runTrajShadowDiff]), and nothing is persisted, so a bounce
+/// starts a fresh list. Cross-bounce persistence is explicitly not required,
+/// and this list is REPORTED only — it gates no cut, release or stage
+/// boundary (`the_grid#the-g1-certificate-is-one-clean-primary-boot`).
+final class NonAtomicCrashAllowList {
+  /// The list's name, as the report prints it.
+  static const String name = 'non-atomic-crash allow-list';
+
+  final Map<String, NonAtomicCrashAdjudication> _bySession =
+      <String, NonAtomicCrashAdjudication>{};
+
+  /// The sessions adjudicated so far in this process.
+  int get sessions => _bySession.length;
+
+  /// The open adjudication for [sessionId], or null when the session has
+  /// shown no crash row in this process.
+  NonAtomicCrashAdjudication? adjudicationFor(String sessionId) =>
+      _bySession[sessionId];
+
+  /// Admits every [ShadowMismatchClass.nonAtomicCrash] row in [rows]; other
+  /// classes are ignored. Returns the adjudications this call OPENED — the
+  /// only ones to prompt for — and, per already-adjudicated session, how many
+  /// rows joined it without a prompt.
+  NonAtomicCrashAdmission admit(Iterable<ShadowMismatch> rows) {
+    final opened = <NonAtomicCrashAdjudication>[];
+    final joined = <String, int>{};
+    for (final row in rows) {
+      if (row.classification != ShadowMismatchClass.nonAtomicCrash) continue;
+      final existing = _bySession[row.sessionId];
+      if (existing == null) {
+        final adjudication = NonAtomicCrashAdjudication._(row);
+        _bySession[row.sessionId] = adjudication;
+        opened.add(adjudication);
+        continue;
+      }
+      existing._rows.add(row);
+      if (!opened.contains(existing)) {
+        joined[row.sessionId] = (joined[row.sessionId] ?? 0) + 1;
+      }
+    }
+    return (
+      opened: List<NonAtomicCrashAdjudication>.unmodifiable(opened),
+      joined: Map<String, int>.unmodifiable(joined),
+    );
+  }
+}
+
+/// What one [NonAtomicCrashAllowList.admit] call changed.
+typedef NonAtomicCrashAdmission = ({
+  List<NonAtomicCrashAdjudication> opened,
+  Map<String, int> joined,
+});
+
+/// ONE session's entry on the [NonAtomicCrashAllowList]: the operator's
+/// single adjudication for every crash row that session produced.
+final class NonAtomicCrashAdjudication {
+  NonAtomicCrashAdjudication._(ShadowMismatch first)
+    : sessionId = first.sessionId,
+      basis = first.basis,
+      _rows = <ShadowMismatch>[first];
+
+  final String sessionId;
+
+  /// The corroboration that named the FIRST row — the crash evidence the
+  /// operator adjudicates on.
+  final String? basis;
+
+  final List<ShadowMismatch> _rows;
+
+  /// Every crash row this adjudication covers, in admission order.
+  List<ShadowMismatch> get rows => List<ShadowMismatch>.unmodifiable(_rows);
 }
 
 /// One typed mismatch, keyed exactly as §9 orders the report.
@@ -244,10 +350,12 @@ class TrajShadowDiffCommand extends Command<int> {
     ShadowCompare compare = const UncomparableShadow(),
     ShadowCompareFactory? compareFor,
     ShadowAccountingSource? accountingFor,
+    NonAtomicCrashAllowList? allowList,
   }) : _open = open ?? openTrajectoryReader,
        _compare = compare,
        _compareFor = compareFor,
-       _accountingFor = accountingFor {
+       _accountingFor = accountingFor,
+       _allowList = allowList ?? NonAtomicCrashAllowList() {
     addGridHomeOption(argParser);
     argParser
       ..addMultiOption(
@@ -296,6 +404,10 @@ class TrajShadowDiffCommand extends Command<int> {
   final ShadowCompare _compare;
   final ShadowCompareFactory? _compareFor;
   final ShadowAccountingSource? _accountingFor;
+
+  /// Held by the verb so every run in this process shares ONE list: a session
+  /// already adjudicated is not re-prompted by a later run.
+  final NonAtomicCrashAllowList _allowList;
 
   @override
   final String name = 'shadow-diff';
@@ -371,6 +483,7 @@ class TrajShadowDiffCommand extends Command<int> {
       sessions: argResults!.multiOption('session'),
       round: round,
       limit: limit,
+      allowList: _allowList,
     );
   }
 
@@ -412,9 +525,13 @@ Future<int> runTrajShadowDiff({
   List<String> sessions = const [],
   int? round,
   int limit = completeReadCeiling,
+  NonAtomicCrashAllowList? allowList,
   void Function(String)? out,
   void Function(String)? err,
 }) async {
+  // One list per run when the caller holds none; a caller that holds one (the
+  // verb does) gets once-per-session adjudication across its runs.
+  allowList ??= NonAtomicCrashAllowList();
   final void Function(String) write = out ?? stdout.writeln;
   final void Function(String) writeErr = err ?? stderr.writeln;
   write('traj shadow-diff — legacy/fold comparator (schema §9)');
@@ -541,13 +658,23 @@ Future<int> runTrajShadowDiff({
         for (final session in incomplete) {
           write('  INCOMPLETE: $session');
         }
-        final unexplained = mismatches
+        // THE SAMPLED SET: every row except the unshadowable ones (tg-ul2v).
+        // Those are printed in the table below with their class and basis,
+        // and counted on their own line, but they are not mismatches either
+        // way — there is no legacy oracle for them to agree or disagree with.
+        final sampled = mismatches
+            .where((row) => !row.classification.isUnshadowable)
+            .toList(growable: false);
+        final unshadowable = mismatches.length - sampled.length;
+        final unexplained = sampled
             .where(
               (row) => row.classification == ShadowMismatchClass.unexplained,
             )
             .length;
         if (mismatches.isNotEmpty) _writeMismatches(write, mismatches);
-        _writeNamedGaps(write, mismatches);
+        _writeNamedGaps(write, sampled);
+        _writeUnshadowable(write, mismatches);
+        _writeCrashAdjudications(write, allowList.admit(sampled));
 
         // Everything that poisons the RUN rather than one session, listed so
         // the operator sees WHICH rule fired. An incomplete read never
@@ -572,13 +699,17 @@ Future<int> runTrajShadowDiff({
           else if (accounting.disqualification case final String reason)
             reason,
         ];
-        final tally = mismatches.isEmpty
-            ? '0 mismatches over ${scope.length} session'
-                  '${scope.length == 1 ? '' : 's'}'
-            : '${mismatches.length} mismatch'
-                  '${mismatches.length == 1 ? '' : 'es'}, $unexplained '
-                  'unexplained';
-        final verdict = switch ((disqualifiers.isEmpty, mismatches.isEmpty)) {
+        final tally =
+            (sampled.isEmpty
+                ? '0 mismatches over ${scope.length} session'
+                      '${scope.length == 1 ? '' : 's'}'
+                : '${sampled.length} mismatch'
+                      '${sampled.length == 1 ? '' : 'es'}, $unexplained '
+                      'unexplained') +
+            (unshadowable == 0
+                ? ''
+                : ' ($unshadowable unshadowable, not sampled)');
+        final verdict = switch ((disqualifiers.isEmpty, sampled.isEmpty)) {
           _ when unexplained > 0 =>
             ' — the stage cut is BLOCKED; the fold is presumed wrong until '
                 'shown otherwise.',
@@ -649,6 +780,51 @@ void _writeNamedGaps(
     '  named gaps: ${keys.map((key) => '$key ${counts[key]}').join(', ')} '
     '(allow-listed; adjudicated once, never silently dropped)',
   );
+}
+
+/// The unshadowable rows' count by class (tg-ul2v). Printed only when one
+/// occurred, for the same reason the named-gap line is.
+void _writeUnshadowable(
+  void Function(String) write,
+  List<ShadowMismatch> mismatches,
+) {
+  final counts = <String, int>{};
+  for (final row in mismatches) {
+    if (!row.classification.isUnshadowable) continue;
+    counts[row.classification.wire] =
+        (counts[row.classification.wire] ?? 0) + 1;
+  }
+  if (counts.isEmpty) return;
+  final keys = counts.keys.toList()..sort();
+  write(
+    '  unshadowable: ${keys.map((key) => '$key ${counts[key]}').join(', ')} '
+    '(no legacy carrier under cut; recorded, not sampled)',
+  );
+}
+
+/// The [NonAtomicCrashAllowList]'s prompts: ONE line per session this run
+/// opened, and one quiet line per already-adjudicated session whose new rows
+/// joined its existing adjudication instead of prompting again.
+void _writeCrashAdjudications(
+  void Function(String) write,
+  NonAtomicCrashAdmission admission,
+) {
+  for (final adjudication in admission.opened) {
+    final count = adjudication.rows.length;
+    write(
+      '  ${NonAtomicCrashAllowList.name}: adjudicate ONCE — '
+      '${adjudication.sessionId} ($count row${count == 1 ? '' : 's'})'
+      '${adjudication.basis == null ? '' : '; basis: ${adjudication.basis}'}',
+    );
+  }
+  final joined = admission.joined.keys.toList()..sort();
+  for (final sessionId in joined) {
+    final count = admission.joined[sessionId]!;
+    write(
+      '  ${NonAtomicCrashAllowList.name}: already adjudicated this process — '
+      '$sessionId (+$count row${count == 1 ? '' : 's'}, not re-prompted)',
+    );
+  }
 }
 
 void _writeMismatches(
