@@ -59,6 +59,15 @@ sealed class GridCommandRequest with _$GridCommandRequest {
   const factory GridCommandRequest.resumeSession({required String beadId}) =
       GridResumeSession;
 
+  /// Voids the OPEN, UNGATED session [sessionId] for [reason]: retires it and
+  /// re-keys its round onto the void key (disposition `voided`) so its work
+  /// bead returns to the mountable frontier. A gated session is refused and
+  /// pointed at `grid rework`, which owns the gated exit.
+  const factory GridCommandRequest.voidSession({
+    required String sessionId,
+    required String reason,
+  }) = GridSessionVoid;
+
   /// Sets the resident station's live admission ceiling.
   const factory GridCommandRequest.setAdmissionCeiling({
     required int maxAgents,

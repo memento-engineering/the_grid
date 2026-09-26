@@ -3101,6 +3101,405 @@ void _shipObserverGroup() {
       expect(flares, isEmpty);
     });
   });
+
+  group('grid/session/void — the open, ungated operator exit (tg-5snt)', () {
+    setUp(BdCliService.resetGuardedWriteCapabilityForTesting);
+    const request = GridCommandRequest.voidSession(
+      sessionId: 'tgdog-session',
+      reason: 'never stepped after re-adoption',
+    );
+    final retiredKey = voidKeyFor('tg-1', 'tgdog-session');
+
+    Bead step(String state, {String path = 'tg-1/review/route'}) => Bead(
+      id: 'tgdog-session-step',
+      issueType: GridIssueTypes.step,
+      metadata: {
+        'rig': 'tgdog',
+        MoleculeStepKeys.path: path,
+        MoleculeStepKeys.session: 'tgdog-session',
+        MoleculeStepKeys.capability: 'review',
+        MoleculeStepKeys.state: state,
+      },
+    );
+
+    /// Runs one void over [state] and returns the handler outcome plus the
+    /// recording state writer.
+    Future<
+      ({
+        GridCommandResult result,
+        _RecordingRunner stateRunner,
+        _RecordingRunner workRunner,
+      })
+    >
+    voidOver(
+      List<Bead> state, {
+      GridCommandRequest command = request,
+      StationTrajectoryRecorder? recorder,
+    }) async {
+      final stateRunner = _RecordingRunner(exportBeads: state);
+      final workRunner = _RecordingRunner();
+      final result = await _handler(
+        state: _Source(_snapshot(state)),
+        work: _Source(_workSnapshot()),
+        stateRunner: stateRunner,
+        workRunner: workRunner,
+        recorder: recorder,
+      )(command);
+      return (result: result, stateRunner: stateRunner, workRunner: workRunner);
+    }
+
+    Future<void> refused(
+      List<Bead> state, {
+      required String code,
+      GridCommandRequest command = request,
+      Matcher message = anything,
+    }) async {
+      final run = await voidOver(state, command: command);
+      expect(
+        run.result,
+        isA<GridCommandRefused>()
+            .having((value) => value.code, 'code', code)
+            .having((value) => value.message, 'message', message),
+      );
+      expect(
+        run.stateRunner.calls,
+        isEmpty,
+        reason: 'refusal must be zero-write',
+      );
+      expect(
+        run.workRunner.calls,
+        isEmpty,
+        reason: 'refusal must be zero-write',
+      );
+    }
+
+    test(
+      'AC-1: voids an OPEN, UNGATED session — closes it voided and re-keys its '
+      'round onto the void key, in the rework chokepoint\'s order',
+      () async {
+        final run = await voidOver([_session('tgdog-session', open: true)]);
+
+        expect(run.result, isA<GridCommandCompleted>());
+        final value = (run.result as GridCommandCompleted).value;
+        expect(value['operation'], 'grid/session/void');
+        expect(value['sessionId'], 'tgdog-session');
+        expect(value['workBeadId'], 'tg-1');
+        expect(value['retiredKey'], retiredKey);
+        expect(value['closedSession'], {
+          'sessionId': 'tgdog-session',
+          'reason': 'voided',
+          'disposition': 'voided',
+        });
+        expect(value.containsKey('reapFailure'), isFalse);
+
+        final calls = run.stateRunner.calls;
+        final close = calls.indexWhere(
+          (call) =>
+              call.first == 'close' &&
+              call[1] == 'tgdog-session' &&
+              call.contains('voided'),
+        );
+        final rekey = calls.indexWhere(
+          (call) =>
+              call.first == 'update' &&
+              call[1] == 'tgdog-session' &&
+              call.contains('work_bead=$retiredKey'),
+        );
+        expect(close, greaterThanOrEqualTo(0), reason: 'the session is CLOSED');
+        expect(rekey, greaterThan(close), reason: 're-key follows the close');
+        expect(
+          calls[rekey],
+          contains(
+            '${SessionBeadKeys.voidedReason}=never stepped after re-adoption',
+          ),
+        );
+        // A void is NOT a rework round: no `#rN` key is minted and no round
+        // budget is spent.
+        expect(_reworkUpdates(run.stateRunner), isEmpty);
+        // The void touches only the_grid's OWN state store — never the
+        // foreign work source (A37).
+        expect(run.workRunner.calls, isEmpty);
+      },
+    );
+
+    test('AC-2: the voided session leaves NO bare work_bead key behind, so the '
+        'bead is mountable on the next admission pass — the hand close it '
+        'replaces leaves the bare key linked', () async {
+      final open = _session('tgdog-session', open: true);
+      final run = await voidOver([open]);
+      expect(run.result, isA<GridCommandCompleted>());
+
+      // Replay the recorded re-key onto the session row: the durable state
+      // the next admission pass reads.
+      final rekey = run.stateRunner.calls.firstWhere(
+        (call) =>
+            call.first == 'update' &&
+            call[1] == 'tgdog-session' &&
+            call.contains('work_bead=$retiredKey'),
+      );
+      final written = <String, String>{
+        for (final arg in rekey.skip(2))
+          if (arg.contains('=') && !arg.startsWith('--'))
+            arg.substring(0, arg.indexOf('=')): arg.substring(
+              arg.indexOf('=') + 1,
+            ),
+      };
+      final voided = projectSession(
+        Bead(
+          id: 'tgdog-session',
+          issueType: GridIssueTypes.session,
+          status: BeadStatus.closed,
+          metadata: {...open.metadata, ...written},
+        ),
+      );
+      expect(voided.workBeadId, retiredKey);
+      expect(sessionDispositionOf(voided), isA<VoidedSession>());
+      expect(sessionDispositionOf(voided).blocksMount, isFalse);
+      // The bare bead links NO row any more: the frontier's verdict for
+      // tg-1 is "no session" and it mints a fresh round.
+      final linked = [
+        voided,
+      ].where((row) => linkedWorkBeadKeyOf(row) == 'tg-1');
+      expect(linked, isEmpty, reason: 'no bare work_bead key survives');
+      expect(linkedSessionVerdictOf(linked), isA<NoLinkedSession>());
+
+      // THE TRAP, for contrast: closing the same session by hand keeps its
+      // bare key linked to the bead.
+      final handClosed = projectSession(
+        Bead(
+          id: 'tgdog-session',
+          issueType: GridIssueTypes.session,
+          status: BeadStatus.closed,
+          metadata: open.metadata,
+        ),
+      );
+      expect(linkedWorkBeadKeyOf(handClosed), 'tg-1');
+    });
+
+    test(
+      'AC-3: a session parked at a GATE is refused, the gate is named, and the '
+      'operator is pointed at rework',
+      () => refused(
+        [
+          _session('tgdog-session', molecule: true, open: true),
+          const Bead(
+            id: 'tgdog-route-gate',
+            issueType: GridIssueTypes.gate,
+            metadata: {
+              'rig': 'tgdog',
+              'blocks': 'tgdog-session',
+              'node': 'tg-1/review/route',
+            },
+          ),
+          step(StepState.gated.name),
+        ],
+        code: 'session_gated',
+        message: allOf(
+          contains('tgdog-route-gate'),
+          contains('tg-1/review/route'),
+          contains('grid rework tg-1'),
+        ),
+      ),
+    );
+
+    test(
+      'AC-3: a GATED step with no gate bead is refused the same way, naming '
+      'the node',
+      () => refused(
+        [
+          _session('tgdog-session', molecule: true, open: true),
+          step(StepState.gated.name),
+        ],
+        code: 'session_gated',
+        message: allOf(
+          contains('tg-1/review/route'),
+          contains('grid rework tg-1'),
+        ),
+      ),
+    );
+
+    test('AC-3: the two exits stay distinct — rework STILL refuses the ungated '
+        'session as session_not_parked while void completes over it', () async {
+      final open = _session('tgdog-session', open: true);
+      final reworkRunner = _RecordingRunner(exportBeads: [open]);
+      final rework = await _handler(
+        state: _Source(_snapshot([open])),
+        work: _Source(_workSnapshot()),
+        stateRunner: reworkRunner,
+        workRunner: _RecordingRunner(),
+      )(const GridCommandRequest.rework(beadId: 'tg-1'));
+      expect(
+        rework,
+        isA<GridCommandRefused>().having(
+          (value) => value.code,
+          'code',
+          'session_not_parked',
+        ),
+      );
+      expect(reworkRunner.calls, isEmpty);
+
+      final run = await voidOver([open]);
+      expect(run.result, isA<GridCommandCompleted>());
+    });
+
+    test(
+      'a RUNNING step is refused — a live round is never voided from under '
+      'itself',
+      () => refused(
+        [
+          _session('tgdog-session', molecule: true, open: true),
+          step(StepState.running.name),
+        ],
+        code: 'session_running',
+        message: contains('tg-1/review/route'),
+      ),
+    );
+
+    test(
+      'a CLOSED session is refused: the engine retires a closed dead key on '
+      'its own',
+      () => refused([_session('tgdog-session')], code: 'session_terminal'),
+    );
+
+    test(
+      'an unknown id is refused',
+      () => refused(const [], code: 'session_not_found'),
+    );
+
+    test(
+      'a non-session bead is refused',
+      () => refused(
+        [
+          const Bead(
+            id: 'tgdog-gate',
+            issueType: GridIssueTypes.gate,
+            metadata: {'rig': 'tgdog', 'node': 'route/committee'},
+          ),
+        ],
+        command: const GridCommandRequest.voidSession(
+          sessionId: 'tgdog-gate',
+          reason: 'x',
+        ),
+        code: 'not_a_session',
+      ),
+    );
+
+    test(
+      'a session naming no work bead is refused',
+      () => refused([
+        const Bead(
+          id: 'tgdog-session',
+          issueType: GridIssueTypes.session,
+          metadata: {'rig': 'tgdog'},
+        ),
+      ], code: 'session_unlinked'),
+    );
+
+    test(
+      'a blank reason is refused before any read',
+      () => refused(
+        [_session('tgdog-session', open: true)],
+        command: const GridCommandRequest.voidSession(
+          sessionId: 'tgdog-session',
+          reason: '   ',
+        ),
+        code: 'reason_required',
+      ),
+    );
+
+    test('no state snapshot is refused', () async {
+      final stateRunner = _RecordingRunner();
+      final workRunner = _RecordingRunner();
+      await _expectRefused(
+        _handler(
+          state: _Source(null),
+          work: _Source(_workSnapshot()),
+          stateRunner: stateRunner,
+          workRunner: workRunner,
+        ),
+        request,
+        code: 'snapshot_unavailable',
+        stateRunner: stateRunner,
+        workRunner: workRunner,
+      );
+    });
+
+    test(
+      'both retire paths write through ONE chokepoint: rework and void issue '
+      'the same session-close and re-key shape, differing only in reason and '
+      'key',
+      () async {
+        // rework's gate-less case: an all-terminal row re-keys to #r1.
+        final reworkRunner = _RecordingRunner();
+        final reworkState = _Source(_snapshot([_session('tgdog-session')]));
+        final rework = await _handler(
+          state: reworkState,
+          work: _Source(_workSnapshot()),
+          stateRunner: reworkRunner,
+          workRunner: _RecordingRunner(),
+          refreshState: _publishReworkSuccessorOnSecondRefresh(reworkState),
+        )(const GridCommandRequest.rework(beadId: 'tg-1'));
+        expect(rework, isA<GridCommandCompleted>());
+
+        final run = await voidOver([_session('tgdog-session', open: true)]);
+        expect(run.result, isA<GridCommandCompleted>());
+
+        List<List<String>> sessionWrites(_RecordingRunner runner) => runner
+            .calls
+            .where((call) => call.length > 1 && call[1] == 'tgdog-session')
+            .toList(growable: false);
+        final reworkWrites = sessionWrites(reworkRunner);
+        final voidWrites = sessionWrites(run.stateRunner);
+        expect(
+          voidWrites.map((call) => call.first),
+          reworkWrites.map((call) => call.first),
+          reason: 'one verb sequence — the retire is not re-expressed',
+        );
+        final reworkClose = reworkWrites.singleWhere(
+          (call) => call.first == 'close',
+        );
+        final voidClose = voidWrites.singleWhere(
+          (call) => call.first == 'close',
+        );
+        expect(
+          voidClose,
+          reworkClose
+              .map((arg) => arg == 'reworked' ? 'voided' : arg)
+              .toList(growable: false),
+        );
+        expect(reworkWrites.last.first, 'update');
+        expect(reworkWrites.last, contains('work_bead=tg-1#r1'));
+        expect(voidWrites.last.first, 'update');
+        expect(voidWrites.last, contains('work_bead=$retiredKey'));
+      },
+    );
+
+    test(
+      'the void records attempt.round.retired with cause void, and a throwing '
+      'sink is non-fatal',
+      () async {
+        final sink = _CapturingSink();
+        final recorded = await voidOver([
+          _session('tgdog-session', open: true),
+        ], recorder: StationTrajectoryRecorder(sink: sink));
+        expect(recorded.result, isA<GridCommandCompleted>());
+        expect(sink.records.map((r) => r.recordType), [
+          'attempt.round.retired',
+        ]);
+        final fact = {
+          ...sink.records.single.correlationToJson(),
+          ...sink.records.single.payloadToJson(),
+        };
+        expect(fact['session_id'], 'tgdog-session');
+        expect(fact['cause'], 'void');
+
+        final throwing = await voidOver([
+          _session('tgdog-session', open: true),
+        ], recorder: StationTrajectoryRecorder(sink: _ThrowingSink()));
+        expect(throwing.result, isA<GridCommandCompleted>());
+      },
+    );
+  });
 }
 
 GraphSnapshot _workSnapshot([String id = 'tg-1']) => _workSnapshotWithBead(

@@ -332,6 +332,10 @@ final class StationCommandHandler implements GridCommandHandler {
       beadId: beadId,
       pause: false,
     ),
+    GridSessionVoid(:final sessionId, :final reason) => _voidSession(
+      sessionId: sessionId,
+      reason: reason,
+    ),
     GridSetAdmissionCeiling(:final maxAgents) => _setAdmissionCeilingCommand(
       maxAgents,
     ),
@@ -1150,6 +1154,217 @@ final class StationCommandHandler implements GridCommandHandler {
         'sessionId': session.id,
         'pauseState': target.name,
         'changed': true,
+      },
+    );
+  }
+
+  /// `grid session void` — THE OPERATOR EXIT FOR AN OPEN, UNGATED SESSION
+  /// (tg-5snt).
+  ///
+  /// [_rework] refuses this exact shape (`session_not_parked`), and that
+  /// refusal is load-bearing: rework retires a round AT A GATE, spends round
+  /// budget, closes the gates that parked it, and waits on a successor. A
+  /// session that never parked has none of that to account for — yet closing
+  /// it by hand leaves its bare `work_bead` key behind and the bead never
+  /// re-mounts (the trap this verb exists to replace). So this door performs
+  /// ONLY the gate-less tail of [_rework]: retire the session through the SAME
+  /// write chokepoint (`closeSessionAndOpenGatesForTerminal`), then re-key its
+  /// round through the same `update` onto the engine's own void payload
+  /// ([voidRetireMetadata] — `<bead>#void-<session>` plus the reason), which
+  /// by construction never matches the rework-round pattern and so never
+  /// spends the cap. No round-cap accounting, no gate-close logic, no
+  /// successor observation: the frontier mints the next round the way it
+  /// mints over any dead key.
+  ///
+  /// A GATED session is refused and pointed at `grid rework`, so the two exits
+  /// stay distinct and neither becomes a synonym for the other. A RUNNING step
+  /// is refused outright — a live process is never voided from under itself.
+  Future<GridCommandResult> _voidSession({
+    required String sessionId,
+    required String reason,
+  }) async {
+    final normalizedReason = reason.trim();
+    if (normalizedReason.isEmpty) {
+      return _refused(
+        'reason_required',
+        '--reason is required: a void must say why the round is abandoned.',
+      );
+    }
+    await _refreshState();
+    final state = _stateSource.current;
+    if (state == null) {
+      return _refused(
+        'snapshot_unavailable',
+        'The resident state store has no current snapshot.',
+      );
+    }
+    final session = state.bead(sessionId);
+    if (session == null) {
+      return _refused(
+        'session_not_found',
+        'Session "$sessionId" was not found in the resident state store.',
+      );
+    }
+    if (session.issueType != GridIssueTypes.session) {
+      return _refused('not_a_session', '"$sessionId" is not a session.');
+    }
+    if (session.isClosed) {
+      return _refused(
+        'session_terminal',
+        'Session "$sessionId" is already CLOSED. A closed dead key is retired '
+            'by the engine on its next admission pass; a closed gated round is '
+            'retired by `grid rework`.',
+      );
+    }
+    final rawKey = _meta(session, SessionBeadKeys.workBead);
+    if (rawKey == null) {
+      return _refused(
+        'session_unlinked',
+        'Session "$sessionId" names no work bead; there is no round to re-key.',
+      );
+    }
+    final workBeadId = StationTrajectoryRecorder.parseLegacyWorkKey(
+      rawKey,
+    ).workBeadId;
+
+    // THE GATE REFUSAL. The park marker is the gate bead whose `blocks` names
+    // the session (the same evidence [_rework]'s park predicate keys on), and
+    // a `gated` step is the cursor-side spelling of the same park. Either one
+    // means rework owns the exit — say which gate, and say so.
+    final openBlockingGates =
+        state.beads
+            .where(
+              (bead) =>
+                  bead.issueType == GridIssueTypes.gate &&
+                  !bead.isClosed &&
+                  _meta(bead, 'blocks') == sessionId,
+            )
+            .toList(growable: false)
+          ..sort((left, right) => left.id.compareTo(right.id));
+    if (openBlockingGates.isNotEmpty) {
+      final gates = openBlockingGates
+          .map(
+            (gate) => '${gate.id} (${_meta(gate, 'node') ?? 'unknown node'})',
+          )
+          .join(', ');
+      return _refused(
+        'session_gated',
+        'Session "$sessionId" is parked at gate $gates; `grid session void` '
+            'voids only an ungated session — use `grid rework $workBeadId` to '
+            'retire a gated round.',
+      );
+    }
+    final beadCursor =
+        _meta(session, SessionBeadKeys.model) == kSessionModelMolecule
+        ? projectMoleculeCursor(
+            state.beads.where(
+              (bead) =>
+                  bead.issueType == GridIssueTypes.step &&
+                  _meta(bead, MoleculeStepKeys.session) == sessionId,
+            ),
+            dependencies: state.dependencies,
+          ).cursor
+        : const <String, NodeCursor>{};
+    final cursor = _effectiveParkCursor(sessionId, beadCursor);
+    final gatedNodes = [
+      for (final entry in cursor.entries)
+        if (entry.value.state == StepState.gated) entry.key,
+    ]..sort();
+    if (gatedNodes.isNotEmpty) {
+      return _refused(
+        'session_gated',
+        'Session "$sessionId" is gated at ${gatedNodes.join(', ')}; '
+            '`grid session void` voids only an ungated session — use '
+            '`grid rework $workBeadId` to retire a gated round.',
+      );
+    }
+    final runningNodes = [
+      for (final entry in cursor.entries)
+        if (entry.value.state == StepState.running) entry.key,
+    ]..sort();
+    if (runningNodes.isNotEmpty) {
+      return _refused(
+        'session_running',
+        'Session "$sessionId" has a running step '
+            '(${runningNodes.join(', ')}); a live round is never voided from '
+            'under itself — pause it or wait for it to park.',
+      );
+    }
+
+    // THE RETIRE — the same chokepoint [_rework] uses, unchanged. The sweep
+    // finds no gate to close (the refusal above guarantees it), so this is
+    // the session close alone, in the writer's causal order.
+    try {
+      await _stateWriter.closeSessionAndOpenGatesForTerminal(
+        sessionId: sessionId,
+        closeReason: 'voided',
+        trigger: GateCloseCause.supersededRound,
+      );
+    } on OwnershipRefused catch (error) {
+      return _refused('ownership_refused', error.toString());
+    } on OwnershipGuardRefused catch (error) {
+      return _refused('ownership_refused', error.toString());
+    } on Object catch (error) {
+      return _refused(
+        'void_close_failed',
+        'Could not close session "$sessionId" for void: $error',
+      );
+    }
+    // THE RE-KEY — the same `update` [_rework] re-keys through, carrying the
+    // engine's own void payload so the operator door and the engine's
+    // automatic retire write one identical shape.
+    final retiredKey = voidKeyFor(workBeadId, sessionId);
+    String? reapFailure;
+    try {
+      await _stateWriter.update(
+        sessionId,
+        metadata: voidRetireMetadata(
+          workBeadId: workBeadId,
+          deadSessionId: sessionId,
+          reason: normalizedReason,
+        ),
+      );
+      // §2.3's `attempt.round.retired` row, cause `void`: the round this
+      // session held is derived from its own key, exactly as the engine's
+      // void retire derives it — a bare key is a round no counter names.
+      _recorder.roundRetired(
+        sessionId: sessionId,
+        cause: RoundRetireCause.voided,
+        oldRound: StationTrajectoryRecorder.parseLegacyWorkKey(rawKey).round,
+      );
+      // Collect the retired round's molecule, as rework does — a never-driven
+      // round can still have poured every step bead (all `pending`), and
+      // leaving them open is the orphan bloat tg-ehht measured. NON-FATAL:
+      // the retire and the re-key already landed.
+      try {
+        await _stateWriter.reapMolecule(sessionId: sessionId);
+      } on Object catch (error) {
+        reapFailure = '$error';
+      }
+    } on OwnershipRefused catch (error) {
+      return _refused('ownership_refused', error.toString());
+    } on OwnershipGuardRefused catch (error) {
+      return _refused('ownership_refused', error.toString());
+    }
+    await _refreshState();
+    return GridCommandResult.completed(
+      message: reapFailure == null
+          ? 'Voided session "$sessionId"; "$workBeadId" returns to the '
+                'frontier as "$retiredKey".'
+          : 'Voided session "$sessionId"; "$workBeadId" returns to the '
+                'frontier as "$retiredKey" — but its molecule reap FAILED '
+                '(open step beads remain; sweep them): $reapFailure',
+      value: {
+        'operation': 'grid/session/void',
+        'sessionId': sessionId,
+        'workBeadId': workBeadId,
+        'retiredKey': retiredKey,
+        'closedSession': {
+          'sessionId': sessionId,
+          'reason': 'voided',
+          'disposition': 'voided',
+        },
+        if (reapFailure != null) 'reapFailure': reapFailure,
       },
     );
   }

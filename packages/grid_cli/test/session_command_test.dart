@@ -198,4 +198,194 @@ void main() {
       },
     );
   }
+
+  const voidReceipt = StationCommandCompleted({
+    'operation': 'grid/session/void',
+    'sessionId': 'tgdog-s1',
+    'workBeadId': 'tg-1',
+    'retiredKey': 'tg-1#void-tgdog-s1',
+    'closedSession': {
+      'sessionId': 'tgdog-s1',
+      'reason': 'voided',
+      'disposition': 'voided',
+    },
+  });
+
+  test('session void sends the session id and reason and renders the closed, '
+      'voided, re-keyed receipt', () async {
+    final output = <String>[];
+    final client = _FakeClient(voidReceipt);
+
+    expect(
+      await runSessionVoid(
+        gridRoot: '/grid',
+        sessionId: 'tgdog-s1',
+        reason: 'never stepped after re-adoption',
+        client: client,
+        out: output.add,
+      ),
+      0,
+    );
+
+    expect(client.gridRoot, '/grid');
+    expect(client.method, 'grid/session/void');
+    expect(client.params, {
+      'sessionId': 'tgdog-s1',
+      'reason': 'never stepped after re-adoption',
+    });
+    expect(
+      output.join('\n'),
+      allOf(
+        contains('voided session tgdog-s1'),
+        contains('disposition voided'),
+        contains('re-keyed tg-1 to tg-1#void-tgdog-s1'),
+        contains('mountable frontier'),
+      ),
+    );
+  });
+
+  test('session void is a subcommand of the session noun-domain: it requires '
+      '--reason and takes no defer date', () async {
+    final client = _FakeClient(voidReceipt);
+    final runner = CommandRunner<int>('grid', 'test')
+      ..addCommand(SessionCommand(client: client));
+
+    expect(
+      await runner.run(const [
+        'session',
+        'void',
+        'tgdog-s1',
+        '--reason',
+        'never stepped',
+        '--grid-root',
+        '/grid',
+      ]),
+      0,
+    );
+    expect(client.calls, 1);
+    expect(client.params, {'sessionId': 'tgdog-s1', 'reason': 'never stepped'});
+
+    // No defer date: `--until` is not an option of this verb.
+    expect(
+      () => runner.run(const [
+        'session',
+        'void',
+        'tgdog-s1',
+        '--reason',
+        'never stepped',
+        '--until',
+        '2026-10-01',
+        '--grid-root',
+        '/grid',
+      ]),
+      throwsA(isA<UsageException>()),
+    );
+    expect(client.calls, 1);
+  });
+
+  test('session void guards arity, reason, and absolute root', () async {
+    for (final arguments in <List<String>>[
+      ['session', 'void', '--reason', 'x', '--grid-root', '/grid'],
+      ['session', 'void', 'a', 'b', '--reason', 'x', '--grid-root', '/grid'],
+      ['session', 'void', 'a', '--grid-root', '/grid'],
+      ['session', 'void', 'a', '--reason', '   ', '--grid-root', '/grid'],
+      ['session', 'void', 'a', '--reason', 'x', '--grid-root', 'relative'],
+      ['session', 'void', 'a', '--reason', 'x'],
+    ]) {
+      final client = _FakeClient(voidReceipt);
+      final runner = CommandRunner<int>('grid', 'test')
+        ..addCommand(SessionCommand(client: client));
+      expect(await runner.run(arguments), 64, reason: arguments.join(' '));
+      expect(client.calls, 0, reason: arguments.join(' '));
+    }
+  });
+
+  test('session void surfaces the resident\'s gated refusal, which points the '
+      'operator at rework', () async {
+    final errors = <String>[];
+    expect(
+      await runSessionVoid(
+        gridRoot: '/grid',
+        sessionId: 'tgdog-s1',
+        reason: 'never stepped',
+        client: _FakeClient(
+          const StationCommandRefused(
+            'Session "tgdog-s1" is parked at gate tgdog-gate '
+            '(tg-1/review/route); `grid session void` voids only an ungated '
+            'session — use `grid rework tg-1` to retire a gated round.',
+          ),
+        ),
+        err: errors.add,
+      ),
+      64,
+    );
+    expect(
+      errors.single,
+      allOf(
+        startsWith('grid session void: '),
+        contains('tgdog-gate'),
+        contains('grid rework tg-1'),
+      ),
+    );
+  });
+
+  for (final fixture in <({String name, Map<String, Object?> value})>[
+    (name: 'missing closed session', value: const {'workBeadId': 'tg-1'}),
+    (
+      name: 'unvoided disposition',
+      value: const {
+        'workBeadId': 'tg-1',
+        'retiredKey': 'tg-1#void-tgdog-s1',
+        'closedSession': {
+          'sessionId': 'tgdog-s1',
+          'reason': 'voided',
+          'disposition': 'done',
+        },
+      },
+    ),
+    (
+      name: 'missing re-key',
+      value: const {
+        'workBeadId': 'tg-1',
+        'closedSession': {
+          'sessionId': 'tgdog-s1',
+          'reason': 'voided',
+          'disposition': 'voided',
+        },
+      },
+    ),
+  ]) {
+    test('session void rejects a ${fixture.name} receipt without partial '
+        'stdout', () async {
+      final output = <String>[];
+      final errors = <String>[];
+      expect(
+        await runSessionVoid(
+          gridRoot: '/grid',
+          sessionId: 'tgdog-s1',
+          reason: 'never stepped',
+          client: _FakeClient(StationCommandCompleted(fixture.value)),
+          out: output.add,
+          err: errors.add,
+        ),
+        64,
+      );
+      expect(output, isEmpty);
+      expect(errors.single, contains('complete void receipt'));
+    });
+  }
+
+  test('session noun-domain help documents the void verb', () {
+    final client = _FakeClient(voidReceipt);
+    final command = SessionCommand(client: client);
+    CommandRunner<int>('grid', 'test').addCommand(command);
+
+    expect(command.usage, contains('void'));
+    expect(command.usage, contains('Void an open, ungated session'));
+    expect(command.usage, contains('use rework'));
+    final voidUsage = command.subcommands['void']!.usage;
+    expect(voidUsage, contains('--reason'));
+    expect(voidUsage, contains('Required'));
+    expect(voidUsage, isNot(contains('--until')));
+  });
 }
