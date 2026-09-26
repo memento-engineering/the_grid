@@ -2,9 +2,17 @@
 /// stores, vended so the resident shell can close them on the way down.
 library;
 
-import 'package:beads_dart/beads_dart.dart' show DoltQueryService;
+import 'dart:async';
+
+import 'package:beads_dart/beads_dart.dart' show DoltEndpoint, DoltQueryService;
 
 import '../trajectory/trajectory_harness.dart';
+
+/// The budget ONE store handle's close is awaited under during an unwind
+/// (tg-supq). A half-open proxy socket can hang its close on the wire forever;
+/// past this budget the handle is reported BY NAME with its endpoint and no
+/// longer awaited, so the resident exits instead of parking on it.
+const Duration kStoreCloseBudget = Duration(seconds: 2);
 
 /// One open store connection, named for the operator's shutdown narrative.
 ///
@@ -20,6 +28,27 @@ abstract interface class StoreConnection {
   Future<void> close();
 }
 
+/// The endpoint a [StoreConnection] dials, for the unwind narrative: a handle
+/// that does not confirm its close is named together with WHERE it points, so
+/// the operator is not left to `lsof` the process by hand (tg-supq AC-2/AC-4).
+///
+/// An extension rather than an interface member so a foreign implementation
+/// (a test fake, a station's own connection class) keeps compiling; it renders
+/// a designed absence for one that vends no endpoint.
+extension StoreConnectionEndpoint on StoreConnection {
+  /// `host:port/database` for a pooled Dolt handle; the state server's
+  /// coordinates for the trajectory's sessions; a rendered absence otherwise.
+  String get endpoint => switch (this) {
+    DoltStoreConnection(:final endpoint) => endpoint,
+    TrajectoryStoreConnection(:final endpoint) => endpoint,
+    _ => '(endpoint not vended)',
+  };
+}
+
+/// Renders [endpoint] as `host:port/database` — never the credential.
+String describeDoltEndpoint(DoltEndpoint endpoint) =>
+    '${endpoint.host}:${endpoint.port}/${endpoint.database}';
+
 /// The [StoreConnection] over a pooled [DoltQueryService].
 final class DoltStoreConnection implements StoreConnection {
   /// Wraps [service] under the operator-facing [name].
@@ -29,6 +58,9 @@ final class DoltStoreConnection implements StoreConnection {
   final String name;
 
   final DoltQueryService _service;
+
+  /// The pooled service's `host:port/database`.
+  String get endpoint => describeDoltEndpoint(_service.endpoint);
 
   @override
   Future<void> close() => _service.close();
@@ -45,13 +77,21 @@ final class DoltStoreConnection implements StoreConnection {
 /// unprovisioned, or dry-run) closes nothing and still vends: `openStores` is
 /// captured once at assembly, before `start()` decides.
 final class TrajectoryStoreConnection implements StoreConnection {
-  /// Wraps [_harness] under the operator-facing name `trajectory`.
-  const TrajectoryStoreConnection(this._harness);
+  /// Wraps [_harness] under the operator-facing name `trajectory`. [endpoint]
+  /// names the server its sessions dial — the state store's, when known.
+  const TrajectoryStoreConnection(this._harness, {String? endpoint})
+    : _endpoint = endpoint;
 
   final TrajectoryHarness _harness;
+  final String? _endpoint;
 
   @override
   String get name => 'trajectory';
+
+  /// The state-store server's coordinates with the `trajectory` database, or
+  /// a rendered absence when the state store opened no socket.
+  String get endpoint =>
+      _endpoint ?? '(the state-store sql-server, database trajectory)';
 
   @override
   Future<void> close() => _harness.closeOpenSessions();
@@ -69,7 +109,130 @@ List<StoreConnection> orderedStoreConnections({
   TrajectoryHarness? trajectory,
 }) => <StoreConnection>[
   if (state != null) DoltStoreConnection('state', state),
-  if (trajectory != null) TrajectoryStoreConnection(trajectory),
+  if (trajectory != null)
+    TrajectoryStoreConnection(
+      trajectory,
+      endpoint: state == null
+          ? null
+          : '${state.endpoint.host}:${state.endpoint.port}/trajectory',
+    ),
   for (final name in work.keys.toList()..sort())
     if (work[name] case final service?) DoltStoreConnection(name, service),
 ];
+
+/// A store handle whose close did not CONFIRM inside its budget — the handle
+/// stays open (the_grid#store-handles-are-tracked-until-close-is-confirmed) and
+/// is what the operator's `lsof` would show; this is that line, rendered by the
+/// resident instead.
+final class OutstandingStoreHandle {
+  /// Names [name] at [endpoint], outstanding for [reason].
+  const OutstandingStoreHandle({
+    required this.name,
+    required this.endpoint,
+    required this.reason,
+  });
+
+  /// The operator-facing store name.
+  final String name;
+
+  /// Where the handle points (`host:port/database`, or a rendered absence).
+  final String endpoint;
+
+  /// Why the close did not confirm: the budget it outlived, or the error its
+  /// close threw.
+  final String reason;
+
+  /// `"state" (127.0.0.1:49967/tranquility) — close did not confirm within
+  /// 2000ms`.
+  String describe() => '"$name" ($endpoint) — $reason';
+
+  @override
+  String toString() => 'OutstandingStoreHandle(${describe()})';
+}
+
+/// What one bounded confirm pass over a station's store handles found.
+final class StoreCloseReport {
+  /// Reports [closed] confirmed and [outstanding] still open after [budget].
+  const StoreCloseReport({
+    required this.closed,
+    required this.outstanding,
+    required this.budget,
+  });
+
+  /// The names whose close CONFIRMED, in close order.
+  final List<String> closed;
+
+  /// The handles still open after the pass, in close order.
+  final List<OutstandingStoreHandle> outstanding;
+
+  /// The per-handle budget the pass ran under.
+  final Duration budget;
+
+  /// How many handles the pass attempted.
+  int get attempted => closed.length + outstanding.length;
+
+  /// True when every handle confirmed its close.
+  bool get allConfirmed => outstanding.isEmpty;
+
+  /// The operator lines: the count, then one line per outstanding handle.
+  List<String> get narrative => <String>[
+    'store connections closed: ${closed.length}/$attempted',
+    for (final handle in outstanding)
+      'store handle still outstanding: ${handle.describe()}',
+  ];
+}
+
+/// Closes every handle in [stores] in order, each under [within], and reports
+/// which CONFIRMED and which did not — by name, with endpoint and reason.
+///
+/// This is the one bounded confirm pass the unwind runs
+/// (the_grid#resident-unwind-closes-store-sockets): a handle whose close hangs
+/// on the wire is awaited for [within], then named through [onRefusal] (one
+/// line) and [onFlare] (`unwind.storeHandleOutstanding`) and NO LONGER awaited,
+/// so one half-open proxy socket can delay the exit by its budget but never
+/// hold it. A refused close is reported the same way: a refused close is not a
+/// confirmed one. The pass itself never throws.
+Future<StoreCloseReport> closeStoreConnections(
+  List<StoreConnection> stores, {
+  Duration within = kStoreCloseBudget,
+  void Function(String message)? onRefusal,
+  void Function(String name, Map<String, String> data)? onFlare,
+}) async {
+  final closed = <String>[];
+  final outstanding = <OutstandingStoreHandle>[];
+  for (final store in List<StoreConnection>.of(stores)) {
+    String? reason;
+    try {
+      await store.close().timeout(within);
+    } on TimeoutException {
+      reason = 'close did not confirm within ${within.inMilliseconds}ms';
+    } on Object catch (error) {
+      reason = 'close refused: $error';
+    }
+    if (reason == null) {
+      closed.add(store.name);
+      continue;
+    }
+    final handle = OutstandingStoreHandle(
+      name: store.name,
+      endpoint: store.endpoint,
+      reason: reason,
+    );
+    outstanding.add(handle);
+    onRefusal?.call(
+      'unwind: store handle ${handle.describe()} — still open, no longer '
+      'awaited',
+    );
+    onFlare?.call('unwind.storeHandleOutstanding', {
+      'store': handle.name,
+      'endpoint': handle.endpoint,
+      'reason': reason,
+      'budgetMs': '${within.inMilliseconds}',
+    });
+  }
+  return StoreCloseReport(
+    closed: closed,
+    outstanding: outstanding,
+    budget: within,
+  );
+}

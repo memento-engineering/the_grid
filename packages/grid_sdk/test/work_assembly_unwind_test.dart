@@ -185,6 +185,55 @@ final class _RecordingTransport implements ExplorationTransport {
   }
 }
 
+/// A pooled Dolt service whose close NEVER confirms — the half-open proxy
+/// socket epoch 87's resident parked on (tg-supq). Dials nothing.
+final class _HangingDoltQueryService extends DoltQueryService {
+  _HangingDoltQueryService()
+    : super(
+        const DoltEndpoint(
+          host: '127.0.0.1',
+          port: 65123,
+          database: 'tranquility',
+        ),
+      );
+
+  var closeCalls = 0;
+
+  @override
+  Future<void> close() {
+    closeCalls++;
+    return Completer<void>().future;
+  }
+}
+
+/// A store connection fake for the confirm pass: closes, refuses, or hangs.
+final class _FakeStore implements StoreConnection {
+  _FakeStore(this.name, {this.refuses = false, this.hangs = false});
+
+  @override
+  final String name;
+  final bool refuses;
+  final bool hangs;
+  var closeCalls = 0;
+
+  @override
+  Future<void> close() async {
+    closeCalls++;
+    if (refuses) throw StateError('close refused: $name');
+    if (hangs) await Completer<void>().future;
+  }
+}
+
+final class _Leaf extends MultiChildSeed {
+  const _Leaf() : super(children: const []);
+}
+
+final class _BareDelegate extends GridDelegate {
+  @override
+  Seed build(TreeContext context, GridConfiguration configuration) =>
+      const _Leaf();
+}
+
 final class _GatedGridControllerRuntime extends GridControllerRuntime {
   _GatedGridControllerRuntime({
     required this.label,
@@ -610,6 +659,95 @@ void main() {
         bytes.text,
         'unwind step "default sink" failed: Bad state: stderr refusal\n',
       );
+    });
+  });
+
+  group('closeStoreConnections', () {
+    test('confirms, refuses and hangs are reported by name with endpoint and '
+        'the pass never throws or waits past its budget', () async {
+      final refusals = <String>[];
+      final flares = <({String name, Map<String, String> data})>[];
+      final closing = _FakeStore('state');
+      final refusing = _FakeStore('earth', refuses: true);
+      final hanging = _FakeStore('mars', hangs: true);
+
+      final report = await closeStoreConnections(
+        [closing, refusing, hanging],
+        within: const Duration(milliseconds: 40),
+        onRefusal: refusals.add,
+        onFlare: (name, data) => flares.add((name: name, data: data)),
+      ).timeout(const Duration(seconds: 5));
+
+      expect(report.attempted, 3);
+      expect(report.allConfirmed, isFalse);
+      expect(report.closed, ['state']);
+      expect(report.outstanding.map((handle) => handle.name), [
+        'earth',
+        'mars',
+      ]);
+      expect(
+        report.outstanding[0].reason,
+        'close refused: Bad state: '
+        'close refused: earth',
+      );
+      expect(
+        report.outstanding[1].reason,
+        'close did not confirm within '
+        '40ms',
+      );
+      expect(report.outstanding[1].endpoint, '(endpoint not vended)');
+      expect(report.narrative, [
+        'store connections closed: 1/3',
+        'store handle still outstanding: "earth" ((endpoint not vended)) — '
+            'close refused: Bad state: close refused: earth',
+        'store handle still outstanding: "mars" ((endpoint not vended)) — '
+            'close did not confirm within 40ms',
+      ]);
+      expect(refusals, [
+        'unwind: store handle "earth" ((endpoint not vended)) — close '
+            'refused: Bad state: close refused: earth — still open, no '
+            'longer awaited',
+        'unwind: store handle "mars" ((endpoint not vended)) — close did '
+            'not confirm within 40ms — still open, no longer awaited',
+      ]);
+      expect(flares.map((flare) => flare.name), [
+        'unwind.storeHandleOutstanding',
+        'unwind.storeHandleOutstanding',
+      ]);
+      expect(flares[1].data, {
+        'store': 'mars',
+        'endpoint': '(endpoint not vended)',
+        'reason': 'close did not confirm within 40ms',
+        'budgetMs': '40',
+      });
+      expect(closing.closeCalls, 1);
+      expect(hanging.closeCalls, 1);
+    });
+
+    test('settle reports an expired step through onTimeout only', () async {
+      final timedOut = <(String, Duration)>[];
+      const within = Duration(milliseconds: 5);
+      expect(
+        await settle(
+          'hung',
+          () => Completer<void>().future,
+          within: within,
+          onRefusal: (_) {},
+          onTimeout: (step, budget) => timedOut.add((step, budget)),
+        ),
+        isFalse,
+      );
+      expect(
+        await settle(
+          'threw',
+          () => throw StateError('exploded'),
+          within: within,
+          onRefusal: (_) {},
+          onTimeout: (step, budget) => timedOut.add((step, budget)),
+        ),
+        isFalse,
+      );
+      expect(timedOut, [('hung', within)]);
     });
   });
 
@@ -1610,6 +1748,256 @@ void main() {
       },
     );
 
+    test(
+      'shutdown runs past the trajectory fixpoint flare, confirms every store '
+      'handle, and names the one whose close never completes — inside the '
+      'grace window (tg-supq)',
+      () async {
+        final events = <String>[];
+        final refusals = <String>[];
+        final transport = _RecordingTransport();
+        final hanging = _HangingDoltQueryService();
+        final workSource = _GatedGridControllerRuntime(
+          label: 'work',
+          events: events,
+        );
+        final stateSource = _GatedGridControllerRuntime(
+          label: 'state',
+          events: events,
+        );
+        final workBundle = _controllerBundle(
+          runtime: workSource,
+          events: events,
+          shutdownEvent: 'work bundle shutdown (first)',
+        );
+        // The measured shape: the state bundle's shutdown awaits the pool
+        // close, and the pool close awaits a wire that never answers.
+        var stateShutdown = false;
+        final stateBundle = GridRuntimeBundle(
+          runtime: stateSource,
+          probeReader: const _EmptyBeadProbeReader(),
+          readPath: ReadPath.sql,
+          dolt: hanging,
+          shutdown: () async {
+            if (stateShutdown) return;
+            stateShutdown = true;
+            events.add('state bundle shutdown');
+            await stateSource.dispose();
+            await hanging.close();
+          },
+        );
+        final provider = _RecordingProvider(events);
+        final trajectory = await _recordingTrajectory(events);
+        final federated = _RecordingFederatedSource(events);
+        final bridge = _RecordingJoinBridge(events);
+        final runtime = await assembleRecordingRuntime(
+          workBundle: workBundle,
+          stateBundle: stateBundle,
+          provider: provider,
+          trajectory: trajectory,
+          federated: federated,
+          bridge: bridge,
+          transport: transport,
+          onRefusal: refusals.add,
+          driverBuilder: ({required buildDefault}) =>
+              _RecordingStartDriver(bridge: bridge, events: events),
+        );
+        expect(runtime.openStores.map((store) => store.name), [
+          'state',
+          'trajectory',
+        ]);
+        expect(
+          runtime.openStores.first.endpoint,
+          '127.0.0.1:65123/tranquility',
+        );
+        expect(
+          runtime.openStores[1].endpoint,
+          '127.0.0.1:65123/trajectory',
+          reason: 'the trajectory dials the state store server',
+        );
+        events.clear();
+
+        const stepBudget = Duration(milliseconds: 100);
+        const closeBudget = Duration(milliseconds: 80);
+        // The wall-clock guard IS the acceptance: on the pre-fix code this
+        // await never completes and the test times out instead of failing.
+        final report = await runtime
+            .shutdown(stepBudget: stepBudget, storeCloseBudget: closeBudget)
+            .timeout(const Duration(seconds: 5));
+
+        expect(runtime.lifecycle, isA<StationWorkRuntimeShutdown>());
+        // The unwind ran PAST the final trajectory flare to the end.
+        expect(events, [
+          'station driver dispose',
+          'join bridge dispose',
+          'trajectory.shutdown',
+          'runtime provider dispose',
+          'state bundle shutdown',
+          'work bundle shutdown (first)',
+          'federated source dispose',
+        ]);
+        expect(report.isClean, isFalse);
+        expect(report.timedOutSteps, ['state bundle shutdown']);
+        // The hung handle is NAMED, with its endpoint, not awaited forever.
+        expect(report.stores.closed, ['trajectory']);
+        final outstanding = report.stores.outstanding.single;
+        expect(outstanding.name, 'state');
+        expect(outstanding.endpoint, '127.0.0.1:65123/tranquility');
+        expect(outstanding.reason, 'close did not confirm within 80ms');
+        expect(report.narrative, [
+          'store connections closed: 1/2',
+          'store handle still outstanding: "state" '
+              '(127.0.0.1:65123/tranquility) — close did not confirm within '
+              '80ms',
+          'unwind step "state bundle shutdown" outlived its budget and is no '
+              'longer awaited',
+        ]);
+        // Both the bundle step and the confirm pass attempted the close: a
+        // refused-or-expired close is retried, never dropped.
+        expect(hanging.closeCalls, 2);
+        expect(refusals, [
+          startsWith(
+            'unwind step "state bundle shutdown" failed: TimeoutException '
+            'after 0:00:00.100000',
+          ),
+          'unwind: store handle "state" (127.0.0.1:65123/tranquility) — close '
+              'did not confirm within 80ms — still open, no longer awaited',
+        ]);
+        // The harness's own `trajectory.shutdown` flare rides this fixture's
+        // event log (asserted above); the unwind's flares ride the transport.
+        expect(transport.flares.map((flare) => flare.name), [
+          'unwind.stepTimedOut',
+          'unwind.storeHandleOutstanding',
+          'unwind.complete',
+        ]);
+        expect(transport.flares[0].data, {
+          'step': 'state bundle shutdown',
+          'budgetMs': '100',
+        });
+        expect(transport.flares[1].data, {
+          'store': 'state',
+          'endpoint': '127.0.0.1:65123/tranquility',
+          'reason': 'close did not confirm within 80ms',
+          'budgetMs': '80',
+        });
+        expect(transport.flares[2].data, {
+          'closedStores': 'trajectory',
+          'outstandingStores': 'state',
+          'timedOutSteps': 'state bundle shutdown',
+          'clean': 'false',
+        });
+
+        // Idempotent: the second call is the same unwind, not a second one.
+        expect(identical(await runtime.shutdown(), report), isTrue);
+        expect(hanging.closeCalls, 2);
+      },
+    );
+
+    test(
+      'an unwind step that never returns (a bd child held open) is named and '
+      'abandoned at its budget while the steps beneath it still run',
+      () async {
+        final events = <String>[];
+        final refusals = <String>[];
+        final workSource = _GatedGridControllerRuntime(
+          label: 'work',
+          events: events,
+        );
+        final stateSource = _GatedGridControllerRuntime(
+          label: 'state',
+          events: events,
+        );
+        final workBundle = GridRuntimeBundle(
+          runtime: workSource,
+          probeReader: const _EmptyBeadProbeReader(),
+          readPath: ReadPath.cli,
+          shutdown: () async {
+            events.add('work bundle shutdown (first)');
+            // A reap write whose bd child inherited a pipe into a reparented
+            // grandchild: the process future never completes.
+            await Completer<void>().future;
+          },
+        );
+        final stateBundle = _controllerBundle(
+          runtime: stateSource,
+          events: events,
+          shutdownEvent: 'state bundle shutdown',
+        );
+        final provider = _RecordingProvider(events);
+        final trajectory = await _recordingTrajectory(events);
+        final federated = _RecordingFederatedSource(events);
+        final bridge = _RecordingJoinBridge(events);
+        final runtime = await assembleRecordingRuntime(
+          workBundle: workBundle,
+          stateBundle: stateBundle,
+          provider: provider,
+          trajectory: trajectory,
+          federated: federated,
+          bridge: bridge,
+          onRefusal: refusals.add,
+          driverBuilder: ({required buildDefault}) =>
+              _RecordingStartDriver(bridge: bridge, events: events),
+        );
+        events.clear();
+
+        final report = await runtime
+            .shutdown(stepBudget: const Duration(milliseconds: 50))
+            .timeout(const Duration(seconds: 5));
+
+        expect(events, [
+          'station driver dispose',
+          'join bridge dispose',
+          'trajectory.shutdown',
+          'runtime provider dispose',
+          'state bundle shutdown',
+          'work bundle shutdown (first)',
+          'federated source dispose',
+        ]);
+        expect(report.timedOutSteps, ['work bundle shutdown (first)']);
+        expect(report.stores.allConfirmed, isTrue);
+        expect(report.isClean, isFalse);
+        expect(refusals, [
+          startsWith(
+            'unwind step "work bundle shutdown (first)" failed: '
+            'TimeoutException after 0:00:00.050000',
+          ),
+        ]);
+        expect(federated.disposeCalls, 1);
+      },
+    );
+
+    test(
+      'GridHandle.teardown names an orphan sweep that outlives its budget and '
+      'still disposes the delegate',
+      () async {
+        final refusals = <GridHookError>[];
+        final delegate = _BareDelegate();
+        final handle = await runGrid(
+          delegate,
+          onError: refusals.add,
+          orphanSweep: () => Completer<void>().future,
+          orphanSweepBudget: const Duration(milliseconds: 50),
+        );
+
+        await handle.teardown().timeout(const Duration(seconds: 5));
+
+        expect(handle.isTornDown, isTrue);
+        final refusal = refusals.single;
+        expect(refusal.hook, 'orphanSweep');
+        final cause = refusal.cause;
+        expect(cause, isA<TimeoutException>());
+        expect(
+          (cause as TimeoutException).message,
+          contains('did not settle within 50ms — no longer awaited'),
+        );
+        expect(
+          () => delegate.addListener((_) {}),
+          throwsA(isA<Error>()),
+          reason: 'the delegate was disposed after the abandoned sweep',
+        );
+      },
+    );
+
     test('start order remains pinned', () {
       final source = File('lib/src/work/work_assembly.dart').readAsStringSync();
       final start = source.indexOf('  Future<void> start() async {');
@@ -1733,7 +2121,7 @@ void main() {
 
       final assembly = source.substring(signatureStart);
       final sourcesShutdownStart = assembly.indexOf(
-        '    sourcesShutdown: () async {',
+        '    sourcesShutdown: ({required within, required onTimeout}) async {',
       );
       final sourcesShutdownEnd = assembly.indexOf(
         '\n    freshnessBarrier:',
@@ -1798,9 +2186,11 @@ void main() {
         cursor = next + acquisition.length;
       }
 
-      final shutdownStart = source.indexOf('  Future<void> shutdown() async {');
+      final shutdownStart = source.indexOf(
+        '  Future<StationWorkUnwindReport> _runShutdown({',
+      );
       final shutdownEnd = source.indexOf(
-        '\n}\n\nFuture<void> Function()? _runtimeProviderDisposer',
+        '\n  /// The outer bound on the trajectory step',
         shutdownStart,
       );
       expect(shutdownStart, isNonNegative);
@@ -1814,7 +2204,10 @@ void main() {
         "'trajectory shutdown'",
         "'runtime provider dispose'",
         "'work-session liveness dispose'",
-        'await _sourcesShutdown()',
+        'await _sourcesShutdown(',
+        // The CONFIRM pass runs LAST, after every source bundle is down
+        // (tg-supq): a handle that did not close is named there.
+        'await closeStoreConnections(',
       ]) {
         final next = shutdown.indexOf(disposal, shutdownCursor);
         expect(next, greaterThanOrEqualTo(shutdownCursor), reason: disposal);
