@@ -770,7 +770,7 @@ class UpCommand extends Command<int> {
       ...?latest?.graph.readyIds,
       for (final entry in liveEntries) entry.key,
     }.where(isMountedCandidate).toSet();
-    final wedge = latest == null ? kNotWedged : view!.wedgeFor(latest);
+    final wedge = view?.wedge ?? kNotWedged;
     final prefixes = armed.map((substation) => substation.prefix).toSet();
     String? ownerOf(String id) =>
         BeadOwnershipPredicate.ownedPrefixOf(id, prefixes);

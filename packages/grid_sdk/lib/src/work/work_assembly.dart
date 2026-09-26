@@ -448,9 +448,6 @@ class StationWorkRuntime implements SubstationProvisioner {
   /// stuck?" from raw sessions. A plain derived VALUE, read fresh per request.
   WedgeState get wedge => _driver.wedge;
 
-  /// Samples [snapshot] through the owned wedge latch for one status request.
-  WedgeState wedgeFor(JoinedSnapshot snapshot) => _driver.wedgeFor(snapshot);
-
   /// A fresh plain-value read of the trajectory posture, append counters,
   /// and—when dual read is armed—the shared soak-certification instrument.
   Map<String, Object?> trajectoryStatus() {
