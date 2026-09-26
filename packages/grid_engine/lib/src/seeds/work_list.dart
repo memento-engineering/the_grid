@@ -18,6 +18,7 @@ import '../domain/session_bead.dart';
 import '../domain/session_disposition.dart';
 import '../domain/session_projection.dart';
 import '../domain/substation_config.dart';
+import '../domain/wedge.dart' show isIdleLiveSession;
 import '../domain/worktree_outstanding.dart';
 import '../kernel/admission_barrier.dart';
 import '../kernel/state_store_write_governor.dart';
@@ -56,6 +57,25 @@ class WorkList extends StatefulSeed with GridDiagnosticable {
 }
 
 enum _WorkRefusalReport { terminalSkip, paused }
+
+/// How many consecutive joined snapshots an ADOPTED live session may drive
+/// nothing — no running step, no cooling failure, no gate — before the work
+/// axis flares `work.adoptedSessionQuiet` for it (tg-t4k9 AC-3). Counted in
+/// snapshots (each distinct `capturedAt` the WorkList builds over), not in
+/// rebuilds: an authority invalidation re-derives the same snapshot and is not
+/// a tick. Measured on lunar epoch 98, five re-adopted sessions held their
+/// slots for three hours and twenty minutes with zero step transitions while
+/// the board read green; this is the bound that makes that condition visible
+/// instead of quiet. It observes and flares only — admission and the
+/// authority's timing are untouched.
+const int kAdoptedSessionQuietSnapshots = 5;
+
+/// One adopted session's quiet watch (tg-t4k9 AC-3).
+final class _AdoptedSessionWatch {
+  DateTime? lastCapturedAt;
+  int quietSnapshots = 0;
+  bool flared = false;
+}
 
 class _WorkListState extends State<WorkList>
     with Diagnosticable, GridDiagnosticable {
@@ -103,6 +123,12 @@ class _WorkListState extends State<WorkList>
   /// the counting arm and the refusal derivation. Null composes the clause in
   /// its observe form over a disarmed read, which refuses nothing.
   AdmissionBarrier? _barrier;
+
+  /// Per ADOPTED live session, how many consecutive snapshots it has driven
+  /// nothing (tg-t4k9 AC-3). Dropped when the session stops being an adopted
+  /// live reservation of this WorkList.
+  final Map<String, _AdoptedSessionWatch> _adoptedSessionWatches =
+      <String, _AdoptedSessionWatch>{};
 
   static SessionProjection? _latestRetiredSession(
     String beadId,
@@ -277,6 +303,7 @@ class _WorkListState extends State<WorkList>
           );
     if (stationServices != null) {
       _projectTerminalAnswers(stationServices, services, candidates);
+      _observeAdoptedSessions(services, batch);
     }
     final currentReportableRefusalByBeadId = <String, _WorkRefusalReport>{};
     for (final refusal in batch.refused) {
@@ -766,6 +793,60 @@ class _WorkListState extends State<WorkList>
       'reason': truncateReason('$error'),
       ...stateStoreDeadlineMetadata(error),
     });
+  }
+
+  /// Watches every ADOPTED live reservation in [batch] for the condition AC-1
+  /// of tg-t4k9 creates: a session that holds its slot yet drives nothing. A
+  /// session that has driven nothing for [kAdoptedSessionQuietSnapshots]
+  /// consecutive snapshots flares `work.adoptedSessionQuiet` ONCE, naming its
+  /// id, work bead and substation; the first step transition (or gate) resets
+  /// the watch. Observe-only: it neither retries, unmounts nor releases.
+  void _observeAdoptedSessions(
+    ServiceBundle services,
+    StationAdmissionBatch batch,
+  ) {
+    final now = _barrier?.clock() ?? DateTime.now();
+    final capturedAt = _snapshot.graph.capturedAt;
+    final seen = <String>{};
+    for (final reservation in batch.admitted) {
+      final session = reservation.candidate.session;
+      final sessionId = session?.sessionId ?? '';
+      if (!reservation.adopted || session == null || sessionId.isEmpty) {
+        continue;
+      }
+      if (session.isTerminal ||
+          session.pauseState == SessionPauseState.paused) {
+        continue;
+      }
+      seen.add(sessionId);
+      final watch = _adoptedSessionWatches.putIfAbsent(
+        sessionId,
+        _AdoptedSessionWatch.new,
+      );
+      // A rebuild over the SAME snapshot is not a tick.
+      if (watch.lastCapturedAt == capturedAt) continue;
+      watch.lastCapturedAt = capturedAt;
+      if (!isIdleLiveSession(session, now: now)) {
+        watch.quietSnapshots = 0;
+        watch.flared = false;
+        continue;
+      }
+      watch.quietSnapshots += 1;
+      if (watch.flared ||
+          watch.quietSnapshots < kAdoptedSessionQuietSnapshots) {
+        continue;
+      }
+      watch.flared = true;
+      _flare(services, 'work.adoptedSessionQuiet', {
+        'sessionId': sessionId,
+        'beadId': reservation.candidate.bead.id,
+        'substation': seed.substationConfig.substationId,
+        'snapshots': '${watch.quietSnapshots}',
+      });
+    }
+    _adoptedSessionWatches.removeWhere(
+      (sessionId, _) => !seen.contains(sessionId),
+    );
   }
 
   void _reportTerminalSkip(

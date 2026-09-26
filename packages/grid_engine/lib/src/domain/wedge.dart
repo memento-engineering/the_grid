@@ -36,9 +36,76 @@ import '../sdk/circuit.dart';
 import '../sdk/cursor.dart' show NodeCursor;
 import 'joined_snapshot.dart';
 import 'session_bead.dart' show SessionPauseState;
+import 'session_projection.dart';
 import 'step_cursor_read.dart' show effectiveStepCursor;
 
 part 'wedge.freezed.dart';
+
+/// ONE live session's forward-progress classification — the per-session half
+/// of [sampleWedge], shared with the work axis so "this session drives
+/// nothing" means the same thing on the admission pass as it does on the
+/// station wedge (tg-t4k9; `the_grid#pause-is-a-non-terminal-blocking-
+/// disposition` asks the wedge sampler and the mount boundary to apply one
+/// definition of live work).
+typedef LiveSessionActivity = ({bool running, bool gated, bool cooling});
+
+/// Classifies [session]'s ACTIVE step incarnations (the same read
+/// [sampleWedge] makes) into running / gated / cooling. [now] fences the
+/// cooling-down check. A non-molecule session has no nodes and reads as none
+/// of the three.
+LiveSessionActivity liveSessionActivityOf(
+  SessionProjection session, {
+  required DateTime now,
+}) {
+  final beadCursor = session.isMolecule
+      ? projectMoleculeCursor(
+          session.moleculeBeads,
+          dependencies: session.moleculeDependencies,
+        ).cursor
+      : null;
+  final nodes = beadCursor == null
+      ? const <NodeCursor>[]
+      : effectiveStepCursor(
+          session,
+          siteCursor: beadCursor,
+          beadCursor: beadCursor,
+        ).values;
+  var running = false;
+  var gated = false;
+  var cooling = false;
+  for (final node in nodes) {
+    switch (node.state) {
+      case StepState.running:
+        running = true;
+      case StepState.gated:
+        gated = true;
+      case StepState.failed:
+        final until = node.cooldownUntil;
+        if (until != null && until.isAfter(now)) cooling = true;
+      // `pending` covers the A47 rewind wave (a `Rewind` writes state=pending
+      // then the tree re-keys and re-mounts within a microtask flush — far
+      // under the threshold, so it can never false-alarm). `ready`/`complete`
+      // are POSITIVE TERMINALS, not active stages.
+      case StepState.pending || StepState.ready || StepState.complete:
+        break;
+    }
+  }
+  return (running: running, gated: gated, cooling: cooling);
+}
+
+/// True when [session] is live and unpaused yet DRIVES NOTHING: no running
+/// step, no cooling-down failure, and no gate — durable or cursor-derived —
+/// parking it. This is the per-session condition the work axis watches after
+/// an adoption (tg-t4k9 AC-3): a session that holds its mount slot and reads
+/// as quiet. A gated session is parked by design and is NOT idle here, and a
+/// paused one occupies no slot to begin with.
+bool isIdleLiveSession(SessionProjection session, {required DateTime now}) {
+  if (session.isTerminal) return false;
+  if (session.pauseState == SessionPauseState.paused) return false;
+  if (session.openGateBeadCount > 0) return false;
+  final activity = liveSessionActivityOf(session, now: now);
+  return !activity.running && !activity.gated && !activity.cooling;
+}
 
 /// The default sustain window before a stall is called a WEDGE — long enough
 /// that no legitimate transition trips it (the supervised-restart backoff caps
@@ -245,39 +312,8 @@ WedgeSample sampleWedge(JoinedSnapshot snapshot, {required DateTime now}) {
     // this site's today-read IS the bead recompute, so adoption here is the
     // pure read swap the design describes: with the step axis unengaged the
     // helper hands back that same projection, unchanged and un-copied.
-    final beadCursor = session.isMolecule
-        ? projectMoleculeCursor(
-            session.moleculeBeads,
-            dependencies: session.moleculeDependencies,
-          ).cursor
-        : null;
-    final nodes = beadCursor == null
-        ? const <NodeCursor>[]
-        : effectiveStepCursor(
-            session,
-            siteCursor: beadCursor,
-            beadCursor: beadCursor,
-          ).values;
-    var isRunning = false;
-    var isGated = false;
-    var isCooling = false;
-    for (final node in nodes) {
-      switch (node.state) {
-        case StepState.running:
-          isRunning = true;
-        case StepState.gated:
-          isGated = true;
-        case StepState.failed:
-          final until = node.cooldownUntil;
-          if (until != null && until.isAfter(now)) isCooling = true;
-        // `pending` covers the A47 rewind wave (a `Rewind` writes state=pending
-        // then the tree re-keys and re-mounts within a microtask flush — far
-        // under the threshold, so it can never false-alarm). `ready`/`complete`
-        // are POSITIVE TERMINALS, not active stages.
-        case StepState.pending || StepState.ready || StepState.complete:
-          break;
-      }
-    }
+    final (running: isRunning, gated: isGated, cooling: isCooling) =
+        liveSessionActivityOf(session, now: now);
     if (isRunning) running++;
     if (isCooling) cooling++;
     // Synthetic and historical projections may carry only cursor evidence.
