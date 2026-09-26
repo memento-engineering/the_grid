@@ -280,8 +280,7 @@ const _substationIds = ['sa', 'sb', 'sc', 'sd'];
 /// Terminal sessions per substation in the station-wide group.
 const _sessionsPerSubstation = 4;
 
-String _stationWorkBeadId(String substation, int index) =>
-    '$substation-$index';
+String _stationWorkBeadId(String substation, int index) => '$substation-$index';
 
 String _stationSessionId(String substation, int index) =>
     'tgdog-done-$substation-$index';
@@ -784,13 +783,11 @@ void main() {
         _stationGateId('sd', 4): _stationWorkBeadId('sd', 4),
       };
       final meter = _InFlightMeter();
-      final runner =
-          _MeteredGateWriteRunner(
-              meter,
-              hold: const Duration(milliseconds: 5),
-              failFirstGateIds: flaky.keys.toSet(),
-            )
-            ..exportBeads = _stationStateBeads();
+      final runner = _MeteredGateWriteRunner(
+        meter,
+        hold: const Duration(milliseconds: 5),
+        failFirstGateIds: flaky.keys.toSet(),
+      )..exportBeads = _stationStateBeads();
       final provider = FakeRuntimeProvider();
       addTearDown(provider.close);
       final station = _station(runner, provider);

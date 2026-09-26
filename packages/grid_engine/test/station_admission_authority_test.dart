@@ -3634,7 +3634,10 @@ void main() {
     );
     expect(capacityHold.data, containsPair('beadIds', second.id));
     expect(capacityHold.data, containsPair('cause', 'slots-full'));
-    expect(capacityHold.data, containsPair('causes', '${second.id}=slots-full'));
+    expect(
+      capacityHold.data,
+      containsPair('causes', '${second.id}=slots-full'),
+    );
 
     // The reservation write fails (the controlled runner throws on the budget
     // merge), the reservation is released and tg-first enters its backoff.

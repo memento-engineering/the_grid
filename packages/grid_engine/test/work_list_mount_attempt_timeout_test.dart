@@ -316,87 +316,82 @@ void main() {
     },
   );
 
-  test(
-    'a boot burst of $_burstWidth stamped ready beads issues at most '
-    'kMountAttemptWriteConcurrency reservation writes at once, station-wide, '
-    'and every bead is recorded',
-    () async {
-      final runner = _MeteredMountAttemptRunner(
-        hold: const Duration(milliseconds: 20),
-      );
-      final provider = FakeRuntimeProvider();
-      addTearDown(provider.close);
-      final station = StationServices(
-        provider: provider,
-        writer: StationBeadWriter(
-          bd: BdCliService(runner),
-          reader: runner,
-          ownership: BeadOwnershipPredicate(const {stateSubstation}),
-        ),
-        stateSubstation: stateSubstation,
+  test('a boot burst of $_burstWidth stamped ready beads issues at most '
+      'kMountAttemptWriteConcurrency reservation writes at once, station-wide, '
+      'and every bead is recorded', () async {
+    final runner = _MeteredMountAttemptRunner(
+      hold: const Duration(milliseconds: 20),
+    );
+    final provider = FakeRuntimeProvider();
+    addTearDown(provider.close);
+    final station = StationServices(
+      provider: provider,
+      writer: StationBeadWriter(
+        bd: BdCliService(runner),
+        reader: runner,
+        ownership: BeadOwnershipPredicate(const {stateSubstation}),
+      ),
+      stateSubstation: stateSubstation,
+      maxConcurrentWork: _burstWidth,
+    );
+    addTearDown(station.dispose);
+    final beads = [for (var i = 1; i <= _burstWidth; i++) _readyTask('tg-$i')];
+    final snapshot = JoinedSnapshot(
+      graph: GraphSnapshot.fromParts(
+        beads: beads,
+        dependencies: const [],
+        readyIds: {for (final bead in beads) bead.id},
+        capturedAt: DateTime(2026, 9, 25),
+      ),
+    );
+    // Two substation scopes admitting in the SAME flush — the roster shape
+    // that made the per-scope count irrelevant and the station count the
+    // one that matters.
+    final first = station.admission.admitPending(
+      snapshot,
+      const SubstationConfig(
+        substationId: 'tg',
+        ownedSubstations: {'tg'},
         maxConcurrentWork: _burstWidth,
-      );
-      addTearDown(station.dispose);
-      final beads = [
-        for (var i = 1; i <= _burstWidth; i++) _readyTask('tg-$i'),
-      ];
-      final snapshot = JoinedSnapshot(
-        graph: GraphSnapshot.fromParts(
-          beads: beads,
-          dependencies: const [],
-          readyIds: {for (final bead in beads) bead.id},
-          capturedAt: DateTime(2026, 9, 25),
-        ),
-      );
-      // Two substation scopes admitting in the SAME flush — the roster shape
-      // that made the per-scope count irrelevant and the station count the
-      // one that matters.
-      final first = station.admission.admitPending(
-        snapshot,
-        const SubstationConfig(
-          substationId: 'tg',
-          ownedSubstations: {'tg'},
-          maxConcurrentWork: _burstWidth,
-        ),
-        const ServiceBundle(),
-        [
-          for (final bead in beads.take(_burstWidth ~/ 2))
-            StationAdmissionCandidate(bead: bead, session: null),
-        ],
-      );
-      final second = station.admission.admitPending(
-        snapshot,
-        const SubstationConfig(
-          substationId: 'tg2',
-          ownedSubstations: {'tg'},
-          maxConcurrentWork: _burstWidth,
-        ),
-        const ServiceBundle(),
-        [
-          for (final bead in beads.skip(_burstWidth ~/ 2))
-            StationAdmissionCandidate(bead: bead, session: null),
-        ],
-      );
-      expect(first.admitted, hasLength(_burstWidth ~/ 2));
-      expect(second.admitted, hasLength(_burstWidth ~/ 2));
+      ),
+      const ServiceBundle(),
+      [
+        for (final bead in beads.take(_burstWidth ~/ 2))
+          StationAdmissionCandidate(bead: bead, session: null),
+      ],
+    );
+    final second = station.admission.admitPending(
+      snapshot,
+      const SubstationConfig(
+        substationId: 'tg2',
+        ownedSubstations: {'tg'},
+        maxConcurrentWork: _burstWidth,
+      ),
+      const ServiceBundle(),
+      [
+        for (final bead in beads.skip(_burstWidth ~/ 2))
+          StationAdmissionCandidate(bead: bead, session: null),
+      ],
+    );
+    expect(first.admitted, hasLength(_burstWidth ~/ 2));
+    expect(second.admitted, hasLength(_burstWidth ~/ 2));
 
-      await _settleUntil(() => runner.completed >= _burstWidth);
+    await _settleUntil(() => runner.completed >= _burstWidth);
 
-      // THE STATION BOUND on the reservation burst: an unbounded burst starts
-      // all $_burstWidth creates in the same turn and reads $_burstWidth here.
-      expect(
-        runner.maxInFlight,
-        lessThanOrEqualTo(kMountAttemptWriteConcurrency),
-        reason:
-            'the boot burst opened ${runner.maxInFlight} simultaneous '
-            'mount-attempt record writes; the station-wide bound is '
-            '$kMountAttemptWriteConcurrency',
-      );
-      // …and the meter really saw overlap, so the bound is a reached ceiling.
-      expect(runner.maxInFlight, greaterThan(1));
-      // NONE DROPPED: every bead's reservation was recorded exactly once.
-      expect(runner.started, _burstWidth);
-      expect(runner.completed, _burstWidth);
-    },
-  );
+    // THE STATION BOUND on the reservation burst: an unbounded burst starts
+    // all $_burstWidth creates in the same turn and reads $_burstWidth here.
+    expect(
+      runner.maxInFlight,
+      lessThanOrEqualTo(kMountAttemptWriteConcurrency),
+      reason:
+          'the boot burst opened ${runner.maxInFlight} simultaneous '
+          'mount-attempt record writes; the station-wide bound is '
+          '$kMountAttemptWriteConcurrency',
+    );
+    // …and the meter really saw overlap, so the bound is a reached ceiling.
+    expect(runner.maxInFlight, greaterThan(1));
+    // NONE DROPPED: every bead's reservation was recorded exactly once.
+    expect(runner.started, _burstWidth);
+    expect(runner.completed, _burstWidth);
+  });
 }
