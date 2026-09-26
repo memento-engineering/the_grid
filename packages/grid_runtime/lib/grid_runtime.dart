@@ -107,8 +107,12 @@ export 'src/git/station_git_service.dart'
         ReapWorktree,
         StationGitRepository,
         StationGitService,
+        LandGateDecision,
+        LandGateOpen,
+        LandGateRefused,
         LandResult,
         ReapOutcome,
+        WorkBeadLandGate,
         RootCheckout,
         WorktreeLayout,
         isStrictlyUnderDir;

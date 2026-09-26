@@ -1914,6 +1914,25 @@ Future<StationWorkRuntime> _acquireStationWork({
   // --- the transports (ONE dry/live posture, per-seam overrides = tests).
   // The provider itself is built above, beside the trajectory harness that
   // polls it.
+  // The FRESH-status land gate (tg-b1t8): grid_sdk is the one package that
+  // sees both the store readers and the driveability rule, so the predicate is
+  // built HERE and injected into the git service — grid_runtime gains no
+  // grid_engine dependency (ADR-0002's arc stays one-way). It reads the WORK
+  // bead's owning store at call time through the same name/prefix binding the
+  // command handler uses; `workCommandStores` and `bundles` are the live maps
+  // the roster attach/detach path mutates, so an attached seat is covered.
+  BeadProbeReader? landGateReaderFor(String beadId) {
+    final ownedPrefix = BeadOwnershipPredicate.ownedPrefixOf(
+      beadId,
+      workCommandStores.keys,
+    );
+    final binding = ownedPrefix == null ? null : workCommandStores[ownedPrefix];
+    if (binding != null) return bundles[binding.substation]?.probeReader;
+    // The state store's own beads (a self-substation) read off the state
+    // bundle — the same fallback `writerForOwnedBead` takes for writes.
+    return stateBundle.probeReader;
+  }
+
   git =
       gitOverride ??
       (dryRun
@@ -1925,6 +1944,7 @@ Future<StationWorkRuntime> _acquireStationWork({
               // (stage1-wiring §2.3, r2 blocker 3) — the only place that holds
               // `preexisting`, the branch, and the base sha at one instant.
               recorder: recorder,
+              landGate: buildWorkBeadLandGate(readerFor: landGateReaderFor),
             ));
 
   // --- the registered roots. Dry-run registers nothing (the inert service
@@ -2344,6 +2364,56 @@ Future<GitRunResult> ghRunner(String workDir, List<String> args) async {
 /// executing a real `git`, the restart reconcile finds no survivors, and
 /// `provisionWorktree` materializes NOTHING. Exposed for the inertness
 /// regression tests.
+/// Builds the FRESH-status land gate [assembleStationWork] injects into
+/// [StationGitService.land] (tg-b1t8): asked with the work bead's id right
+/// before the PR opens, it READS the bead from its owning store AT CALL TIME
+/// through [readerFor] and answers whether the bead is open and driveable right
+/// now. It never consults a mount-time snapshot — the zombie it exists to stop
+/// was open when its round started.
+///
+/// Two clauses, in order:
+///  1. **status** — only [BeadStatus.open] lands; `deferred`, `closed`, or any
+///     other status refuses with that status named; an absent bead (or one no
+///     attached store owns) refuses as `absent` / `unowned`.
+///  2. **kind** — the resident's own [dispatchableWorkClause] is COMPOSED, not
+///     re-stated and not stood in for: `IssueTypeDriveability` answers whether
+///     this KIND of bead may ever mount, and a fresh open bead of an
+///     organisational type (an epic re-typed mid-round) still refuses.
+WorkBeadLandGate buildWorkBeadLandGate({
+  required BeadProbeReader? Function(String beadId) readerFor,
+}) => (beadId) async {
+  final reader = readerFor(beadId);
+  if (reader == null) {
+    return LandGateDecision.refused(
+      status: 'unowned',
+      reason: 'no attached store owns bead $beadId',
+    );
+  }
+  final bead = await reader.beadById(
+    beadId,
+    types: {...IssueType.coreTypes, ...GridIssueTypes.all},
+  );
+  if (bead == null) {
+    return LandGateDecision.refused(
+      status: 'absent',
+      reason: 'bead $beadId is not in its store',
+    );
+  }
+  if (bead.status != BeadStatus.open) {
+    return LandGateDecision.refused(
+      status: bead.status.wire,
+      reason: 'only an open bead lands; $beadId reads ${bead.status.wire}',
+    );
+  }
+  return switch (dispatchableWorkClause(resident: true)(bead)) {
+    MountEligible() => const LandGateDecision.open(),
+    MountRefused(:final clause) => LandGateDecision.refused(
+      status: 'open but not driveable (${bead.issueType.wire})',
+      reason: clause,
+    ),
+  };
+};
+
 StationGitService buildDryStationGitService() => DryStationGitService();
 
 /// Adapts a live [GridControllerRuntime] to the engine's [SnapshotSource] —

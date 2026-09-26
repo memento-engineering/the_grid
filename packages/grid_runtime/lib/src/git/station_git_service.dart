@@ -197,6 +197,55 @@ class ReapOutcome {
   bool get refused => !removed && !wouldRemove;
 }
 
+/// The FRESH-status land gate (tg-b1t8): asked by [StationGitService.land]
+/// IMMEDIATELY before it opens a pull request, with the WORK bead's id, and
+/// answered by a read the predicate performs AT CALL TIME. The gate is
+/// INJECTED — grid_sdk builds it over the store readers it already holds and
+/// hands it in here — because grid_runtime cannot see the driveability rule or
+/// the store readers (the grid_engine → grid_runtime arc is one-way, ADR-0002)
+/// and MUST NOT consult a mount-time snapshot: the zombie this gate exists to
+/// stop (genesis-xc2, PR #9) was open when its round started, so any answer
+/// read at mount says "driveable" and lets the push through.
+///
+/// A gate that THROWS fails CLOSED: the PR is not opened and the failure is
+/// recorded on the [LandResult].
+typedef WorkBeadLandGate = Future<LandGateDecision> Function(String beadId);
+
+/// What a [WorkBeadLandGate] found when it read the work bead's current state.
+sealed class LandGateDecision {
+  const LandGateDecision();
+
+  /// The bead is open and driveable right now: the PR may open.
+  const factory LandGateDecision.open() = LandGateOpen;
+
+  /// The bead is NOT open and driveable right now — [status] is what the fresh
+  /// read found (`deferred`, `closed`, `absent`, a non-driveable type…) and
+  /// [reason] says why that refuses the PR.
+  const factory LandGateDecision.refused({
+    required String status,
+    required String reason,
+  }) = LandGateRefused;
+}
+
+/// The gate's "open and driveable" answer.
+final class LandGateOpen extends LandGateDecision {
+  const LandGateOpen();
+}
+
+/// The gate's refusal, carrying the observed [status] and the [reason].
+final class LandGateRefused extends LandGateDecision {
+  const LandGateRefused({required this.status, required this.reason});
+
+  /// The status the fresh read observed.
+  final String status;
+
+  /// Why that status refuses the PR.
+  final String reason;
+
+  @override
+  String toString() => 'LandGateRefused($status: $reason)';
+}
+
 /// The result of the land step (DIVERGES from gc; ADR-0006 Decision 3): commit
 /// → push → open PR. Carries either the [PullRequestRef] or a failure reason so
 /// the caller records the outcome on the lifecycle bead.
@@ -324,12 +373,19 @@ class StationGitService {
     required GitRunner runner,
     required PrOpener prOpener,
     StationTrajectoryRecorder? recorder,
+    WorkBeadLandGate? landGate,
   }) : _ops = GitOps(runner),
        _prOpener = prOpener,
+       _landGate = landGate,
        _recorder = recorder ?? StationTrajectoryRecorder.disabled();
 
   final GitOps _ops;
   final PrOpener _prOpener;
+
+  /// The fresh-status gate [land] asks right before it opens a PR (tg-b1t8).
+  /// Null (the default, and every dry posture) installs no gate: a station
+  /// that assembles work through grid_sdk always injects one.
+  final WorkBeadLandGate? _landGate;
 
   /// The Stage-1 derivation layer (stage1-wiring §2.3's `worktree.provisioned`
   /// row). The observation is made INSIDE [provisionWorktree] — r2 blocker 3
@@ -523,6 +579,18 @@ class StationGitService {
   ///
   /// Each failure short-circuits and is recorded (never thrown) so the caller
   /// can mark the lifecycle bead and leave the worktree in place for retry.
+  ///
+  /// **The fresh-status gate (tg-b1t8).** After the push and IMMEDIATELY before
+  /// the PR opens, the injected [WorkBeadLandGate] is asked for the work bead's
+  /// CURRENT status. A bead that is not open and driveable right now —
+  /// deferred, closed, absent, or of a type an agent never drives — gets NO
+  /// pull request: the result is [LandResult.failed] with `committed` and
+  /// `pushed` true and a reason naming the bead id and the observed status, so
+  /// the operator sees a land was DECLINED and why. The commit and the push
+  /// still happen so the work survives on its branch for a later decision;
+  /// nothing auto-merges, so a pushed branch without a PR is inert. A gate that
+  /// throws fails CLOSED the same way. The mount-time snapshot this service
+  /// never held is never consulted: asking the gate IS the read.
   Future<LandResult> land({
     required RootCheckout root,
     required BeadWorktree worktree,
@@ -553,6 +621,30 @@ class StationGitService {
         pushed: false,
         reason: 'push failed: ${push.output.trim()}',
       );
+    }
+
+    if (_landGate case final gate?) {
+      final LandGateDecision decision;
+      try {
+        decision = await gate(worktree.beadId);
+      } on Object catch (error) {
+        return LandResult.failed(
+          committed: true,
+          pushed: true,
+          reason:
+              'pr open refused: work bead ${worktree.beadId} status could not '
+              'be read at push time ($error) — failing closed, no PR opened',
+        );
+      }
+      if (decision case LandGateRefused(:final status, :final reason)) {
+        return LandResult.failed(
+          committed: true,
+          pushed: true,
+          reason:
+              'pr open refused: work bead ${worktree.beadId} is $status at '
+              'push time — $reason; no PR opened',
+        );
+      }
     }
 
     final pr = await _prOpener.open(
