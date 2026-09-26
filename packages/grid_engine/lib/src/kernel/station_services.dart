@@ -41,6 +41,7 @@ class StationServices {
     this.maxConcurrentWork = kDefaultMaxConcurrentWork,
     DateTime Function()? clock,
     StateStoreWriteGovernor? terminalWrites,
+    StateStoreWriteGovernor? mountAttemptWrites,
   }) : terminalWrites =
            terminalWrites ??
            StateStoreWriteGovernor(
@@ -58,6 +59,12 @@ class StationServices {
          g2EmissionMode: g2EmissionMode,
          trajectoryRecorder: trajectoryRecorder,
          clock: clock,
+         mountAttemptWrites:
+             mountAttemptWrites ??
+             StateStoreWriteGovernor(
+               bound: kMountAttemptWriteConcurrency,
+               lane: 'mount-attempt-record',
+             ),
        );
 
   /// The process transport — spawn (`start`), kill (`stop`), and the broadcast

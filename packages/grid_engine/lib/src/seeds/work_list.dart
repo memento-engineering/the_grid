@@ -563,9 +563,14 @@ class _WorkListState extends State<WorkList>
       (left, right) => compareCandidates(left.candidate, right.candidate),
     );
     if (waiting.isNotEmpty) {
+      final beadIds = waiting.map((candidate) => candidate.bead.id);
       _flare(services, 'work.throttled', {
         'count': '${waiting.length}',
-        'beadIds': waiting.map((candidate) => candidate.bead.id).join(','),
+        'beadIds': beadIds.join(','),
+        'cause': WorkThrottleCause.slotsFull,
+        'causes': beadIds
+            .map((id) => '$id=${WorkThrottleCause.slotsFull}')
+            .join(','),
       });
     }
     return StationAdmissionBatch(

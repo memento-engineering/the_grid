@@ -21,6 +21,7 @@ import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
 import '../sdk/circuit.dart';
 import 'admission_barrier.dart';
+import 'state_store_write_governor.dart';
 import 'trajectory_scope.dart';
 
 /// The once-resolved Stage-2 emission posture injected by station assembly.
@@ -42,6 +43,42 @@ enum StationAdmissionCeilingSource {
 
   /// A live operator command applied to the resident authority.
   control,
+}
+
+/// How many mount-attempt RESERVATION writes the whole STATION issues at once
+/// (tg-fpvk). The boot burst used to fire one per stamped ready bead in the
+/// same tick as the re-adoptions, on top of the terminal sweep; the tail blew
+/// `DoltQueryService.queryTimeout` and each timed-out bead was refused
+/// `missing-reservation` until its backoff re-reserved it. Station-wide, like
+/// `kTerminalWriteConcurrency`, and its own lane rather than a share of the
+/// terminal one, because this write gates a MINT and must never queue behind
+/// hundreds of terminal cleanups.
+const int kMountAttemptWriteConcurrency = 2;
+
+/// The condition that held a pending work bead out of this admission pass —
+/// the `cause` a `work.throttled` flare carries (tg-fpvk), so an operator can
+/// tell a missing reservation from slot contention and from an attempt cooldown
+/// without reading the engine.
+abstract final class WorkThrottleCause {
+  /// The station or substation ceiling is full; the bead waits for a natural
+  /// slot.
+  static const String slotsFull = 'slots-full';
+
+  /// The bead's durable mount-attempt reservation write failed and was
+  /// released; the bead awaits re-reservation on the next pass after the
+  /// standard backoff.
+  static const String reservationMissing = 'reservation-missing';
+
+  /// A minted attempt was voided (a pour deadline, a lost fence) and the bead
+  /// is cooling down before it re-competes.
+  static const String attemptBackoff = 'attempt-backoff';
+
+  /// Another substation scope currently holds this bead's reservation.
+  static const String reservedElsewhere = 'reserved-elsewhere';
+
+  /// The `cause` value when one pass holds beads under more than one cause;
+  /// the per-bead `causes` field then carries each one.
+  static const String mixed = 'mixed';
 }
 
 /// A read-only station admission snapshot for operator status surfaces.
@@ -200,6 +237,10 @@ typedef _ScopeKey = ({String stateSubstation, String substationId});
 
 typedef _AdmissionPassProjection = ({List<StrandedWork> stranded});
 
+/// One live backoff hold: the timer that ends it and the `work.throttled`
+/// cause it holds the bead under (tg-fpvk).
+typedef _RetryHold = ({Timer timer, String cause});
+
 enum _MountAttemptWriteState { writing, recorded }
 
 final class _UnsnapshottedReservation {
@@ -278,7 +319,14 @@ final class StationAdmissionAuthority {
     G2EmissionMode g2EmissionMode = G2EmissionMode.off,
     StationTrajectoryRecorder? trajectoryRecorder,
     DateTime Function()? clock,
+    StateStoreWriteGovernor? mountAttemptWrites,
   }) : _writer = writer,
+       _mountAttemptWriteGovernor =
+           mountAttemptWrites ??
+           StateStoreWriteGovernor(
+             bound: kMountAttemptWriteConcurrency,
+             lane: 'mount-attempt-record',
+           ),
        _admissionBarrier = admissionBarrier,
        _provider = provider,
        _stateSubstation = stateSubstation,
@@ -294,6 +342,18 @@ final class StationAdmissionAuthority {
   }
 
   final StationBeadWriter _writer;
+
+  /// THE STATION-WIDE bound on in-flight mount-attempt record writes
+  /// (tg-fpvk). A boot burst used to issue every reservation write in the same
+  /// tick as the re-adoptions, against a store already carrying the terminal
+  /// sweep; the tail blew `DoltQueryService.queryTimeout` and each timed-out
+  /// bead was refused `missing-reservation`. Every reservation write now takes
+  /// a permit here first, so no tick starts more than
+  /// [kMountAttemptWriteConcurrency] of them however many scopes admit at once.
+  /// A separate lane from `StationServices.terminalWrites` on purpose: the
+  /// reservation write gates a MINT, and queueing it behind hundreds of
+  /// terminal cleanups would trade one stranding for another.
+  final StateStoreWriteGovernor _mountAttemptWriteGovernor;
   final RuntimeProvider _provider;
   final String _stateSubstation;
   int _maxAgents;
@@ -322,7 +382,7 @@ final class StationAdmissionAuthority {
   // Registered station consumers are process-local, not snapshot facts.
   final Map<Object, void Function()> _listeners = <Object, void Function()>{};
   // Live backoff operations are process-local, not snapshot facts.
-  final Map<String, Timer> _retryTimers = <String, Timer>{};
+  final Map<String, _RetryHold> _retryTimers = <String, _RetryHold>{};
   // Writes not yet represented by JoinedSnapshot require one shared future.
   final Map<String, Future<void>> _mountAttemptWrites =
       <String, Future<void>>{};
@@ -527,9 +587,16 @@ final class StationAdmissionAuthority {
       });
     final admitted = <StationAdmissionReservation>[];
     final waiting = <StationAdmissionCandidate>[];
-    final capacityWaiting = <StationAdmissionCandidate>[];
+    // Every bead reported throttled this pass, in admission order, with the
+    // condition that held it (tg-fpvk AC-2).
+    final throttledCauses = <String, String>{};
     final refused = <StationAdmissionRefusal>[];
     final stranded = <StrandedWork>[];
+
+    void hold(StationAdmissionCandidate candidate, String cause) {
+      waiting.add(candidate);
+      throttledCauses[candidate.bead.id] = cause;
+    }
 
     for (final candidate in ordered) {
       final bead = candidate.bead;
@@ -637,8 +704,8 @@ final class StationAdmissionAuthority {
         continue;
       }
 
-      if (_retryTimers.containsKey(bead.id)) {
-        waiting.add(candidate);
+      if (_retryTimers[bead.id] case final retry?) {
+        hold(candidate, retry.cause);
         continue;
       }
 
@@ -690,8 +757,7 @@ final class StationAdmissionAuthority {
           if (retiredRound && sessionId != null && sessionId.isNotEmpty) {
             var successor = _reservations[bead.id];
             if (successor != null && successor.scopeKey != scopeKey) {
-              waiting.add(candidate);
-              capacityWaiting.add(candidate);
+              hold(candidate, WorkThrottleCause.reservedElsewhere);
               continue;
             }
             if (successor == null || successor.sessionId == sessionId) {
@@ -727,8 +793,7 @@ final class StationAdmissionAuthority {
                 durableLiveIds,
                 candidateAlreadyCounted: false,
               )) {
-            waiting.add(candidate);
-            capacityWaiting.add(candidate);
+            hold(candidate, WorkThrottleCause.slotsFull);
             continue;
           }
           if (awaitsReadmission) {
@@ -850,8 +915,7 @@ final class StationAdmissionAuthority {
 
       var reservation = _reservations[bead.id];
       if (reservation != null && reservation.scopeKey != scopeKey) {
-        waiting.add(candidate);
-        capacityWaiting.add(candidate);
+        hold(candidate, WorkThrottleCause.reservedElsewhere);
         continue;
       }
       if (reservation != null) {
@@ -866,8 +930,7 @@ final class StationAdmissionAuthority {
         durableLiveIds,
         candidateAlreadyCounted: alreadyMounted,
       )) {
-        waiting.add(candidate);
-        capacityWaiting.add(candidate);
+        hold(candidate, WorkThrottleCause.slotsFull);
         continue;
       }
       if (alreadyMounted) {
@@ -900,13 +963,18 @@ final class StationAdmissionAuthority {
       _scheduleMountAttempt(services, bead.id, attempt, reservation);
     }
 
-    final capacityWaitingSignature = capacityWaiting
-        .map((entry) => entry.bead.id)
-        .join(',');
-    if (capacityWaiting.isNotEmpty) {
+    if (throttledCauses.isNotEmpty) {
+      final distinct = throttledCauses.values.toSet();
       _flare(services, 'work.throttled', {
-        'count': '${capacityWaiting.length}',
-        'beadIds': capacityWaitingSignature,
+        'count': '${throttledCauses.length}',
+        'beadIds': throttledCauses.keys.join(','),
+        'cause': distinct.length == 1
+            ? distinct.single
+            : WorkThrottleCause.mixed,
+        'causes': [
+          for (final entry in throttledCauses.entries)
+            '${entry.key}=${entry.value}',
+        ].join(','),
       });
     }
     if (admitted.isEmpty && waiting.isNotEmpty) {
@@ -1073,11 +1141,16 @@ final class StationAdmissionAuthority {
       _mountAttemptWrites[latch] = write;
       scheduleMicrotask(() async {
         try {
-          await _writer.recordMountAttempt(
-            substation: _stateSubstation,
-            workBeadId: workBeadId,
-            attempt: attempt,
-            note: 'mount attempt $attempt of $kMaxMountAttempts',
+          // Under the STATION-WIDE reservation-write bound (tg-fpvk AC-3): the
+          // permit is taken before the store call starts, so queue residence
+          // never spends the write's own deadline.
+          await _mountAttemptWriteGovernor.run(
+            () => _writer.recordMountAttempt(
+              substation: _stateSubstation,
+              workBeadId: workBeadId,
+              attempt: attempt,
+              note: 'mount attempt $attempt of $kMaxMountAttempts',
+            ),
           );
           completer.complete();
         } on Object catch (error, stackTrace) {
@@ -1105,7 +1178,10 @@ final class StationAdmissionAuthority {
           'reason': truncateReason('$error'),
           ...stateStoreDeadlineMetadata(error),
         });
-        _scheduleRetryInvalidation(workBeadId);
+        _scheduleRetryInvalidation(
+          workBeadId,
+          cause: WorkThrottleCause.reservationMissing,
+        );
         _notifyListeners();
       }
     });
@@ -1838,12 +1914,23 @@ final class StationAdmissionAuthority {
       .map(_effectiveSession)
       .toList(growable: false);
 
-  void _scheduleRetryInvalidation(String workBeadId) {
+  /// Holds [workBeadId] out of admission for one standard backoff, then
+  /// invalidates so it re-competes. [cause] is what `work.throttled` names
+  /// while the hold lasts: a released reservation whose durable write failed
+  /// reads `reservation-missing`; a voided minted attempt reads
+  /// `attempt-backoff`.
+  void _scheduleRetryInvalidation(
+    String workBeadId, {
+    String cause = WorkThrottleCause.attemptBackoff,
+  }) {
     if (_disposed || _retryTimers.containsKey(workBeadId)) return;
-    _retryTimers[workBeadId] = Timer(Backoff.standard.delayFor(1), () {
-      _retryTimers.remove(workBeadId);
-      _notifyListeners();
-    });
+    _retryTimers[workBeadId] = (
+      timer: Timer(Backoff.standard.delayFor(1), () {
+        _retryTimers.remove(workBeadId);
+        _notifyListeners();
+      }),
+      cause: cause,
+    );
   }
 
   void _scheduleCapacityRecheck() {
@@ -1896,8 +1983,8 @@ final class StationAdmissionAuthority {
       scope._mountEligibilityRecheckTimer?.cancel();
       scope._mountEligibilityRecheckTimer = null;
     }
-    for (final timer in _retryTimers.values) {
-      timer.cancel();
+    for (final retry in _retryTimers.values) {
+      retry.timer.cancel();
     }
     _retryTimers.clear();
     _blockedUntilFreshReady.clear();
