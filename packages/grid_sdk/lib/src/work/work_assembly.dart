@@ -1897,6 +1897,10 @@ Future<StationWorkRuntime> _acquireStationWork({
     reapWorktree: git.reap,
     workRootsByIdentity: workRootsByIdentity,
     setAdmissionCeiling: services.admission.setMaxAgents,
+    // `grid session void` (tg-5snt): the in-memory runtime census its
+    // live-step guard reads, and the sanction that drops a MOUNTED voided
+    // session's stale scope so its bead is re-offered.
+    admission: services.admission,
     // `grid rework`'s re-key is one of `attempt.round.retired`'s two
     // observation sites (stage1-wiring §2.3).
     recorder: recorder,

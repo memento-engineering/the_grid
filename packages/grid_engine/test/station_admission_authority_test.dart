@@ -364,6 +364,130 @@ Future<void> _waitUntil(bool Function() condition) async {
 }
 
 void main() {
+  group('operator session void (tg-5snt)', () {
+    const live = SessionProjection(workBeadId: 'tg-1', sessionId: 'tgdog-s1');
+
+    test('liveRuntimesOf names only the runtimes held under that session, '
+        'from the in-memory transport', () async {
+      final provider = FakeRuntimeProvider();
+      addTearDown(provider.close);
+      final station = _stationOver(RecordingBdRunner(), provider: provider);
+      addTearDown(station.dispose);
+      const config = RuntimeConfig(workDir: '/w', command: 'agent');
+      await provider.start('tgdog-s1/tg-1/land', config);
+      await provider.start('tgdog-s1/tg-1/agent', config);
+      await provider.start('tgdog-s10/tg-9/agent', config);
+
+      expect(station.admission.liveRuntimesOf('tgdog-s1'), [
+        'tgdog-s1/tg-1/agent',
+        'tgdog-s1/tg-1/land',
+      ]);
+      expect(station.admission.liveRuntimesOf('tgdog-s2'), isEmpty);
+    });
+
+    test(
+      'a sanctioned void of an ADOPTED session holds the bead once it is '
+      'unlinked, frees its slot, and re-offers it fresh after landing',
+      () async {
+        final station = _stationOver(RecordingBdRunner(), maxConcurrentWork: 1);
+        addTearDown(station.dispose);
+        final transport = _RecordingTransport();
+        final services = ServiceBundle(transport: transport);
+        var invalidations = 0;
+        station.admission.addInvalidationListener(() => invalidations += 1);
+        final first = _bead('tg-1');
+        final second = _bead('tg-2');
+        final capOne = _config.copyWith(maxConcurrentWork: 1);
+
+        StationAdmissionBatch pass({required bool linked}) =>
+            station.admission.admitPending(
+              _snapshot([
+                first,
+                second,
+              ], sessions: linked ? const {'tg-1': live} : const {}),
+              capOne,
+              services,
+              [
+                StationAdmissionCandidate(
+                  bead: first,
+                  session: linked ? live : null,
+                ),
+                StationAdmissionCandidate(bead: second, session: null),
+              ],
+            );
+
+        final adopted = pass(linked: true);
+        expect(adopted.admitted.single.sessionId, 'tgdog-s1');
+        expect(adopted.admitted.single.adopted, isTrue);
+
+        station.admission.beginOperatorVoid(
+          workBeadId: 'tg-1',
+          sessionId: 'tgdog-s1',
+        );
+        // The re-key is not yet observed: nothing changes for the mount.
+        final stale = pass(linked: true);
+        expect(stale.admitted.single.sessionId, 'tgdog-s1');
+
+        // Observed while the void is still landing: held, slot freed, and the
+        // next candidate takes it in the same pass.
+        final held = pass(linked: false);
+        expect(held.waiting.map((c) => c.bead.id), ['tg-1']);
+        expect(held.admitted.single.candidate.bead.id, 'tg-2');
+        expect(
+          transport.flares.last.data['causes'],
+          contains('tg-1=${WorkThrottleCause.operatorVoid}'),
+        );
+        expect(pass(linked: false).waiting.map((c) => c.bead.id), ['tg-1']);
+
+        station.admission.endOperatorVoid(
+          workBeadId: 'tg-1',
+          sessionId: 'tgdog-s1',
+          landed: true,
+        );
+        expect(invalidations, greaterThan(0));
+        // One more held pass drops any stale mount, then the bead re-competes
+        // as a FRESH candidate (a new mount attempt), never an adoption.
+        expect(pass(linked: false).waiting.map((c) => c.bead.id), ['tg-1']);
+        final before = invalidations;
+        await _pump();
+        expect(invalidations, greaterThan(before), reason: 'recheck scheduled');
+        final reoffered = station.admission.admitPending(
+          _snapshot([first]),
+          capOne,
+          services,
+          [StationAdmissionCandidate(bead: first, session: null)],
+        );
+        expect(reoffered.admitted.single.candidate.bead.id, 'tg-1');
+        expect(reoffered.admitted.single.adopted, isFalse);
+        expect(reoffered.admitted.single.sessionId, isNull);
+        expect(reoffered.waiting, isEmpty);
+      },
+    );
+
+    test('a withdrawn void takes the ordinary path again', () {
+      final station = _stationOver(RecordingBdRunner());
+      addTearDown(station.dispose);
+      final first = _bead('tg-1');
+      station.admission.beginOperatorVoid(
+        workBeadId: 'tg-1',
+        sessionId: 'tgdog-s1',
+      );
+      station.admission.endOperatorVoid(
+        workBeadId: 'tg-1',
+        sessionId: 'tgdog-s1',
+        landed: false,
+      );
+      final batch = station.admission.admitPending(
+        _snapshot([first]),
+        _config,
+        const ServiceBundle(),
+        [StationAdmissionCandidate(bead: first, session: null)],
+      );
+      expect(batch.waiting, isEmpty);
+      expect(batch.admitted.single.candidate.bead.id, 'tg-1');
+    });
+  });
+
   test(
     'lost-session retirement shares one exact future and stops every runtime '
     'before the incumbent void path',
