@@ -3602,4 +3602,81 @@ void main() {
       );
     },
   );
+
+  test('work.throttled names WHY each bead is held: slots-full for capacity, '
+      'reservation-missing after a failed mount-attempt record write '
+      '(tg-fpvk)', () async {
+    final runner = _FailingMountAttemptRunner();
+    final station = _stationOver(runner, maxConcurrentWork: 1);
+    addTearDown(station.dispose);
+    final transport = _RecordingTransport();
+    final services = ServiceBundle(transport: transport);
+    final first = _bead('tg-first', priority: 0);
+    final second = _bead('tg-second', priority: 1);
+    final snapshot = _snapshot([first, second]);
+    final candidates = [
+      StationAdmissionCandidate(bead: first, session: null),
+      StationAdmissionCandidate(bead: second, session: null),
+    ];
+    final config = _config.copyWith(maxConcurrentWork: 1);
+
+    // Pass 1: tg-first takes the single slot and its reservation write is
+    // scheduled; tg-second is held for capacity.
+    final pass1 = station.admission.admitPending(
+      snapshot,
+      config,
+      services,
+      candidates,
+    );
+    expect(pass1.admitted.single.candidate.bead.id, first.id);
+    final capacityHold = transport.flares.singleWhere(
+      (flare) => flare.name == 'work.throttled',
+    );
+    expect(capacityHold.data, containsPair('beadIds', second.id));
+    expect(capacityHold.data, containsPair('cause', 'slots-full'));
+    expect(
+      capacityHold.data,
+      containsPair('causes', '${second.id}=slots-full'),
+    );
+
+    // The reservation write fails (the controlled runner throws on the budget
+    // merge), the reservation is released and tg-first enters its backoff.
+    for (var i = 0; i < 12; i++) {
+      await Future<void>.delayed(Duration.zero);
+    }
+    expect(
+      transport.flares.where(
+        (flare) => flare.name == 'work.mountAttemptRecordFailed',
+      ),
+      hasLength(1),
+    );
+
+    // Pass 2: tg-first is held by its missing reservation, tg-second now takes
+    // the slot — and the one flare names BOTH conditions bead by bead.
+    transport.flares.clear();
+    final pass2 = station.admission.admitPending(
+      snapshot,
+      config,
+      services,
+      candidates,
+    );
+    expect(pass2.admitted.single.candidate.bead.id, second.id);
+    expect(pass2.waiting.single.bead.id, first.id);
+    final backoffHold = transport.flares.singleWhere(
+      (flare) => flare.name == 'work.throttled',
+    );
+    expect(backoffHold.data, containsPair('count', '1'));
+    expect(backoffHold.data, containsPair('beadIds', first.id));
+    expect(
+      backoffHold.data,
+      containsPair('cause', WorkThrottleCause.reservationMissing),
+    );
+    expect(
+      backoffHold.data,
+      containsPair(
+        'causes',
+        '${first.id}=${WorkThrottleCause.reservationMissing}',
+      ),
+    );
+  });
 }
