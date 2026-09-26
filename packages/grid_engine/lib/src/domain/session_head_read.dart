@@ -142,6 +142,8 @@ const Map<String, String> kDualReadCounterSemantics = <String, String>{
   'step_fold_absent': 'gauge',
   'step_retired_round_skipped': 'gauge',
   'p2_miss_retired_round_total': 'cumulative',
+  'step_legacy_carrier_retired': 'gauge',
+  'step_legacy_carrier_retired_total': 'cumulative',
   'step_divergences': 'cumulative',
   'step_divergences_in_window': 'cumulative',
   'step_divergences_historical': 'cumulative',
@@ -543,6 +545,22 @@ enum DualReadDivergenceCause {
   /// A legacy terminal remained absent from the fold after the terminal-lag
   /// healer ran and the existing post-heal escalation boundary was crossed.
   legacyTerminalNoFoldTerminal('legacy-terminal-no-fold-terminal'),
+
+  /// STEP AXIS ONLY, and NOT a divergence: an UNSHADOWABLE fact the step
+  /// comparator stops sampling (tg-ul2v).
+  ///
+  /// Under `discipline: cut` the station RETIRES two legacy step-bead writes —
+  /// the `pending`→`running` write at a step's start
+  /// (`capability_host.dart` `_persistStarted`) and the gate-cleared
+  /// `gated`→`pending` rearm write (`session_scope.dart` `_rearm`) — and the
+  /// `step.transition` record becomes the only carrier of those two
+  /// transitions. The bead is therefore STRUCTURALLY behind the fold for
+  /// exactly those transitions, and there is no legacy oracle left to shadow
+  /// them against: the pair is classified by [retiredStepCarrierOf] and
+  /// recorded once per fold seq, never tracked as `stepLag`, never escalated,
+  /// and never counted into `step_divergences`. Lunar epoch 98 (2026-09-22)
+  /// measured 78 of these as `unexplained` `stepLag` escalations.
+  legacyStepCarrierRetired('legacy-step-carrier-retired'),
 
   /// No append-absence proof exists; operator adjudication uses the detail.
   unexplained('unexplained');
@@ -1042,6 +1060,19 @@ class DualReadAccounting {
   int stepUnexplainedDivergences = 0;
   int stepUnexplainedDivergencesInWindow = 0;
 
+  /// Step pairs classified as a RETIRED LEGACY CARRIER
+  /// ([DualReadDivergenceCause.legacyStepCarrierRetired], tg-ul2v): the LAST
+  /// pass's population, like every gauge here. These nodes are deliberately
+  /// NOT in [openStepLag] — under `discipline: cut` the bead write for the
+  /// transition the fold carries was retired, so the pair is an unshadowable
+  /// fact rather than an append in flight, and no grace can ever close it.
+  int stepLegacyCarrierRetired = 0;
+
+  /// The same class, deduped across the boot by `(session, step, fold seq)`.
+  /// Cumulative and REPORTED only: it is never a divergence and never enters
+  /// [stepDivergences] or [stepUnexplainedDivergences].
+  int stepLegacyCarrierRetiredTotal = 0;
+
   /// Step divergences the write order explains
   /// ([DualReadDivergenceCause.foldAheadOfLegacy]) — counted apart from the
   /// unexplained ones so a gate reading the summary never has to re-derive the
@@ -1191,6 +1222,7 @@ class DualReadAccounting {
     p2Orphan = 0;
     stepFoldAbsent = 0;
     stepRetiredRoundSkipped = 0;
+    stepLegacyCarrierRetired = 0;
     openStepLag = 0;
   }
 
@@ -1291,6 +1323,8 @@ class DualReadAccounting {
         case DualReadDivergenceCause.successorDepthMismatch:
         case DualReadDivergenceCause.nonAtomicCrashGap:
           throw StateError('G2-only cause passed session-axis validation');
+        case DualReadDivergenceCause.legacyStepCarrierRetired:
+          throw StateError('step-only cause passed session-axis validation');
         // The session comparator cannot mint `foldAheadOfLegacy`; if a future
         // caller does, it lands in the bucket that asks for adjudication.
         case DualReadDivergenceCause.retiredRoundOpenByDesign:
@@ -1339,6 +1373,17 @@ class DualReadAccounting {
         'session-only divergence cause cannot be recorded on the step axis',
       );
     }
+    if (cause == DualReadDivergenceCause.legacyStepCarrierRetired) {
+      // Not a divergence at all — an unshadowable fact. Routing it through
+      // here would count it into `step_divergences`, which is exactly the
+      // re-labelling the classification exists to prevent.
+      throw ArgumentError.value(
+        cause,
+        'cause',
+        'a retired legacy step carrier is recorded by '
+            'recordRetiredStepCarrier, never as a step divergence',
+      );
+    }
     final completeKey = mismatchKey ?? 'step:$sessionId:$stepPath:$field';
     if (!noteEvent('stepDivergence:$completeKey')) return false;
     final inWindow = _isInWindow(headEpoch);
@@ -1363,6 +1408,8 @@ class DualReadAccounting {
       case DualReadDivergenceCause.retiredRoundOpenByDesign:
       case DualReadDivergenceCause.legacyTerminalNoFoldTerminal:
         throw StateError('session-only cause passed step-axis validation');
+      case DualReadDivergenceCause.legacyStepCarrierRetired:
+        throw StateError('retired-carrier cause passed step-axis validation');
       case DualReadDivergenceCause.unexplained:
         stepUnexplainedDivergences += 1;
         if (inWindow) stepUnexplainedDivergencesInWindow += 1;
@@ -1378,6 +1425,50 @@ class DualReadAccounting {
         occurredAt: _clock().toUtc(),
         activeStepPath: stepPath,
         cause: cause,
+      ),
+    );
+    return true;
+  }
+
+  /// Records one step pair the comparator classified as a RETIRED LEGACY
+  /// CARRIER (tg-ul2v) — the unshadowable fact [retiredStepCarrierOf] names.
+  ///
+  /// Bumps the per-pass gauge on every sighting and, on the FIRST sighting of
+  /// this `(session, step, fold seq)`, the cumulative total plus ONE typed
+  /// detail carrying the pair, the carrier and the fold seq — so the
+  /// classification is recorded in the same detail list the round summary
+  /// already ships, under its own cause, instead of vanishing. Returns true on
+  /// that first sighting.
+  ///
+  /// Never a divergence: [stepDivergences], [stepUnexplainedDivergences] and
+  /// the lag tracker are untouched, which is what "the comparator stops
+  /// sampling it" means operationally.
+  bool recordRetiredStepCarrier({
+    required String sessionId,
+    required String stepPath,
+    required String legacyValue,
+    required String foldValue,
+    required RetiredStepCarrier carrier,
+    required int foldSeq,
+  }) {
+    stepLegacyCarrierRetired += 1;
+    final key = 'step:$sessionId:$stepPath:stepLag:${carrier.wire}@seq$foldSeq';
+    if (!noteEvent('stepCarrierRetired:$key')) return false;
+    stepLegacyCarrierRetiredTotal += 1;
+    divergenceDetails.add(
+      DualReadDivergenceDetail(
+        mismatchKey: key,
+        axis: 'step',
+        sessionId: sessionId,
+        // `stepLag` on purpose: this is the field every one of these pairs
+        // escalated under before the classification existed, so an operator
+        // can join an old flare to the class that now absorbs it.
+        field: 'stepLag',
+        legacyValue: legacyValue,
+        foldValue: foldValue,
+        occurredAt: _clock().toUtc(),
+        activeStepPath: stepPath,
+        cause: DualReadDivergenceCause.legacyStepCarrierRetired,
       ),
     );
     return true;
@@ -1532,6 +1623,8 @@ class DualReadAccounting {
       'step_fold_absent': stepFoldAbsent,
       'step_retired_round_skipped': stepRetiredRoundSkipped,
       'p2_miss_retired_round_total': p2MissRetiredRoundTotal,
+      'step_legacy_carrier_retired': stepLegacyCarrierRetired,
+      'step_legacy_carrier_retired_total': stepLegacyCarrierRetiredTotal,
       'step_divergences': stepDivergences,
       'step_divergences_in_window': stepDivergencesInWindow,
       'step_divergences_historical': stepDivergences - stepDivergencesInWindow,

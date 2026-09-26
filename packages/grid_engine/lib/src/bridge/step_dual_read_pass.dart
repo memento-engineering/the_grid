@@ -183,12 +183,24 @@ class DualReadStepObserver {
     DateTime Function()? clock,
     DualReadFlareSink? onFlare,
     DualReadAccounting? accounting,
+    // OFF BY DEFAULT: only a `discipline: cut` composition retires the two
+    // step-bead writes this classifies (tg-ul2v).
+    bool legacyStepWritesRetired = false,
   }) : _mode = mode,
        _clock = clock ?? DateTime.now,
        _onFlare = onFlare,
+       _legacyStepWritesRetired = legacyStepWritesRetired,
        accounting = accounting ?? DualReadAccounting(clock: clock);
 
   final DualReadMode _mode;
+
+  /// True when the composing station runs `discipline: cut`, which RETIRES
+  /// the step bead's `running` write and its gate-cleared rearm write
+  /// ([RetiredStepCarrier]). Only then does a lagging pair get the chance to
+  /// classify as [DualReadDivergenceCause.legacyStepCarrierRetired]; under
+  /// `shadow` every such pair keeps its `stepLag` treatment unchanged,
+  /// because there the bead still carries those transitions.
+  final bool _legacyStepWritesRetired;
   final DateTime Function() _clock;
   final DualReadFlareSink? _onFlare;
 
@@ -627,6 +639,9 @@ class DualReadStepObserver {
           now: now,
           lagging: lagging,
           headEpoch: headEpoch,
+          bead: beadCursor[node.stepPath],
+          fold: collapsed[node.stepPath],
+          rows: rows,
         );
       }
     }
@@ -681,6 +696,9 @@ class DualReadStepObserver {
     required DateTime now,
     required Set<String> lagging,
     required int headEpoch,
+    NodeCursor? bead,
+    StepCursorView? fold,
+    List<StepCursorView> rows = const <StepCursorView>[],
   }) {
     _resolveFoldAhead(node, snapshot, now: now, headEpoch: headEpoch);
     switch (node.classification) {
@@ -712,6 +730,14 @@ class DualReadStepObserver {
           headEpoch: headEpoch,
         );
       case StepNodeClass.stepLag:
+        // THE RETIRED-CARRIER CLASS (tg-ul2v): under cut, a pair the bead can
+        // never catch up on is an unshadowable fact, not lag. It is recorded
+        // under its own cause and kept OUT of the tracker — without this every
+        // started or re-armed step escalated `unexplained` 90 s in (78 of
+        // lunar epoch 98's 81 stepLag flares).
+        if (_recordRetiredCarrier(node, bead: bead, fold: fold, rows: rows)) {
+          return;
+        }
         _observeLag(
           node,
           snapshot,
@@ -726,6 +752,42 @@ class DualReadStepObserver {
       case StepNodeClass.divergence:
         _recordDivergence(node, snapshot, now: now, headEpoch: headEpoch);
     }
+  }
+
+  /// Classifies one `stepLag` pair as a [RetiredStepCarrier] and records it,
+  /// returning true when it did — the caller then skips the lag tracker.
+  ///
+  /// Declines (false, today's treatment) when the station is not cut, when
+  /// either side of the pair is missing, when the operator-edit marker is set
+  /// (that evidence keeps its own cause and escalation), or when
+  /// [retiredStepCarrierOf] finds no positive proof.
+  bool _recordRetiredCarrier(
+    StepNodeComparison node, {
+    required NodeCursor? bead,
+    required StepCursorView? fold,
+    required List<StepCursorView> rows,
+  }) {
+    if (!_legacyStepWritesRetired || bead == null || fold == null) {
+      return false;
+    }
+    if (_causeFor(node) == DualReadDivergenceCause.operatorStoreEdit) {
+      return false;
+    }
+    final carrier = retiredStepCarrierOf(
+      bead: bead,
+      fold: fold,
+      predecessor: foldPredecessorOf(fold, rows),
+    );
+    if (carrier == null) return false;
+    accounting.recordRetiredStepCarrier(
+      sessionId: node.sessionId,
+      stepPath: node.stepPath,
+      legacyValue: node.legacyState ?? '<no step bead>',
+      foldValue: node.foldState ?? '<no P2 row>',
+      carrier: carrier,
+      foldSeq: fold.lastSeq,
+    );
+    return true;
   }
 
   /// True when this `p2Miss` carries no evidence: the node has never

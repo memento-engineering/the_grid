@@ -33,6 +33,7 @@ class LegacyStepView {
     required this.stepPath,
     required this.state,
     this.cooldownUntil,
+    this.cutDiscipline = false,
   });
 
   /// The engine `nodePath` coordinate (`grid.step.path`) — P2's `step_path`.
@@ -47,6 +48,16 @@ class LegacyStepView {
 
   /// The backoff deadline (`grid.step.cooldownUntil`), UTC.
   final DateTime? cooldownUntil;
+
+  /// True when the OWNING SESSION bead carries the `cut` discipline stamp
+  /// (`grid.session.discipline`) — a session fact, repeated on each of its
+  /// step views because the lane joins per step.
+  ///
+  /// Not a compared fact: it tells the lane that this session's step bead
+  /// never received the retired `running` and gate-cleared rearm writes, so
+  /// a pair those writes explain is unshadowable rather than a mismatch
+  /// (tg-ul2v). False — shadow-era semantics — when the reader cannot say.
+  final bool cutDiscipline;
 }
 
 /// The injected legacy step read seam. An empty list means the ledger knows no

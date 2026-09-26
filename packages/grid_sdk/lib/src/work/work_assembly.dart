@@ -1691,6 +1691,12 @@ Future<StationWorkRuntime> _acquireStationWork({
           mode: trajectoryConfig.dualRead,
           accounting: dualReadAccounting,
           onFlare: transport?.flare,
+          // The SAME lever that composes `trajectoryAdmissionHalt` below —
+          // and with it the retirement of the step bead's running and
+          // gate-cleared rearm writes — tells the comparator those two
+          // transitions no longer have a legacy carrier (tg-ul2v).
+          legacyStepWritesRetired:
+              trajectoryConfig.discipline == TrajectoryDiscipline.cut,
         )
       : null;
   // THE WORKTREE-OUTSTANDING BARRIER's observer (cut-wiring §W2.4 W2-B).

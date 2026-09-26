@@ -494,6 +494,8 @@ void main() {
         DualReadDivergenceCause.nonAtomicCrashGap,
         DualReadDivergenceCause.retiredRoundOpenByDesign,
         DualReadDivergenceCause.legacyTerminalNoFoldTerminal,
+        // tg-ul2v: the step-only unshadowable class (never a divergence).
+        DualReadDivergenceCause.legacyStepCarrierRetired,
         DualReadDivergenceCause.unexplained,
       ]);
       for (final cause in const [
@@ -1114,6 +1116,8 @@ void main() {
           case DualReadDivergenceCause.successorDepthMismatch:
           case DualReadDivergenceCause.nonAtomicCrashGap:
             fail('the session comparator never mints G2-only causes');
+          case DualReadDivergenceCause.legacyStepCarrierRetired:
+            fail('the session comparator never mints a step-only cause');
           case DualReadDivergenceCause.retiredRoundOpenByDesign:
             fail('this probe does not compare a retired round');
           case DualReadDivergenceCause.legacyTerminalNoFoldTerminal:
