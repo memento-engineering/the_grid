@@ -986,7 +986,13 @@ class StationWorkRuntime implements SubstationProvisioner {
     // Set synchronously (an async body runs to its first await eagerly), so a
     // caller observing [lifecycle] right after the call sees the shutdown.
     _lifecycle = const StationWorkRuntimeState.shutdown();
-    final clock = UnwindDeadline(deadline);
+    // Total wall clock for the report. The deadline below bounds the steps
+    // BEFORE the trajectory drain and, restarted, the socket tail AFTER it;
+    // the drain itself keeps its configured budget (ruled 2026-09-25: under
+    // cut discipline a drain cut short is crash-loss handed to the next boot,
+    // so `down` may wait on a real drain but never on a hung socket).
+    final started = Stopwatch()..start();
+    var clock = UnwindDeadline(deadline);
     final timedOut = <String>[];
     void onTimeout(String step, Duration within) {
       timedOut.add(step);
@@ -1014,18 +1020,19 @@ class StationWorkRuntime implements SubstationProvisioner {
     // settled so it NEVER blocks sources shutdown (r2, major 9). The harness
     // also settles its internal queue drain → fixpoint → boundary commit →
     // dispose sequence, each phase under its own drain timeout; this outer
-    // step caps it at its phases' sum AND at the deadline less the share held
-    // back for the socket tail below.
+    // step caps it at its phases' sum and NOT at the unwind deadline: the
+    // drain is committed-boundary work, and cutting it short under cut
+    // discipline is crash-loss, not a faster exit.
     await settle(
       'trajectory shutdown',
       trajectory.shutdown,
-      within: clock.budget(
-        _trajectoryShutdownBudget(stepBudget),
-        reserve: deadline ~/ 2,
-      ),
+      within: _trajectoryShutdownBudget(stepBudget),
       onRefusal: _onRefusal,
       onTimeout: onTimeout,
     );
+    // The deadline now bounds the TAIL: everything after the drain gets the
+    // full budget, however long the drain took.
+    clock = UnwindDeadline(deadline);
     if (_runtimeProviderDisposer(_provider) case final dispose?) {
       await step('runtime provider dispose', dispose);
     }
@@ -1058,7 +1065,7 @@ class StationWorkRuntime implements SubstationProvisioner {
       timedOutSteps: List<String>.unmodifiable(timedOut),
       stores: stores,
       deadline: deadline,
-      elapsed: clock.elapsed,
+      elapsed: started.elapsed,
     );
     _onFlare?.call('unwind.complete', {
       'closedStores': stores.closed.join(', '),
@@ -1067,7 +1074,7 @@ class StationWorkRuntime implements SubstationProvisioner {
       ].join(', '),
       'timedOutSteps': timedOut.join(', '),
       'deadlineMs': '${deadline.inMilliseconds}',
-      'elapsedMs': '${clock.elapsed.inMilliseconds}',
+      'elapsedMs': '${started.elapsed.inMilliseconds}',
       'clean': '${report.isClean}',
     });
     return report;
@@ -1077,15 +1084,16 @@ class StationWorkRuntime implements SubstationProvisioner {
   /// three internally bounded phases (drain, boundary commit, session close)
   /// each run under
   /// [TrajectoryConfig.shutdownDrainTimeout], plus one [stepBudget] of slack
-  /// for the un-bounded bookkeeping between them. [UnwindDeadline.budget]
-  /// then clamps it to the total.
+  /// for the un-bounded bookkeeping between them. It is NOT clamped by
+  /// [kUnwindDeadline]: the drain keeps its configured budget.
   Duration _trajectoryShutdownBudget(Duration stepBudget) =>
       _trajectoryConfig.shutdownDrainTimeout * 3 + stepBudget;
 }
 
-/// The TOTAL wall-clock [StationWorkRuntime.shutdown] may spend (tg-supq),
-/// across every step, the trajectory drain and the store confirm pass
-/// together, however many substations the roster carries.
+/// The wall-clock [StationWorkRuntime.shutdown] may spend (tg-supq) on the
+/// steps BEFORE the trajectory drain, and again on the socket tail AFTER it
+/// (the clock restarts once the drain settles), however many substations the
+/// roster carries. The drain itself keeps its own configured budget.
 ///
 /// It sits strictly inside the `down` client's grace window (grid_cli's
 /// `kStationStopGrace`, 10 s — pinned there by a test) so the shell's lock
