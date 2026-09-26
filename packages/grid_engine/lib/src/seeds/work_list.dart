@@ -18,8 +18,10 @@ import '../domain/session_bead.dart';
 import '../domain/session_disposition.dart';
 import '../domain/session_projection.dart';
 import '../domain/substation_config.dart';
+import '../domain/wedge.dart' show isIdleLiveSession;
 import '../domain/worktree_outstanding.dart';
 import '../kernel/admission_barrier.dart';
+import '../kernel/state_store_write_governor.dart';
 import '../kernel/station_admission_authority.dart';
 import '../kernel/station_services.dart';
 import '../kernel/trajectory_scope.dart';
@@ -55,6 +57,25 @@ class WorkList extends StatefulSeed with GridDiagnosticable {
 }
 
 enum _WorkRefusalReport { terminalSkip, paused }
+
+/// How many consecutive joined snapshots an ADOPTED live session may drive
+/// nothing — no running step, no cooling failure, no gate — before the work
+/// axis flares `work.adoptedSessionQuiet` for it (tg-t4k9 AC-3). Counted in
+/// snapshots (each distinct `capturedAt` the WorkList builds over), not in
+/// rebuilds: an authority invalidation re-derives the same snapshot and is not
+/// a tick. Measured on lunar epoch 98, five re-adopted sessions held their
+/// slots for three hours and twenty minutes with zero step transitions while
+/// the board read green; this is the bound that makes that condition visible
+/// instead of quiet. It observes and flares only — admission and the
+/// authority's timing are untouched.
+const int kAdoptedSessionQuietSnapshots = 5;
+
+/// One adopted session's quiet watch (tg-t4k9 AC-3).
+final class _AdoptedSessionWatch {
+  DateTime? lastCapturedAt;
+  int quietSnapshots = 0;
+  bool flared = false;
+}
 
 class _WorkListState extends State<WorkList>
     with Diagnosticable, GridDiagnosticable {
@@ -92,10 +113,22 @@ class _WorkListState extends State<WorkList>
   /// sweeps once, which is the behaviour the restart reconciler expects.
   final Set<String> _settledTerminalSessions = <String>{};
 
+  /// How many terminal writes this WorkList has dispatched per session this
+  /// boot (tg-66w8) — the `attempt` a `gate.autoCloseFailed` flare carries, so
+  /// a one-off store blip is distinguishable on the board from a session whose
+  /// every re-drive keeps dying in a burst. Cleared with the memo on success.
+  final Map<String, int> _terminalWriteAttemptsBySession = <String, int>{};
+
   /// The barrier's observer (§W2.4 W2-B) — the offline path's own handle to
   /// the counting arm and the refusal derivation. Null composes the clause in
   /// its observe form over a disarmed read, which refuses nothing.
   AdmissionBarrier? _barrier;
+
+  /// Per ADOPTED live session, how many consecutive snapshots it has driven
+  /// nothing (tg-t4k9 AC-3). Dropped when the session stops being an adopted
+  /// live reservation of this WorkList.
+  final Map<String, _AdoptedSessionWatch> _adoptedSessionWatches =
+      <String, _AdoptedSessionWatch>{};
 
   static SessionProjection? _latestRetiredSession(
     String beadId,
@@ -269,7 +302,8 @@ class _WorkListState extends State<WorkList>
             candidates,
           );
     if (stationServices != null) {
-      _projectTerminalAnswers(stationServices, services, candidates, batch);
+      _projectTerminalAnswers(stationServices, services, candidates);
+      _observeAdoptedSessions(services, batch);
     }
     final currentReportableRefusalByBeadId = <String, _WorkRefusalReport>{};
     for (final refusal in batch.refused) {
@@ -556,9 +590,14 @@ class _WorkListState extends State<WorkList>
       (left, right) => compareCandidates(left.candidate, right.candidate),
     );
     if (waiting.isNotEmpty) {
+      final beadIds = waiting.map((candidate) => candidate.bead.id);
       _flare(services, 'work.throttled', {
         'count': '${waiting.length}',
-        'beadIds': waiting.map((candidate) => candidate.bead.id).join(','),
+        'beadIds': beadIds.join(','),
+        'cause': WorkThrottleCause.slotsFull,
+        'causes': beadIds
+            .map((id) => '$id=${WorkThrottleCause.slotsFull}')
+            .join(','),
       });
     }
     return StationAdmissionBatch(
@@ -588,20 +627,24 @@ class _WorkListState extends State<WorkList>
     StationServices station,
     ServiceBundle services,
     List<StationAdmissionCandidate> candidates,
-    StationAdmissionBatch batch,
   ) {
     if (_terminalDrainInFlight) return;
-    final refusedById = {
-      for (final refusal in batch.refused) refusal.candidate.bead.id: refusal,
-    };
-    // ONE CLOSURE PER TERMINAL ANSWER, drained under a concurrency bound
-    // rather than dispatched all at once (tg-gxp6). A store carrying hundreds
-    // of closed sessions used to get one unawaited write per session fired
-    // simultaneously at every boot; the tail of that burst blew
-    // DoltQueryService.queryTimeout, and the failed gate closes then cancelled
-    // the first mint of every ready bead - leaving the station UP and ARMED
-    // with `ready > 0, mounted 0` and no retry, because the mint failure is
-    // latched per scope.
+    // ONE CLOSURE PER TERMINAL ANSWER, drained under the STATION-WIDE
+    // concurrency bound rather than dispatched all at once (tg-gxp6, tg-66w8).
+    // A store carrying hundreds of closed sessions used to get one unawaited
+    // write per session fired simultaneously at every boot; the tail of that
+    // burst blew DoltQueryService.queryTimeout, and the failed gate closes then
+    // cancelled the first mint of every ready bead - leaving the station UP and
+    // ARMED with `ready > 0, mounted 0` and no retry, because the mint failure
+    // is latched per scope.
+    //
+    // The terminal answer is derived from the candidate's OWN session
+    // disposition, not from the admission refusal clause. A done session owes
+    // its gate close whether or not its work bead is currently eligible to
+    // re-mount: the eligibility clauses (the attempt cap, the worktree barrier,
+    // a same-store dependency hold) refuse under their own names, and keying
+    // the sweep on the `done` clause let any of them silently cancel the
+    // re-drive of a close that had already failed once (tg-66w8 AC-2).
     final terminalWrites = <Future<void> Function()>[];
     for (final candidate in candidates) {
       final bead = candidate.bead;
@@ -621,8 +664,7 @@ class _WorkListState extends State<WorkList>
         );
         continue;
       }
-      final refusal = refusedById[bead.id];
-      if (refusal?.clause == 'done') {
+      if (disposition is DoneSession) {
         terminalWrites.add(
           () => _closeTerminalGates(
             station: station,
@@ -634,38 +676,47 @@ class _WorkListState extends State<WorkList>
     }
     if (terminalWrites.isEmpty) return;
     _terminalDrainInFlight = true;
-    unawaited(_runTerminalDrain(terminalWrites));
+    unawaited(_runTerminalDrain(station.terminalWrites, terminalWrites));
   }
 
   /// Owns the [_terminalDrainInFlight] latch for one drain, so the flag is
   /// cleared even when a write escapes its own error handling.
-  Future<void> _runTerminalDrain(List<Future<void> Function()> writes) async {
+  Future<void> _runTerminalDrain(
+    StateStoreWriteGovernor governor,
+    List<Future<void> Function()> writes,
+  ) async {
     try {
-      await _drainTerminalWrites(writes);
+      await _drainTerminalWrites(governor, writes);
     } finally {
       _terminalDrainInFlight = false;
     }
   }
 
-  /// Runs [writes] at most [kTerminalWriteConcurrency] at a time. Every closure
-  /// swallows and flares its own failure, so one bad write never halts the
-  /// drain and the sweep still reaches every terminal session.
+  /// Hands every write to the station's shared [governor], which admits at
+  /// most `kTerminalWriteConcurrency` at a time ACROSS THE STATION - not per
+  /// WorkList (tg-66w8). Every closure swallows and flares its own failure, so
+  /// one bad write never halts the drain and the sweep still reaches every
+  /// terminal session.
   static Future<void> _drainTerminalWrites(
+    StateStoreWriteGovernor governor,
     List<Future<void> Function()> writes,
   ) async {
-    var next = 0;
-
-    Future<void> worker() async {
-      while (next < writes.length) {
-        final write = writes[next++];
-        await write();
-      }
-    }
-
-    final workerCount = math.min(kTerminalWriteConcurrency, writes.length);
     await Future.wait(<Future<void>>[
-      for (var index = 0; index < workerCount; index++) worker(),
+      for (final write in writes) governor.run(write),
     ]);
+  }
+
+  /// Counts one more dispatch of a terminal write for [sessionId] and returns
+  /// the attempt ordinal it carries.
+  int _nextTerminalWriteAttempt(String sessionId) {
+    final attempt = (_terminalWriteAttemptsBySession[sessionId] ?? 0) + 1;
+    _terminalWriteAttemptsBySession[sessionId] = attempt;
+    return attempt;
+  }
+
+  void _memoizeTerminalWrite(String sessionId) {
+    _settledTerminalSessions.add(sessionId);
+    _terminalWriteAttemptsBySession.remove(sessionId);
   }
 
   Future<void> _settleTerminalWorkBead({
@@ -674,6 +725,7 @@ class _WorkListState extends State<WorkList>
     required StationAdmissionCandidate candidate,
     required String sessionId,
   }) async {
+    final attempt = _nextTerminalWriteAttempt(sessionId);
     try {
       await station.admission.settleWorkTerminalSession(
         terminalWorkBead: candidate.bead,
@@ -685,14 +737,15 @@ class _WorkListState extends State<WorkList>
         workBeadId: candidate.bead.id,
         workTerminalReason: StationBeadWriter.workTerminalReasonWorkBeadClosed,
       );
-      _settledTerminalSessions.add(sessionId);
+      _memoizeTerminalWrite(sessionId);
     } on Object catch (error) {
-      _flare(services, 'gate.autoCloseFailed', {
-        'sessionId': sessionId,
-        'cause': GateCloseCause.workBeadClosed.wireValue,
-        'reason': truncateReason('$error'),
-        ...stateStoreDeadlineMetadata(error),
-      });
+      _reportTerminalWriteFailed(
+        services,
+        sessionId: sessionId,
+        cause: GateCloseCause.workBeadClosed,
+        attempt: attempt,
+        error: error,
+      );
     }
   }
 
@@ -701,6 +754,7 @@ class _WorkListState extends State<WorkList>
     required ServiceBundle services,
     required String sessionId,
   }) async {
+    final attempt = _nextTerminalWriteAttempt(sessionId);
     try {
       await station.admission.closeTerminalGates(
         sessionId: sessionId,
@@ -708,15 +762,91 @@ class _WorkListState extends State<WorkList>
         disposition: GateSweepSessionDisposition.done,
         services: services,
       );
-      _settledTerminalSessions.add(sessionId);
+      _memoizeTerminalWrite(sessionId);
     } on Object catch (error) {
-      _flare(services, 'gate.autoCloseFailed', {
+      _reportTerminalWriteFailed(
+        services,
+        sessionId: sessionId,
+        cause: GateCloseCause.sessionTerminal,
+        attempt: attempt,
+        error: error,
+      );
+    }
+  }
+
+  /// The one `gate.autoCloseFailed` shape both terminal writes flare
+  /// (tg-66w8 AC-3): the owning substation and the attempt ordinal ride beside
+  /// the deadline provenance, so a one-off is distinguishable from a burst and
+  /// a session whose close keeps failing is visible rather than quiet.
+  void _reportTerminalWriteFailed(
+    ServiceBundle services, {
+    required String sessionId,
+    required GateCloseCause cause,
+    required int attempt,
+    required Object error,
+  }) {
+    _flare(services, 'gate.autoCloseFailed', {
+      'sessionId': sessionId,
+      'substation': seed.substationConfig.substationId,
+      'attempt': '$attempt',
+      'cause': cause.wireValue,
+      'reason': truncateReason('$error'),
+      ...stateStoreDeadlineMetadata(error),
+    });
+  }
+
+  /// Watches every ADOPTED live reservation in [batch] for the condition AC-1
+  /// of tg-t4k9 creates: a session that holds its slot yet drives nothing. A
+  /// session that has driven nothing for [kAdoptedSessionQuietSnapshots]
+  /// consecutive snapshots flares `work.adoptedSessionQuiet` ONCE, naming its
+  /// id, work bead and substation; the first step transition (or gate) resets
+  /// the watch. Observe-only: it neither retries, unmounts nor releases.
+  void _observeAdoptedSessions(
+    ServiceBundle services,
+    StationAdmissionBatch batch,
+  ) {
+    final now = _barrier?.clock() ?? DateTime.now();
+    final capturedAt = _snapshot.graph.capturedAt;
+    final seen = <String>{};
+    for (final reservation in batch.admitted) {
+      final session = reservation.candidate.session;
+      final sessionId = session?.sessionId ?? '';
+      if (!reservation.adopted || session == null || sessionId.isEmpty) {
+        continue;
+      }
+      if (session.isTerminal ||
+          session.pauseState == SessionPauseState.paused) {
+        continue;
+      }
+      seen.add(sessionId);
+      final watch = _adoptedSessionWatches.putIfAbsent(
+        sessionId,
+        _AdoptedSessionWatch.new,
+      );
+      // A rebuild over the SAME snapshot is not a tick.
+      if (watch.lastCapturedAt == capturedAt) continue;
+      watch.lastCapturedAt = capturedAt;
+      if (!isIdleLiveSession(session, now: now)) {
+        watch.quietSnapshots = 0;
+        watch.flared = false;
+        continue;
+      }
+      watch.quietSnapshots += 1;
+      if (watch.flared ||
+          watch.quietSnapshots < kAdoptedSessionQuietSnapshots) {
+        continue;
+      }
+      watch.flared = true;
+      _flare(services, 'work.adoptedSessionQuiet', {
         'sessionId': sessionId,
-        'cause': GateCloseCause.sessionTerminal.wireValue,
-        'reason': truncateReason('$error'),
-        ...stateStoreDeadlineMetadata(error),
+        'beadId': reservation.candidate.bead.id,
+        'substation': seed.substationConfig.substationId,
+        'snapshots': '${watch.quietSnapshots}',
       });
     }
+    _adoptedSessionWatches.removeWhere(
+      (sessionId, _) => !seen.contains(sessionId),
+    );
   }
 
   void _reportTerminalSkip(
