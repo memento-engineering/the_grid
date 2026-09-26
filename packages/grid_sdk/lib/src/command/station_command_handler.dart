@@ -59,6 +59,7 @@ final class StationCommandHandler implements GridCommandHandler {
     TrajectoryStepSnapshot Function()? stepSnapshot,
     int Function(String sessionId)? headEpochForSession,
     StationAdmissionCeilingSetter? setAdmissionCeiling,
+    StationAdmissionAuthority? admission,
     DualReadMode dualReadMode = DualReadMode.off,
     DualReadAccounting? dualReadAccounting,
   }) : _stateSource = stateSource,
@@ -69,6 +70,7 @@ final class StationCommandHandler implements GridCommandHandler {
        _stepSnapshot = stepSnapshot,
        _headEpochForSession = headEpochForSession,
        _setAdmissionCeiling = setAdmissionCeiling,
+       _admission = admission,
        _dualReadMode = dualReadMode,
        _dualReadAccounting = dualReadAccounting,
        _listBeadWorktrees = listBeadWorktrees,
@@ -101,6 +103,14 @@ final class StationCommandHandler implements GridCommandHandler {
   final TrajectoryStepSnapshot Function()? _stepSnapshot;
   final int Function(String sessionId)? _headEpochForSession;
   final StationAdmissionCeilingSetter? _setAdmissionCeiling;
+
+  /// The resident's in-process admission owner, for `grid session void`
+  /// (tg-5snt): its in-memory runtime census (a step the resident has started
+  /// whose `running` state is not yet durable) and the sanction that lets a
+  /// MOUNTED session's bead drop its stale scope and re-compete. Null off the
+  /// resident (a test or offline door): the void then consults the durable
+  /// cursor alone and the bead re-mounts on the next fresh admission pass.
+  final StationAdmissionAuthority? _admission;
   final DualReadMode _dualReadMode;
 
   /// The boot's SHARED accounting — the same object the bridge's passes use,
@@ -1167,25 +1177,35 @@ final class StationCommandHandler implements GridCommandHandler {
   /// session that never parked has none of that to account for — yet closing
   /// it by hand leaves its bare `work_bead` key behind and the bead never
   /// re-mounts (the trap this verb exists to replace). So this door performs
-  /// ONLY the gate-less tail of [_rework]: retire the session through the SAME
-  /// write chokepoint (`closeSessionAndOpenGatesForTerminal`), clear the work
-  /// bead's specify-authored spec through the SAME work-store leg
-  /// (`clearRoundAuthoredSpec`), then re-key its round through the same
-  /// `update` onto the engine's own void payload ([voidRetireMetadata] —
-  /// `<bead>#void-<session>` plus the reason), which by construction never
-  /// matches the rework-round pattern and so never spends the cap. No
-  /// round-cap accounting, no gate-close logic, no successor observation: the
-  /// frontier mints the next round the way it mints over any unlinked bead.
+  /// ONLY the gate-less tail of [_rework], through the SAME writes: re-key the
+  /// round through the same `update` onto the engine's own void payload
+  /// ([voidRetireMetadata] — `<bead>#void-<session>` plus the reason, which by
+  /// construction never matches the rework-round pattern and so never spends
+  /// the cap), retire the session through the SAME close chokepoint
+  /// (`closeSessionAndOpenGatesForTerminal`), then clear the work bead's
+  /// specify-authored spec through the SAME work-store leg
+  /// (`clearRoundAuthoredSpec`). No round-cap accounting, no gate-close
+  /// logic, no successor observation: the frontier mints the next round the
+  /// way it mints over any unlinked bead.
+  ///
+  /// THE ORDER IS THE SAFETY (tg-5snt): the re-key lands BEFORE the close —
+  /// the engine's own void order — so no failure at any later point can leave
+  /// a CLOSED session on its bare `work_bead` key. A failed close rolls the
+  /// re-key back, but only onto a session that is still open.
   ///
   /// A GATED session is refused and pointed at `grid rework`, so the two exits
-  /// stay distinct and neither becomes a synonym for the other. A RUNNING
-  /// step is refused — but that guard reads the durable molecule cursor ONLY
-  /// (the `type=step` beads of a molecule-model session). A session with no
-  /// molecule step beads has no durable cursor anywhere (the flat
-  /// `grid.cursor.*` projection is retired), so for it the running and
-  /// gated-step refusals cannot fire and only an open gate bead protects it;
-  /// this door consults no process fence (`pid`/`pgid`) and no in-memory
-  /// resident scope.
+  /// stay distinct and neither becomes a synonym for the other. A step that
+  /// is running is refused on TWO readings: the durable molecule cursor (the
+  /// `type=step` beads of a molecule-model session), and — on the resident —
+  /// the admission owner's IN-MEMORY runtime census, which names a step the
+  /// resident has started before its `running` state is durable and covers a
+  /// session that has no molecule step beads at all.
+  ///
+  /// On the resident the door also SANCTIONS the disappearance with the
+  /// admission owner before its first write, so a session the resident has
+  /// already mounted (re-adopted, never stepped) has its stale scope dropped
+  /// and its bead re-offered on the next admission pass, rather than parked
+  /// `rework_declined` by the scope's malformed-disappearance guard.
   Future<GridCommandResult> _voidSession({
     required String sessionId,
     required String reason,
@@ -1305,51 +1325,121 @@ final class StationCommandHandler implements GridCommandHandler {
       );
     }
 
-    // THE RETIRE — the same chokepoint [_rework] uses, unchanged. The sweep
-    // finds no gate to close (the refusal above guarantees it), so this is
-    // the session close alone, in the writer's causal order.
-    try {
-      await _stateWriter.closeSessionAndOpenGatesForTerminal(
-        sessionId: sessionId,
-        closeReason: 'voided',
-        trigger: GateCloseCause.supersededRound,
-      );
-    } on OwnershipRefused catch (error) {
-      return _refused('ownership_refused', error.toString());
-    } on OwnershipGuardRefused catch (error) {
-      return _refused('ownership_refused', error.toString());
-    } on Object catch (error) {
+    // THE IN-MEMORY GUARD (tg-5snt). The cursor above is DURABLE: a step the
+    // resident has already STARTED — its agent process spawning or running —
+    // reaches it only once the host's `running` write lands, and a session
+    // with no molecule step beads has no durable cursor at all. The resident's
+    // process transport holds the in-memory truth; a void is refused while it
+    // names any runtime under this session, so a voided session never keeps a
+    // live agent process under it.
+    final admission = _admission;
+    final liveRuntimes =
+        admission?.liveRuntimesOf(sessionId) ?? const <String>[];
+    if (liveRuntimes.isNotEmpty) {
       return _refused(
-        'void_close_failed',
-        'Could not close session "$sessionId" for void: $error',
+        'session_step_live',
+        'Session "$sessionId" has a step the resident has STARTED in memory '
+            '(${liveRuntimes.join(', ')}), whether or not its durable cursor '
+            'shows it yet; a live agent process is never voided from under '
+            'itself — pause it or wait for the step to settle.',
       );
     }
-    // THE RE-KEY — the same `update` [_rework] re-keys through, carrying the
-    // engine's own void payload (the same metadata the engine's automatic
-    // void retire writes).
+
     final retiredKey = voidKeyFor(workBeadId, sessionId);
+    // THE SANCTION, before the first durable write: the resident's admission
+    // owner learns this disappearance is an operator void, so a scope it has
+    // already MOUNTED over this session (re-adopted, never stepped) is dropped
+    // and the bead re-offered, instead of the scope reading the re-key as a
+    // malformed disappearance and parking the bead `rework_declined`.
+    admission?.beginOperatorVoid(workBeadId: workBeadId, sessionId: sessionId);
+    var landed = false;
+    String? specClearFailure;
     String? reapFailure;
     try {
-      // THE WORK-STORE LEG — the SAME `clearRoundAuthoredSpec` [_rework] runs,
-      // in the same place (after the close, before the re-key). A voided
-      // round that reached specify would otherwise carry its machine-authored
-      // AC/design into the fresh round, which is exactly what rework's clear
-      // prevents; the two retire paths must not drift on it (tg-5snt). The
-      // writer clears only a `spec.author == specify` stamp and preserves
-      // operator prose. A work bead no resident work store owns is skipped:
-      // `writeSpecifyAuthoredSpec` refuses foreign prefixes, so no
-      // specify-authored stamp can exist there to clear.
-      if (workStore != null) {
-        await workStore.writer.clearRoundAuthoredSpec(workBeadId);
+      // THE RE-KEY FIRST — the same `update` [_rework] re-keys through,
+      // carrying the engine's own void payload (the metadata the engine's
+      // automatic void retire writes, in the engine's own order: its
+      // `_voidCreatedSession` re-keys, then closes). Re-keying BEFORE the close
+      // is what shuts the failure window: no later throw can leave a CLOSED
+      // session on its bare `work_bead` key, which is the hand-close trap this
+      // verb exists to replace. A throw here changed nothing.
+      try {
+        await _stateWriter.update(
+          sessionId,
+          metadata: voidRetireMetadata(
+            workBeadId: workBeadId,
+            deadSessionId: sessionId,
+            reason: normalizedReason,
+          ),
+        );
+      } on OwnershipRefused catch (error) {
+        return _refused('ownership_refused', error.toString());
+      } on OwnershipGuardRefused catch (error) {
+        return _refused('ownership_refused', error.toString());
+      } on Object catch (error) {
+        return _refused(
+          'void_rekey_failed',
+          'Could not re-key session "$sessionId" for void; nothing changed: '
+              '$error',
+        );
       }
-      await _stateWriter.update(
-        sessionId,
-        metadata: voidRetireMetadata(
-          workBeadId: workBeadId,
-          deadSessionId: sessionId,
-          reason: normalizedReason,
-        ),
-      );
+      // THE RETIRE — the same chokepoint [_rework] uses, unchanged. The sweep
+      // finds no gate to close (the refusal above guarantees it), so this is
+      // the session close alone, in the writer's causal order.
+      try {
+        await _stateWriter.closeSessionAndOpenGatesForTerminal(
+          sessionId: sessionId,
+          closeReason: 'voided',
+          trigger: GateCloseCause.supersededRound,
+        );
+      } on Object catch (error) {
+        final rollback = await _rollBackVoidRekey(
+          sessionId: sessionId,
+          rawKey: rawKey,
+        );
+        // Unless the restore landed, the session is off its bare key (closed
+        // or open on the void key) and the bead's mount must still be dropped
+        // and re-offered: the sanction stays.
+        landed = rollback != _VoidRollback.restored;
+        final code = error is OwnershipRefused || error is OwnershipGuardRefused
+            ? 'ownership_refused'
+            : 'void_close_failed';
+        return _refused(code, switch (rollback) {
+          _VoidRollback.restored =>
+            'Could not close session "$sessionId" for void: $error. The '
+                're-key was rolled back — the session is open on "$rawKey" '
+                'exactly as before.',
+          _VoidRollback.closed =>
+            'Session "$sessionId" was closed on its void key "$retiredKey" '
+                'but the close did not complete cleanly: $error. No bare '
+                '`work_bead` key remains; "$workBeadId" re-mounts from the '
+                'frontier.',
+          _VoidRollback.failed =>
+            'Could not close session "$sessionId" for void ($error), and '
+                'its re-key could not be rolled back: it is OPEN on '
+                '"$retiredKey", unlinked from "$workBeadId", so the bead '
+                're-mounts from the frontier. The row is no longer the '
+                'bead\'s round; close it by hand.',
+        });
+      }
+      landed = true;
+      // THE WORK-STORE LEG — the SAME `clearRoundAuthoredSpec` [_rework] runs,
+      // AFTER the retire, as rework runs it. A voided round that reached
+      // specify would otherwise carry its machine-authored AC/design into the
+      // fresh round, which is exactly what rework's clear prevents; the two
+      // retire paths must not drift on it. The writer clears only a
+      // `spec.author == specify` stamp and preserves operator prose. A work
+      // bead no resident work store owns is skipped: `writeSpecifyAuthoredSpec`
+      // refuses foreign prefixes, so no specify stamp can exist there. It runs
+      // AFTER the re-key and the close, so a throw here leaves the session
+      // closed on its VOID key — never on a bare key — and is reported loud.
+      if (workStore != null) {
+        try {
+          await workStore.writer.clearRoundAuthoredSpec(workBeadId);
+        } on Object catch (error) {
+          specClearFailure = '$error';
+        }
+      }
       // §2.3's `attempt.round.retired` row, cause `void`: the round this
       // session held is derived from its own key, exactly as the engine's
       // void retire derives it — a bare key is a round no counter names.
@@ -1367,19 +1457,27 @@ final class StationCommandHandler implements GridCommandHandler {
       } on Object catch (error) {
         reapFailure = '$error';
       }
-    } on OwnershipRefused catch (error) {
-      return _refused('ownership_refused', error.toString());
-    } on OwnershipGuardRefused catch (error) {
-      return _refused('ownership_refused', error.toString());
+    } finally {
+      admission?.endOperatorVoid(
+        workBeadId: workBeadId,
+        sessionId: sessionId,
+        landed: landed,
+      );
     }
     await _refreshState();
+    final warnings = [
+      if (specClearFailure != null)
+        'its specify-authored spec clear FAILED (the fresh round may read the '
+            'retired round\'s AC/design; clear them): $specClearFailure',
+      if (reapFailure != null)
+        'its molecule reap FAILED (open step beads remain; sweep them): '
+            '$reapFailure',
+    ];
     return GridCommandResult.completed(
-      message: reapFailure == null
-          ? 'Voided session "$sessionId"; "$workBeadId" returns to the '
-                'frontier as "$retiredKey".'
-          : 'Voided session "$sessionId"; "$workBeadId" returns to the '
-                'frontier as "$retiredKey" — but its molecule reap FAILED '
-                '(open step beads remain; sweep them): $reapFailure',
+      message:
+          'Voided session "$sessionId"; "$workBeadId" returns to the '
+          'frontier as "$retiredKey"'
+          '${warnings.isEmpty ? '.' : ' — but ${warnings.join('; and ')}'}',
       value: {
         'operation': 'grid/session/void',
         'sessionId': sessionId,
@@ -1390,9 +1488,38 @@ final class StationCommandHandler implements GridCommandHandler {
           'reason': 'voided',
           'disposition': 'voided',
         },
+        if (specClearFailure != null) 'specClearFailure': specClearFailure,
         if (reapFailure != null) 'reapFailure': reapFailure,
       },
     );
+  }
+
+  /// Undoes a void's re-key after its close failed, restoring [rawKey] ONLY
+  /// on a session that is still OPEN (tg-5snt). Restoring the bare key onto a
+  /// session the failed close did in fact close would manufacture the exact
+  /// hand-close trap the re-key-first order exists to prevent, so a session
+  /// the refreshed snapshot reads closed is left on its void key, and the
+  /// restore itself is guarded `--if-status open` so a close that lands
+  /// between the read and the write refuses it.
+  Future<_VoidRollback> _rollBackVoidRekey({
+    required String sessionId,
+    required String rawKey,
+  }) async {
+    try {
+      await _refreshState();
+      final session = _stateSource.current?.bead(sessionId);
+      if (session == null) return _VoidRollback.failed;
+      if (session.isClosed) return _VoidRollback.closed;
+      await _stateWriter.update(
+        sessionId,
+        metadata: {SessionBeadKeys.workBead: rawKey},
+        ifStatus: BeadStatus.open,
+      );
+      await _refreshState();
+      return _VoidRollback.restored;
+    } on Object {
+      return _VoidRollback.failed;
+    }
   }
 
   Future<GridCommandResult> _rework({
@@ -2290,4 +2417,16 @@ bool _isSiblingOf(String path, String parent) {
   if (parent.isEmpty) return !path.contains('/');
   if (!path.startsWith('$parent/')) return false;
   return !path.substring(parent.length + 1).contains('/');
+}
+
+/// How a failed void close's rollback ended (tg-5snt).
+enum _VoidRollback {
+  /// The session is open on its original key again.
+  restored,
+
+  /// The session is closed on its void key; there was nothing to restore.
+  closed,
+
+  /// The restore did not land: the session is open on its void key.
+  failed,
 }

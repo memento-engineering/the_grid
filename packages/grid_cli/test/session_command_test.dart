@@ -244,6 +244,35 @@ void main() {
     );
   });
 
+  test('session void renders a spec-clear failure loud on stderr while the '
+      'void itself stands', () async {
+    final output = <String>[];
+    final errors = <String>[];
+    final client = _FakeClient(
+      StationCommandCompleted({
+        ...voidReceipt.value,
+        'specClearFailure': 'bd update timed out',
+      }),
+    );
+
+    expect(
+      await runSessionVoid(
+        gridRoot: '/grid',
+        sessionId: 'tgdog-s1',
+        reason: 'never stepped',
+        client: client,
+        out: output.add,
+        err: errors.add,
+      ),
+      0,
+    );
+    expect(output.join('\n'), contains('voided session tgdog-s1'));
+    expect(
+      errors.single,
+      allOf(contains('spec clear FAILED'), contains('bd update timed out')),
+    );
+  });
+
   test('session void is a subcommand of the session noun-domain: it requires '
       '--reason and takes no defer date', () async {
     final client = _FakeClient(voidReceipt);

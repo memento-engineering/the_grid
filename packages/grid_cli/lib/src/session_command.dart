@@ -329,6 +329,7 @@ Future<int> runSessionVoid({
       final workBeadId = _nonEmptyText(value['workBeadId']);
       final retiredKey = _nonEmptyText(value['retiredKey']);
       final reapFailure = _nonEmptyText(value['reapFailure']);
+      final specClearFailure = _nonEmptyText(value['specClearFailure']);
       final completeReceipt =
           closedId == sessionId &&
           closedSession?['reason'] == 'voided' &&
@@ -349,6 +350,13 @@ Future<int> runSessionVoid({
         'grid session void — re-keyed $workBeadId to $retiredKey; the bead '
         'returns to the mountable frontier.',
       );
+      if (specClearFailure != null) {
+        writeErr(
+          'grid session void: the specify-authored spec clear FAILED (the '
+          'fresh round may read the retired round\'s AC/design; clear them): '
+          '$specClearFailure',
+        );
+      }
       if (reapFailure != null) {
         writeErr(
           'grid session void: molecule reap FAILED (open step beads remain; '

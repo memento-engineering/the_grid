@@ -9,6 +9,7 @@ import 'package:grid_engine/grid_engine.dart'
 import 'package:grid_engine/testing.dart'
     show
         FakeSnapshotSource,
+        Fakes,
         RecordingBdRunner,
         RecordingCapabilityRegistry,
         RecordingExplorationTransport,
@@ -3184,8 +3185,8 @@ void _shipObserverGroup() {
     }
 
     test(
-      'AC-1: voids an OPEN, UNGATED session — closes it voided and re-keys its '
-      'round onto the void key, in the rework chokepoint\'s order',
+      'AC-1: voids an OPEN, UNGATED session — re-keys its round onto the void '
+      'key, THEN closes it voided through the rework chokepoint',
       () async {
         final run = await voidOver([_session('tgdog-session', open: true)]);
 
@@ -3215,8 +3216,14 @@ void _shipObserverGroup() {
               call[1] == 'tgdog-session' &&
               call.contains('work_bead=$retiredKey'),
         );
-        expect(close, greaterThanOrEqualTo(0), reason: 'the session is CLOSED');
-        expect(rekey, greaterThan(close), reason: 're-key follows the close');
+        expect(rekey, greaterThanOrEqualTo(0), reason: 'the round re-keyed');
+        expect(
+          close,
+          greaterThan(rekey),
+          reason:
+              'the re-key lands BEFORE the close, so no failure can leave a '
+              'closed session on its bare key',
+        );
         expect(
           calls[rekey],
           contains(
@@ -3285,8 +3292,8 @@ void _shipObserverGroup() {
     });
 
     test('the work-store leg: a void clears a SPECIFY-authored spec through '
-        'rework\'s own clearRoundAuthoredSpec, after the close and before the '
-        're-key', () async {
+        'rework\'s own clearRoundAuthoredSpec, AFTER the re-key and the close '
+        '(never between them)', () async {
       const workBead = Bead(
         id: 'tg-1',
         issueType: IssueType.task,
@@ -3336,9 +3343,9 @@ void _shipObserverGroup() {
             entry.$2.first == 'update' &&
             entry.$2.contains('work_bead=$retiredKey'),
       );
-      expect(close, greaterThanOrEqualTo(0));
-      expect(clear, greaterThan(close), reason: 'clear follows the close');
-      expect(rekey, greaterThan(clear), reason: 're-key follows the clear');
+      expect(rekey, greaterThanOrEqualTo(0));
+      expect(close, greaterThan(rekey), reason: 'the close follows the re-key');
+      expect(clear, greaterThan(close), reason: 'the clear follows the close');
     });
 
     test('a work bead no resident work store owns skips the work-store leg (no '
@@ -3383,9 +3390,11 @@ void _shipObserverGroup() {
         'mounting over the durable post-void state) mounts tg-1 and MINTS a '
         'fresh round on the bare key — no bare work_bead key is left linked '
         'and nothing is left for the frontier to retire', () async {
+      // A RESTARTED resident: its admission owner is fresh, so it carries no
+      // sanction from the door — the durable state alone must re-offer tg-1.
       final harness = _VoidAdmissionHarness([
         _session('tgdog-session', open: true),
-      ]);
+      ], residentBound: false);
       addTearDown(harness.dispose);
 
       final result = await harness.handler(request);
@@ -3437,39 +3446,266 @@ void _shipObserverGroup() {
       );
     });
 
-    test(
-      'AC-2, LIVE-MOUNTED: voiding a session the resident has ALREADY adopted '
-      'lets the mounted scope mint the fresh round in place',
-      skip:
-          'KNOWN GAP (tg-5snt rework, 2026-09-25): a mounted SessionScope '
-          'treats the non-#rN disappearance of its joined row as malformed '
-          '(the tg-x1j v2 guard, session_scope.dart build ~:2099) and writes '
-          'grid.rework_declined instead of minting; the bead re-mints only on '
-          'a fresh admission pass (resident restart). Needs an engine ruling; '
-          'un-skip as that fix\'s acceptance.',
-      () async {
-        final harness = _VoidAdmissionHarness([
-          _session('tgdog-session', open: true),
-        ]);
-        addTearDown(harness.dispose);
-        final pass = await harness.admit();
-        await pass.settle();
+    test('AC-2, LIVE-MOUNTED (space-8pq / space-8od): voiding a session the '
+        'running resident has ALREADY adopted drops its stale scope, and the '
+        'NEXT admission pass re-offers the bead and mints a fresh round — no '
+        'rework_declined park, no bare key', () async {
+      final harness = _VoidAdmissionHarness([
+        _session('tgdog-session', open: true),
+      ]);
+      addTearDown(harness.dispose);
+      final pass = await harness.admit();
+      await pass.settle();
+      // The resident HOLDS the session: re-adopted, never stepped.
+      final adopted = pass.workBeads.where((w) => w.bead.id == 'tg-1');
+      expect(adopted, hasLength(1));
+      expect(adopted.single.session?.sessionId, 'tgdog-session');
+      expect(
+        harness.fakes.ctx.admission.admissionStatus.reservations,
+        isEmpty,
+        reason: 'an adoption holds its slot structurally, with no reservation',
+      );
 
-        final result = await harness.handler(request);
-        expect(result, isA<GridCommandCompleted>());
-        await pass.settle(
-          until: () => pass.stationRunner.graphApplyCalls.isNotEmpty,
-        );
+      final result = await harness.handler(request);
+      expect(result, isA<GridCommandCompleted>());
+      await pass.settle(
+        until: () => pass.stationRunner.graphApplyCalls.isNotEmpty,
+      );
 
-        expect(
-          pass.stationRunner.calls.where(
-            (call) => call.any((arg) => arg.startsWith('grid.rework_declined')),
+      // The stale scope never read the sanctioned re-key as a malformed
+      // disappearance: nothing parked the bead.
+      expect(
+        pass.stationRunner.calls.where(
+          (call) =>
+              call.any((arg) => arg.startsWith(SessionBeadKeys.reworkDeclined)),
+        ),
+        isEmpty,
+      );
+      expect(
+        pass.stationRunner.calls.where(
+          (call) => call.length > 1 && call[1] == 'tgdog-session',
+        ),
+        isEmpty,
+        reason: 'the resident never writes the voided row',
+      );
+      // The bead was RE-OFFERED: a fresh WorkBead with no session, over which
+      // its scope minted round 0 on the BARE key.
+      final remounted = pass.workBeads.where((w) => w.bead.id == 'tg-1');
+      expect(remounted, hasLength(1));
+      expect(remounted.single.session, isNull);
+      expect(pass.bridge.notifier.state.linkedSessions('tg-1'), isEmpty);
+      expect(
+        pass.stationRunner.workCreates.where(
+          (call) => call.contains('--type') && call.contains('session'),
+        ),
+        hasLength(1),
+      );
+      expect(pass.stationRunner.graphApplyCalls, hasLength(1));
+      expect(
+        pass.stationRunner.calls.where(
+          (call) =>
+              call.length > 1 &&
+              call.first == 'update' &&
+              call[1] == 'tgdog-fresh' &&
+              call.contains('${SessionBeadKeys.workBead}=tg-1'),
+        ),
+        isNotEmpty,
+      );
+      // No closed session anywhere carries the bare key.
+      expect(_closedOnBareKey(harness.state.beads, 'tg-1'), isEmpty);
+    });
+
+    test('MEDIUM-3: a step the resident has STARTED in memory but whose '
+        '`running` state is not yet durable is REFUSED by name — the durable '
+        'cursor reads every step pending, yet the live agent process is never '
+        'voided from under itself', () async {
+      // A molecule session whose EVERY durable step bead is `pending`: the
+      // durable-cursor guard sees nothing running.
+      final beads = [
+        _session('tgdog-session', molecule: true, open: true),
+        for (final stepId in ['agent', 'land'])
+          Bead(
+            id: 'tgdog-session-$stepId',
+            issueType: GridIssueTypes.step,
+            metadata: {
+              'rig': 'tgdog',
+              MoleculeStepKeys.stepId: stepId,
+              MoleculeStepKeys.path: 'tg-1/$stepId',
+              MoleculeStepKeys.session: 'tgdog-session',
+              MoleculeStepKeys.capability: stepId,
+              MoleculeStepKeys.state: StepState.pending.name,
+            },
           ),
-          isEmpty,
-        );
-        expect(pass.stationRunner.graphApplyCalls, hasLength(1));
-      },
-    );
+      ];
+      final harness = _VoidAdmissionHarness(beads);
+      addTearDown(harness.dispose);
+      // ...while the resident's process transport already holds the agent
+      // step's runtime: started in memory, not yet durable.
+      await harness.fakes.provider.start(
+        'tgdog-session/tg-1/agent',
+        const RuntimeConfig(workDir: '/work', command: 'agent'),
+      );
+
+      final result = await harness.handler(request);
+      expect(
+        result,
+        isA<GridCommandRefused>()
+            .having((value) => value.code, 'code', 'session_step_live')
+            .having(
+              (value) => value.message,
+              'message',
+              allOf(
+                contains('tgdog-session/tg-1/agent'),
+                contains('STARTED in memory'),
+              ),
+            ),
+      );
+      expect(harness.state.calls, isEmpty, reason: 'refusal is zero-write');
+      expect(harness.work.calls, isEmpty, reason: 'refusal is zero-write');
+      expect(
+        harness.fakes.provider.stopped,
+        isEmpty,
+        reason: 'the guard refuses; it never kills the live step',
+      );
+
+      // CONTROL: the same fixture with no live runtime voids.
+      await harness.fakes.provider.stop('tgdog-session/tg-1/agent');
+      BdCliService.resetGuardedWriteCapabilityForTesting();
+      expect(await harness.handler(request), isA<GridCommandCompleted>());
+    });
+
+    test('MEDIUM-3: a session with NO molecule step beads (no durable cursor '
+        'at all) is still refused while the resident holds a runtime under '
+        'it', () async {
+      final harness = _VoidAdmissionHarness([
+        _session('tgdog-session', open: true),
+      ]);
+      addTearDown(harness.dispose);
+      await harness.fakes.provider.start(
+        'tgdog-session/tg-1/agent',
+        const RuntimeConfig(workDir: '/work', command: 'agent'),
+      );
+      final result = await harness.handler(request);
+      expect(
+        result,
+        isA<GridCommandRefused>().having(
+          (value) => value.code,
+          'code',
+          'session_step_live',
+        ),
+      );
+      expect(harness.state.calls, isEmpty);
+    });
+
+    test('MEDIUM-1: a throw in the work-store leg leaves NO closed session on '
+        'a bare work_bead key — the re-key landed before the close, so the '
+        'session is closed on its VOID key and the failure is reported '
+        'loud', () async {
+      const workBead = Bead(
+        id: 'tg-1',
+        issueType: IssueType.task,
+        design: 'specify design',
+        acceptanceCriteria: 'specify acceptance',
+        metadata: {
+          'rig': 'tg',
+          StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor,
+        },
+      );
+      final harness = _VoidAdmissionHarness([
+        _session('tgdog-session', open: true),
+      ], workBead: workBead);
+      addTearDown(harness.dispose);
+      harness.work.throwOnUpdate = true;
+
+      final result = await harness.handler(request);
+
+      expect(
+        _closedOnBareKey(harness.state.beads, 'tg-1'),
+        isEmpty,
+        reason: 'the hand-close trap is never produced',
+      );
+      final voided = projectSession(harness.state.bead('tgdog-session')!);
+      expect(voided.isTerminal, isTrue);
+      expect(voided.workBeadId, retiredKey);
+      expect(sessionDispositionOf(voided), isA<VoidedSession>());
+      expect(
+        result,
+        isA<GridCommandCompleted>()
+            .having(
+              (value) => value.value['specClearFailure'],
+              'specClearFailure',
+              isA<String>(),
+            )
+            .having(
+              (value) => value.message,
+              'message',
+              contains('spec clear FAILED'),
+            ),
+      );
+    });
+
+    test('MEDIUM-1: a throw at the CLOSE leaves NO closed session on a bare '
+        'work_bead key — the re-key is rolled back onto the still-open '
+        'session, exactly as it was', () async {
+      final harness = _VoidAdmissionHarness([
+        _session('tgdog-session', open: true),
+      ]);
+      addTearDown(harness.dispose);
+      harness.state.throwOnClose = true;
+
+      final result = await harness.handler(request);
+
+      expect(
+        result,
+        isA<GridCommandRefused>()
+            .having((value) => value.code, 'code', 'void_close_failed')
+            .having(
+              (value) => value.message,
+              'message',
+              contains('rolled back'),
+            ),
+      );
+      expect(_closedOnBareKey(harness.state.beads, 'tg-1'), isEmpty);
+      final session = harness.state.bead('tgdog-session')!;
+      expect(session.isClosed, isFalse);
+      expect(session.metadata[SessionBeadKeys.workBead], 'tg-1');
+      // The restore is guarded: it lands only on a session still OPEN.
+      expect(
+        harness.state.calls.where(
+          (call) =>
+              call.first == 'update' &&
+              call.contains('work_bead=tg-1') &&
+              call.contains('--if-status') &&
+              call.contains('open'),
+        ),
+        hasLength(1),
+      );
+      expect(harness.work.calls, isEmpty, reason: 'no work-store leg ran');
+    });
+
+    test('MEDIUM-1: a close that LANDED before its chokepoint threw is never '
+        'rolled back onto the bare key', () async {
+      final harness = _VoidAdmissionHarness([
+        _session('tgdog-session', open: true),
+      ]);
+      addTearDown(harness.dispose);
+      harness.state.throwAfterClose = true;
+
+      final result = await harness.handler(request);
+
+      expect(
+        result,
+        isA<GridCommandRefused>().having(
+          (value) => value.code,
+          'code',
+          'void_close_failed',
+        ),
+      );
+      expect(_closedOnBareKey(harness.state.beads, 'tg-1'), isEmpty);
+      final voided = projectSession(harness.state.bead('tgdog-session')!);
+      expect(voided.isTerminal, isTrue);
+      expect(voided.workBeadId, retiredKey);
+    });
 
     test(
       'AC-3: a session parked at a GATE is refused, the gate is named, and the '
@@ -3619,9 +3855,10 @@ void _shipObserverGroup() {
       );
     });
 
-    test('both retire paths issue ONE write sequence across BOTH stores — '
-        'every state-store AND work-store call, in order, differing only in '
-        'close reason, retired key and the void\'s reason stamp', () async {
+    test('both retire paths issue the SAME writes across BOTH stores — every '
+        'state-store AND work-store call, differing only in close reason, '
+        'retired key, the void\'s reason stamp, and the void\'s re-key being '
+        'hoisted ahead of the close', () async {
       // A specify-authored work bead, so the work-store leg actually writes:
       // a path that skipped it would be visible here.
       const workBead = Bead(
@@ -3699,20 +3936,37 @@ void _shipObserverGroup() {
           ),
       ];
       expect(voidJournal.map((entry) => entry.$1), contains('work'));
+      bool isRekey((String, List<String>) entry) =>
+          entry.$1 == 'state' &&
+          entry.$2.first == 'update' &&
+          entry.$2.any((arg) => arg.startsWith('work_bead='));
+      // Rework's sequence with its ONE re-key moved to the front is the void's
+      // sequence, call for call: the same writes on the same chokepoints, and
+      // the only reordering is the void's re-key-before-close safety.
+      final reworkNormalized = normalized(reworkJournal);
+      final reworkRekeys = reworkNormalized.where(isRekey).toList();
+      expect(reworkRekeys, hasLength(1));
+      final hoisted = [
+        ...reworkRekeys,
+        ...reworkNormalized.where((entry) => !isRekey(entry)),
+      ];
       expect(
         normalized(voidJournal).map((e) => [e.$1, ...e.$2]).toList(),
-        normalized(reworkJournal).map((e) => [e.$1, ...e.$2]).toList(),
-        reason: 'the retire is not re-expressed: one sequence, both stores',
+        hoisted.map((e) => [e.$1, ...e.$2]).toList(),
+        reason: 'the retire is not re-expressed: one write set, both stores',
       );
       // And the differences are exactly the sanctioned ones.
-      expect(reworkJournal.last.$2, contains('work_bead=tg-1#r1'));
-      expect(voidJournal.last.$2, contains('work_bead=$retiredKey'));
+      final reworkRekey = reworkJournal.singleWhere(isRekey);
+      final voidRekey = voidJournal.singleWhere(isRekey);
+      expect(reworkRekey.$2, contains('work_bead=tg-1#r1'));
+      expect(voidRekey.$2, contains('work_bead=$retiredKey'));
       expect(
-        voidJournal.last.$2,
+        voidRekey.$2,
         contains(
           '${SessionBeadKeys.voidedReason}=never stepped after re-adoption',
         ),
       );
+      expect(voidJournal.first, same(voidRekey), reason: 're-key first');
     });
 
     test(
@@ -4064,6 +4318,16 @@ final class _RecordingRunner implements BdRunner, BeadProbeReader {
   }
 }
 
+/// Every CLOSED session in [beads] still keyed on the BARE [workBeadId] — the
+/// row a hand close leaves behind, which strands the work bead (tg-5snt).
+List<Bead> _closedOnBareKey(Iterable<Bead> beads, String workBeadId) => [
+  for (final bead in beads)
+    if (bead.issueType == GridIssueTypes.session &&
+        bead.isClosed &&
+        bead.metadata[SessionBeadKeys.workBead] == workBeadId)
+      bead,
+];
+
 const _ac2WorkBead = Bead(
   id: 'tg-1',
   issueType: IssueType.task,
@@ -4088,6 +4352,16 @@ final class _DurableStore implements BdRunner, BeadProbeReader {
 
   final Map<String, Bead> _beads;
   final calls = <List<String>>[];
+
+  /// Fails every `bd close` without applying it (the close never landed).
+  bool throwOnClose = false;
+
+  /// Applies a `bd close`, THEN fails it (the close landed; its caller saw a
+  /// throw).
+  bool throwAfterClose = false;
+
+  /// Fails every non-probe `bd update` without applying it.
+  bool throwOnUpdate = false;
 
   List<Bead> get beads => _beads.values.toList(growable: false);
 
@@ -4141,15 +4415,29 @@ final class _DurableStore implements BdRunner, BeadProbeReader {
       );
     }
     if (args.length >= 2 && args[0] == 'close') {
+      if (throwOnClose) throw StateError('injected close failure');
       final bead = _beads[args[1]];
       if (bead != null) {
         _beads[args[1]] = bead.copyWith(status: BeadStatus.closed);
       }
+      if (throwAfterClose) throw StateError('injected post-close failure');
       return ok;
     }
     if (args.length >= 2 && args[0] == 'update') {
+      if (throwOnUpdate) throw StateError('injected update failure');
       final bead = _beads[args[1]];
       if (bead == null) return ok;
+      // `--if-status <s>`: bd's CAS guard — exit 13 when the row moved.
+      final guard = args.indexOf('--if-status');
+      if (guard >= 0 &&
+          guard + 1 < args.length &&
+          bead.status.wire != args[guard + 1]) {
+        return const BdResult(
+          exitCode: 13,
+          stdout: '',
+          stderr: 'guard mismatch: status',
+        );
+      }
       final metadata = Map<String, dynamic>.of(bead.metadata);
       for (var i = 2; i < args.length; i++) {
         if (args[i] == '--set-metadata' && i + 1 < args.length) {
@@ -4181,14 +4469,22 @@ final class _DurableStore implements BdRunner, BeadProbeReader {
 /// joining the stores and a [engine.Station] whose `WorkList` admits and
 /// whose `SessionScope` adopts or mints (tg-5snt AC-2).
 final class _VoidAdmissionHarness {
-  _VoidAdmissionHarness(List<Bead> stateBeads)
-    : state = _DurableStore(stateBeads),
-      work = _DurableStore(const [_ac2WorkBead]),
-      stateSource = FakeSnapshotSource(_durableSnapshot(stateBeads)),
-      workSource = FakeSnapshotSource(
-        _durableSnapshot(const [_ac2WorkBead], ready: {'tg-1'}),
-      ) {
+  _VoidAdmissionHarness(
+    List<Bead> stateBeads, {
+    Bead workBead = _ac2WorkBead,
+    this.residentBound = true,
+  }) : state = _DurableStore(stateBeads),
+       work = _DurableStore([workBead]),
+       stateSource = FakeSnapshotSource(_durableSnapshot(stateBeads)),
+       workSource = FakeSnapshotSource(
+         _durableSnapshot([workBead], ready: {'tg-1'}),
+       ),
+       fakes = buildFakes(createdId: 'tgdog-fresh') {
     handler = StationCommandHandler(
+      // The resident's OWN admission owner — the one the tree [admit] mounts
+      // resolves — so the door's in-memory census and its void sanction reach
+      // the WorkList that holds the session (tg-5snt).
+      admission: residentBound ? fakes.ctx.admission : null,
       stateSource: stateSource,
       refreshState: () async => stateSource.push(_durableSnapshot(state.beads)),
       stateWriter: StationBeadWriter(
@@ -4219,6 +4515,14 @@ final class _VoidAdmissionHarness {
   final _DurableStore work;
   final FakeSnapshotSource stateSource;
   final FakeSnapshotSource workSource;
+
+  /// The resident's station services: its admission owner, process
+  /// transport, and state-store chokepoint.
+  final Fakes fakes;
+
+  /// Whether [handler] is bound to the resident's admission owner, as the
+  /// production assembly binds it.
+  final bool residentBound;
   late final StationCommandHandler handler;
   final _teardown = <Future<void> Function()>[];
 
@@ -4226,7 +4530,6 @@ final class _VoidAdmissionHarness {
   Future<_AdmissionPass> admit() async {
     final bridge = StationJoinBridge(work: workSource, state: stateSource)
       ..start();
-    final fakes = buildFakes(createdId: 'tgdog-fresh');
     final owner = TreeOwner();
     const circuit = Circuit(
       id: 'code',
@@ -4272,9 +4575,7 @@ final class _VoidAdmissionHarness {
     );
     _teardown.add(() async {
       owner.dispose();
-      fakes.ctx.dispose();
       bridge.dispose();
-      await fakes.provider.close();
     });
     return _AdmissionPass(owner, root, bridge, fakes.runner);
   }
@@ -4283,6 +4584,8 @@ final class _VoidAdmissionHarness {
     for (final teardown in _teardown.reversed) {
       await teardown();
     }
+    fakes.ctx.dispose();
+    await fakes.provider.close();
     await stateSource.close();
     await workSource.close();
   }

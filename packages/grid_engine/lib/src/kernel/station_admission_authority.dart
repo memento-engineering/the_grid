@@ -76,6 +76,11 @@ abstract final class WorkThrottleCause {
   /// Another substation scope currently holds this bead's reservation.
   static const String reservedElsewhere = 'reserved-elsewhere';
 
+  /// An operator `grid session void` has retired (or is retiring) the session
+  /// this bead's resident mount was built over; the stale mount is dropped for
+  /// this pass so the bead re-competes as a fresh candidate (tg-5snt).
+  static const String operatorVoid = 'operator-void';
+
   /// The `cause` value when one pass holds beads under more than one cause;
   /// the per-bead `causes` field then carries each one.
   static const String mixed = 'mixed';
@@ -243,6 +248,16 @@ typedef _RetryHold = ({Timer timer, String cause});
 
 enum _MountAttemptWriteState { writing, recorded }
 
+/// One operator `grid session void` the resident has been told about
+/// (tg-5snt): the session whose disappearance from its work bead's join is
+/// SANCTIONED, and whether the durable void has finished landing.
+final class _OperatorVoid {
+  _OperatorVoid(this.sessionId);
+
+  final String sessionId;
+  bool landed = false;
+}
+
 final class _UnsnapshottedReservation {
   _UnsnapshottedReservation({
     required this.scopeKey,
@@ -391,6 +406,9 @@ final class StationAdmissionAuthority {
       <String, _LostSessionRetirement>{};
   // Cancellation quarantine persists until a later snapshot proves readiness.
   final Set<String> _blockedUntilFreshReady = <String>{};
+  // Operator voids in flight or awaiting their first unlinked observation are
+  // a command-door fact the snapshot cannot carry (tg-5snt).
+  final Map<String, _OperatorVoid> _operatorVoids = <String, _OperatorVoid>{};
   // This flag represents one queued capacity invalidation operation.
   bool _capacityRecheckScheduled = false;
   bool _disposed = false;
@@ -601,6 +619,32 @@ final class StationAdmissionAuthority {
     for (final candidate in ordered) {
       final bead = candidate.bead;
       _lastScopeByBead[bead.id] = scopeKey;
+      // THE OPERATOR-VOID HOLD (tg-5snt). `grid session void` re-keys an
+      // open, ungated session off this bead. A resident that already MOUNTED
+      // that session (re-adopted at boot, never stepped) would otherwise keep
+      // its scope, whose tg-x1j v2 guard reads any non-`#rN` disappearance of
+      // its joined row as malformed and parks the bead `rework_declined`
+      // forever. The void is SANCTIONED here, so the first pass that observes
+      // the session unlinked drops the stale mount (held, never admitted, so
+      // WorkList unmounts it and its allocations die with it) and frees the
+      // slot. While the durable void is still landing the hold persists; once
+      // it has landed the hold lasts this one pass and the bead re-competes
+      // as a fresh candidate on the next — the same pass a hand-closed bead
+      // never gets. A snapshot that still links the session (the re-key not
+      // yet observed) takes the ordinary path: nothing has changed for the
+      // mounted scope yet.
+      if (_operatorVoids[bead.id] case final operatorVoid?
+          when !snapshot
+              .linkedSessions(bead.id)
+              .any((row) => row.sessionId == operatorVoid.sessionId)) {
+        _release(bead.id, onlyScope: scopeKey);
+        hold(candidate, WorkThrottleCause.operatorVoid);
+        if (operatorVoid.landed) {
+          _operatorVoids.remove(bead.id);
+          _scheduleCapacityRecheck();
+        }
+        continue;
+      }
       // The candidate carries the join's ordered frontier winner (or a retired
       // re-key). This classifies lifecycle only: the linked-session verdict
       // below still owns rival, disposition, and process-liveness refusals.
@@ -1185,6 +1229,51 @@ final class StationAdmissionAuthority {
         _notifyListeners();
       }
     });
+  }
+
+  /// The runtimes this station's process transport holds IN MEMORY under
+  /// [sessionId] — every step whose effect the resident has started, whether
+  /// or not its `running` state has reached the session's durable cursor yet
+  /// (tg-5snt). Provider names are `<sessionId>/<nodePath>`
+  /// ([AllocationAddress.providerName]); the provider reserves a name
+  /// synchronously when a start begins, so a step that is spawning but not
+  /// yet durable is listed. The same census [retireLostSession] and rival
+  /// cleanup stop before they retire a session.
+  List<String> liveRuntimesOf(String sessionId) =>
+      _provider.listRunning('$sessionId/').toList()..sort();
+
+  /// Tells the resident that an operator `grid session void` is about to
+  /// re-key [sessionId] off [workBeadId]'s join (tg-5snt). Call it BEFORE the
+  /// first durable write, so no admission pass can observe the re-key without
+  /// knowing it is sanctioned; pair it with exactly one [endOperatorVoid].
+  void beginOperatorVoid({
+    required String workBeadId,
+    required String sessionId,
+  }) {
+    if (_disposed) return;
+    _operatorVoids[workBeadId] = _OperatorVoid(sessionId);
+  }
+
+  /// Ends the operator void [beginOperatorVoid] opened for [sessionId].
+  ///
+  /// [landed] true: the durable void (re-key and close) landed. The hold
+  /// stays until the first admission pass that observes the session unlinked
+  /// drops the stale mount; the pass after re-offers the bead. [landed]
+  /// false: the void was refused or rolled back, so the sanction is
+  /// withdrawn and the bead takes the ordinary path again.
+  void endOperatorVoid({
+    required String workBeadId,
+    required String sessionId,
+    required bool landed,
+  }) {
+    final operatorVoid = _operatorVoids[workBeadId];
+    if (operatorVoid == null || operatorVoid.sessionId != sessionId) return;
+    if (landed) {
+      operatorVoid.landed = true;
+    } else {
+      _operatorVoids.remove(workBeadId);
+    }
+    _notifyListeners();
   }
 
   /// Retires a voided dead key after verifying its recorded process fences.
@@ -1988,6 +2077,7 @@ final class StationAdmissionAuthority {
     }
     _retryTimers.clear();
     _blockedUntilFreshReady.clear();
+    _operatorVoids.clear();
     _capacityRecheckScheduled = false;
     _mountAttemptWrites.clear();
     _lastScopeByBead.clear();

@@ -113,14 +113,16 @@ an edit to the work.
   is the one safe retire (`SessionScope`'s gate-resolve transition re-arms in place, no
   runner restart — the I-5 wedge, closed).
 - **An open, UNGATED session exits through `grid session void <session> --reason <text>`**
-  (tg-5snt), never a hand close. It closes the session `voided`, clears stale
-  specify-authored fields exactly as rework does, and re-keys the round onto
-  `<bead>#void-<session>` — no round cap spent, no defer date. It refuses a gated session
-  (use `grid rework`) and a session whose durable molecule cursor shows a running step;
-  a session with no molecule step beads has no durable cursor, so it is guarded only by
-  an open gate bead. Known gap: if the resident has that session MOUNTED, its scope
-  declines the disappearance (`grid.rework_declined`) and the bead re-mints on the next
-  fresh admission pass (a resident bounce), not in place.
+  (tg-5snt), never a hand close. It re-keys the round onto `<bead>#void-<session>` FIRST,
+  then closes the session `voided`, then clears stale specify-authored fields exactly as
+  rework does — no round cap spent, no defer date. The order is the safety: no failure
+  can leave a closed session on its bare `work_bead` key, and a failed close rolls the
+  re-key back onto the still-open session. It refuses a gated session (use `grid
+  rework`), a session whose durable molecule cursor shows a running step, and a session
+  under which the resident holds a live runtime in memory (`session_step_live`) even
+  before that step's `running` state is durable. A session the resident has already
+  MOUNTED (re-adopted, never stepped) is released in place: the resident drops its stale
+  scope and re-offers the bead on the next admission pass, no bounce needed.
 - **Treat `gate ls` as the ultimatum surface, and keep it honest** (I-15). Pre-dedup
   terminal closes leaked their gate beads (14 found open against long-closed sessions);
   mint-dedup caps per-node growth, but a sweep of open gates at session terminal-close
