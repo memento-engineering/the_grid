@@ -78,14 +78,42 @@ Map<String, Object?> _counts(WedgeState state) {
   };
 }
 
+Map<String, Object?> _flareTuple(Map<String, String> data) => {
+  'reason': data['reason'],
+  'live': int.parse(data['live']!),
+  'paused': int.parse(data['paused']!),
+  'running': int.parse(data['running']!),
+  'gated': int.parse(data['gated']!),
+  'cooling': int.parse(data['cooling']!),
+};
+
+Map<String, Object?> _stateTuple(WedgeState state) {
+  final json = state.toJson();
+  return {
+    'reason': json['reason'],
+    'live': json['live'],
+    'paused': json['paused'],
+    'running': json['running'],
+    'gated': json['gated'],
+    'cooling': json['cooling'],
+  };
+}
+
 void main() {
-  test('state-store counts drive each wedge sample', () async {
+  test('state-store counts drive each resident wedge tick', () async {
     final work = FakeSnapshotSource(
       _graph([for (var i = 1; i <= 7; i++) bead('work-$i')]),
     );
     final state = FakeSnapshotSource(_graph(const []));
     final bridge = StationJoinBridge(work: work, state: state)..start();
-    final driver = StationDriver(bridge: bridge);
+    final transport = RecordingExplorationTransport();
+    final driver = StationDriver(
+      bridge: bridge,
+      clock: () => _now,
+      transport: transport,
+      wedgeThreshold: Duration.zero,
+      scheduleTimer: (_, _) => _FakeTimer(),
+    )..start();
     addTearDown(driver.dispose);
     addTearDown(work.close);
     addTearDown(state.close);
@@ -135,8 +163,8 @@ void main() {
     );
     await _settle();
 
-    final firstSnapshot = bridge.latest;
-    final first = driver.wedgeFor(firstSnapshot);
+    driver.afterFlush();
+    final first = driver.wedge;
     expect(_counts(first), {
       'live': 5,
       'gated': 3,
@@ -172,8 +200,8 @@ void main() {
     );
     await _settle();
 
-    final secondSnapshot = bridge.latest;
-    final second = driver.wedgeFor(secondSnapshot);
+    driver.afterFlush();
+    final second = driver.wedge;
     expect(_counts(second), {
       'live': 2,
       'gated': 1,
@@ -185,14 +213,39 @@ void main() {
 
     state.push(
       _graph([
-        _session('session-next-gated', workBeadId: 'work-6', closed: true),
-        _session('session-next-pending', workBeadId: 'work-7', closed: true),
+        _session('session-next-pending', workBeadId: 'work-7'),
+        _step(
+          'step-next-pending',
+          sessionId: 'session-next-pending',
+          path: 'work-7/build',
+          state: StepState.pending,
+        ),
       ], tick: 3),
     );
     await _settle();
 
-    final finalSnapshot = bridge.latest;
-    final finalState = driver.wedgeFor(finalSnapshot);
+    driver.afterFlush();
+    final changed = driver.wedge;
+    expect(_counts(changed), {
+      'live': 1,
+      'gated': 0,
+      'running': 0,
+      'cooling': 0,
+      'paused': 0,
+    });
+    final flare = transport.named(kWedgeChangedFlare).single;
+    expect(_flareTuple(flare.data), _stateTuple(changed));
+
+    state.push(
+      _graph([
+        _session('session-next-gated', workBeadId: 'work-6', closed: true),
+        _session('session-next-pending', workBeadId: 'work-7', closed: true),
+      ], tick: 4),
+    );
+    await _settle();
+
+    driver.afterFlush();
+    final finalState = driver.wedge;
     expect(_counts(finalState), {
       'live': 0,
       'gated': 0,
@@ -223,13 +276,15 @@ void main() {
       ]),
     );
     final bridge = StationJoinBridge(work: work, state: state);
-    final driver = StationDriver(bridge: bridge);
+    final driver = StationDriver(
+      bridge: bridge,
+      scheduleTimer: (_, _) => _FakeTimer(),
+    )..start();
     addTearDown(driver.dispose);
     addTearDown(work.close);
     addTearDown(state.close);
 
-    final snapshot = bridge.latest;
-    final sample = driver.wedgeFor(snapshot).sample;
+    final sample = driver.wedge.sample;
 
     expect(sample.live, 1);
     expect(sample.gated, 1);
@@ -237,4 +292,17 @@ void main() {
     expect(sample.cooling, 0);
     expect(sample.reason, isNot('no live session'));
   });
+}
+
+final class _FakeTimer implements Timer {
+  var _active = true;
+
+  @override
+  void cancel() => _active = false;
+
+  @override
+  bool get isActive => _active;
+
+  @override
+  int get tick => 0;
 }

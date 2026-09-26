@@ -153,7 +153,11 @@ final class _FastEndpointWarmRunner implements BdRunner {
     List<String> args, {
     Duration? timeout,
     String? stdin,
-  }) async => const BdResult(exitCode: 0, stdout: '{}', stderr: '');
+  }) async => const BdResult(
+    exitCode: 0,
+    stdout: '{"schema_version":1,"data":{}}',
+    stderr: '',
+  );
 }
 
 BdRunner _fastEndpointWarmRunner(String _) => _FastEndpointWarmRunner();
