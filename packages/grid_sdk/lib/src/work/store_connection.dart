@@ -3,16 +3,23 @@
 library;
 
 import 'dart:async';
+import 'dart:io' show stderr;
 
 import 'package:beads_dart/beads_dart.dart' show DoltEndpoint, DoltQueryService;
 
 import '../trajectory/trajectory_harness.dart';
+import 'settle.dart';
 
-/// The budget ONE store handle's close is awaited under during an unwind
-/// (tg-supq). A half-open proxy socket can hang its close on the wire forever;
-/// past this budget the handle is reported BY NAME with its endpoint and no
-/// longer awaited, so the resident exits instead of parking on it.
-const Duration kStoreCloseBudget = Duration(seconds: 2);
+/// The per-store close budget in the resident's unwind — the ONE constant
+/// the_grid#resident-unwind-closes-store-sockets names (`kStoreCloseTimeout`,
+/// 2 s). A half-open proxy socket can hang its close on the wire forever; past
+/// this budget the handle is reported BY NAME with its endpoint and no longer
+/// awaited, so the resident exits instead of parking on it (tg-supq).
+///
+/// Homed here, beside [closeStoreConnections], so the resident shell
+/// (grid_cli's `up`) and [StationWorkRuntime.shutdown] share one budget and one
+/// primitive; grid_cli re-exports it under the same name.
+const Duration kStoreCloseTimeout = Duration(seconds: 2);
 
 /// One open store connection, named for the operator's shutdown narrative.
 ///
@@ -185,49 +192,61 @@ final class StoreCloseReport {
 /// Closes every handle in [stores] in order, each under [within], and reports
 /// which CONFIRMED and which did not — by name, with endpoint and reason.
 ///
-/// This is the one bounded confirm pass the unwind runs
-/// (the_grid#resident-unwind-closes-store-sockets): a handle whose close hangs
-/// on the wire is awaited for [within], then named through [onRefusal] (one
-/// line) and [onFlare] (`unwind.storeHandleOutstanding`) and NO LONGER awaited,
-/// so one half-open proxy socket can delay the exit by its budget but never
-/// hold it. A refused close is reported the same way: a refused close is not a
-/// confirmed one. The pass itself never throws.
+/// This is the ONE bounded confirm pass of the unwind
+/// (the_grid#resident-unwind-closes-store-sockets): the resident shell's store
+/// closes and [StationWorkRuntime.shutdown]'s confirm pass both run it, so the
+/// budget ([kStoreCloseTimeout]), the step names (`store close (<name>)`) and
+/// the narrative (`store connections closed: N/M`) exist once. Each close is a
+/// [settle] step: a handle whose close hangs on the wire is awaited for
+/// [within] — or for what is left of [deadline] when an unwind's total is
+/// supplied, whichever is smaller — then named through [onRefusal] (the settle
+/// line, stderr by default) and [onFlare] (`unwind.storeHandleOutstanding`) and
+/// NO LONGER awaited, so one half-open proxy socket can delay the exit by its
+/// budget but never hold it. A refused close is reported the same way: a
+/// refused close is not a confirmed one. The pass itself never throws.
 Future<StoreCloseReport> closeStoreConnections(
   List<StoreConnection> stores, {
-  Duration within = kStoreCloseBudget,
+  Duration within = kStoreCloseTimeout,
+  UnwindDeadline? deadline,
   void Function(String message)? onRefusal,
   void Function(String name, Map<String, String> data)? onFlare,
 }) async {
   final closed = <String>[];
   final outstanding = <OutstandingStoreHandle>[];
   for (final store in List<StoreConnection>.of(stores)) {
-    String? reason;
-    try {
-      await store.close().timeout(within);
-    } on TimeoutException {
-      reason = 'close did not confirm within ${within.inMilliseconds}ms';
-    } on Object catch (error) {
-      reason = 'close refused: $error';
-    }
-    if (reason == null) {
+    final budget = deadline?.budget(within) ?? within;
+    String? refusal;
+    Duration? expired;
+    final confirmed = await settle(
+      'store close (${store.name})',
+      store.close,
+      within: budget,
+      onRefusal: (message) {
+        refusal = message;
+        (onRefusal ?? stderr.writeln)(message);
+      },
+      onTimeout: (_, spent) {
+        expired = spent;
+      },
+    );
+    if (confirmed) {
       closed.add(store.name);
       continue;
     }
+    final reason = expired != null
+        ? 'close did not confirm within ${expired!.inMilliseconds}ms'
+        : 'close refused (${refusal ?? 'no reason given'})';
     final handle = OutstandingStoreHandle(
       name: store.name,
       endpoint: store.endpoint,
       reason: reason,
     );
     outstanding.add(handle);
-    onRefusal?.call(
-      'unwind: store handle ${handle.describe()} — still open, no longer '
-      'awaited',
-    );
     onFlare?.call('unwind.storeHandleOutstanding', {
       'store': handle.name,
       'endpoint': handle.endpoint,
       'reason': reason,
-      'budgetMs': '${within.inMilliseconds}',
+      'budgetMs': '${budget.inMilliseconds}',
     });
   }
   return StoreCloseReport(

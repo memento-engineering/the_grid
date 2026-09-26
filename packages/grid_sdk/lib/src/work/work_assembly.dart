@@ -933,28 +933,45 @@ class StationWorkRuntime implements SubstationProvisioner {
   /// outlives the tree, never the reverse. Idempotent: a second call returns
   /// the same report.
   ///
-  /// EVERY step is bounded (tg-supq). Epoch 87's resident flared
-  /// `trajectory.shutdown` at fixpoint and then parked for 3+ minutes holding
-  /// three ESTABLISHED dolt client sockets, because the steps after that
-  /// flare — the provider, the liveness relay, the source bundles whose
-  /// `DoltQueryService.close()` awaits the wire — were awaited without a
-  /// bound, and the shell's lock release sits behind this call. Now a step
-  /// that outlives [stepBudget] is named through the refusal sink and the
-  /// `unwind.stepTimedOut` flare and NO LONGER awaited; the trajectory step
-  /// keeps a budget derived from its own drain timeout because it bounds
-  /// itself internally in three phases. After the sources are down the store
-  /// handles get one bounded CONFIRM pass ([closeStoreConnections], each under
-  /// [storeCloseBudget]): a handle whose close does not confirm is reported by
-  /// NAME with its ENDPOINT (the_grid#store-handles-are-tracked-until-close-
-  /// is-confirmed) instead of holding the exit, and the returned
+  /// The whole unwind runs under ONE TOTAL [deadline] (tg-supq). Epoch 87's
+  /// resident flared `trajectory.shutdown` at fixpoint and then parked for 3+
+  /// minutes holding three ESTABLISHED dolt client sockets, because the steps
+  /// after that flare — the provider, the liveness relay, the source bundles
+  /// whose `DoltQueryService.close()` awaits the wire — were awaited without a
+  /// bound, and the shell's lock release sits behind this call. A per-step
+  /// bound alone is not enough: summed over a real roster (five fixed steps,
+  /// the state bundle, one bundle per work store, the federated source and a
+  /// close per handle) per-step budgets add up to minutes, an order of
+  /// magnitude past the `down` client's grace. So every step is awaited under
+  /// the SMALLER of its own budget ([stepBudget], or [storeCloseBudget] for a
+  /// handle close) and what is left of [deadline]; a step that outlives it is
+  /// named through the refusal sink and the `unwind.stepTimedOut` flare and
+  /// NO LONGER awaited. Once the deadline has passed the remaining steps are
+  /// still STARTED — a close that is never requested is a socket that is never
+  /// closed — but none is awaited, and each is named.
+  ///
+  /// The trajectory step is the one that may legitimately need time (its
+  /// fixpoint drain is bounded internally by
+  /// [TrajectoryConfig.shutdownDrainTimeout]); it may spend the deadline only
+  /// down to a held-back share ([deadline] halved) reserved for the socket
+  /// tail after it, so a slow drain can never starve the store closes. A drain
+  /// the deadline cuts short is crash-loss the successor boot's tick inherits
+  /// (§2.5), which the harness already flares; an unreleased lock is not.
+  ///
+  /// After the sources are down the store handles get one bounded CONFIRM pass
+  /// ([closeStoreConnections]): a handle whose close does not confirm is
+  /// reported by NAME with its ENDPOINT (the_grid#store-handles-are-tracked-
+  /// until-close-is-confirmed) instead of holding the exit, and the returned
   /// [StationWorkUnwindReport] carries the same names for the shell's `down`
   /// narrative. The state-store and substation sql-servers are NOT this
   /// process's children and are never signalled here — only the resident's
   /// own client sockets are closed.
   Future<StationWorkUnwindReport> shutdown({
+    Duration deadline = kUnwindDeadline,
     Duration stepBudget = kUnwindStepBudget,
-    Duration storeCloseBudget = kStoreCloseBudget,
+    Duration storeCloseBudget = kStoreCloseTimeout,
   }) => _unwind ??= _runShutdown(
+    deadline: deadline,
     stepBudget: stepBudget,
     storeCloseBudget: storeCloseBudget,
   );
@@ -962,25 +979,28 @@ class StationWorkRuntime implements SubstationProvisioner {
   Future<StationWorkUnwindReport>? _unwind;
 
   Future<StationWorkUnwindReport> _runShutdown({
+    required Duration deadline,
     required Duration stepBudget,
     required Duration storeCloseBudget,
   }) async {
     // Set synchronously (an async body runs to its first await eagerly), so a
     // caller observing [lifecycle] right after the call sees the shutdown.
     _lifecycle = const StationWorkRuntimeState.shutdown();
+    final clock = UnwindDeadline(deadline);
     final timedOut = <String>[];
     void onTimeout(String step, Duration within) {
       timedOut.add(step);
       _onFlare?.call('unwind.stepTimedOut', {
         'step': step,
         'budgetMs': '${within.inMilliseconds}',
+        'deadlineMs': '${deadline.inMilliseconds}',
       });
     }
 
     Future<void> step(String name, FutureOr<void> Function() action) => settle(
       name,
       action,
-      within: stepBudget,
+      within: clock.budget(stepBudget),
       onRefusal: _onRefusal,
       onTimeout: onTimeout,
     );
@@ -993,14 +1013,16 @@ class StationWorkRuntime implements SubstationProvisioner {
     // Trajectory down BEFORE the stores it reads (§1.2 shutdown order) —
     // settled so it NEVER blocks sources shutdown (r2, major 9). The harness
     // also settles its internal queue drain → fixpoint → boundary commit →
-    // dispose sequence, each phase under its own drain timeout, while this
-    // outer step protects the source tail with a budget wide enough for all
-    // three phases — an outer bound tighter than the inner ones would cut a
-    // still-draining fixpoint short and mislabel it as a hang.
+    // dispose sequence, each phase under its own drain timeout; this outer
+    // step caps it at its phases' sum AND at the deadline less the share held
+    // back for the socket tail below.
     await settle(
       'trajectory shutdown',
       trajectory.shutdown,
-      within: _trajectoryShutdownBudget(stepBudget),
+      within: clock.budget(
+        _trajectoryShutdownBudget(stepBudget),
+        reserve: deadline ~/ 2,
+      ),
       onRefusal: _onRefusal,
       onTimeout: onTimeout,
     );
@@ -1008,7 +1030,10 @@ class StationWorkRuntime implements SubstationProvisioner {
       await step('runtime provider dispose', dispose);
     }
     await step('work-session liveness dispose', sessionLiveness.dispose);
-    await _sourcesShutdown(within: stepBudget, onTimeout: onTimeout);
+    await _sourcesShutdown(
+      within: () => clock.budget(stepBudget),
+      onTimeout: onTimeout,
+    );
     // The CONFIRM pass: the bundles above already closed the same pools, and
     // `DoltQueryService.close()` / `closeOpenSessions()` are idempotent, so a
     // handle that confirmed is a no-op here — the pass exists to NAME the one
@@ -1016,12 +1041,24 @@ class StationWorkRuntime implements SubstationProvisioner {
     final stores = await closeStoreConnections(
       openStores,
       within: storeCloseBudget,
+      deadline: clock,
       onRefusal: _onRefusal,
       onFlare: _onFlare,
     );
+    // A shell that awaits this call without reading the report (space's `up`)
+    // still gets each unconfirmed handle BY NAME WITH ITS ENDPOINT on the
+    // refusal sink — the line an operator would otherwise `lsof` for.
+    for (final handle in stores.outstanding) {
+      _onRefusal(
+        'unwind: store handle ${handle.describe()} — still open, no longer '
+        'awaited',
+      );
+    }
     final report = StationWorkUnwindReport(
       timedOutSteps: List<String>.unmodifiable(timedOut),
       stores: stores,
+      deadline: deadline,
+      elapsed: clock.elapsed,
     );
     _onFlare?.call('unwind.complete', {
       'closedStores': stores.closed.join(', '),
@@ -1029,30 +1066,43 @@ class StationWorkRuntime implements SubstationProvisioner {
         for (final handle in stores.outstanding) handle.name,
       ].join(', '),
       'timedOutSteps': timedOut.join(', '),
+      'deadlineMs': '${deadline.inMilliseconds}',
+      'elapsedMs': '${clock.elapsed.inMilliseconds}',
       'clean': '${report.isClean}',
     });
     return report;
   }
 
-  /// The outer bound on the trajectory step: its three internally bounded
-  /// phases (drain, boundary commit, session close) each run under
+  /// The outer bound on the trajectory step, before the total clamps it: its
+  /// three internally bounded phases (drain, boundary commit, session close)
+  /// each run under
   /// [TrajectoryConfig.shutdownDrainTimeout], plus one [stepBudget] of slack
-  /// for the un-bounded bookkeeping between them.
+  /// for the un-bounded bookkeeping between them. [UnwindDeadline.budget]
+  /// then clamps it to the total.
   Duration _trajectoryShutdownBudget(Duration stepBudget) =>
       _trajectoryConfig.shutdownDrainTimeout * 3 + stepBudget;
 }
 
+/// The TOTAL wall-clock [StationWorkRuntime.shutdown] may spend (tg-supq),
+/// across every step, the trajectory drain and the store confirm pass
+/// together, however many substations the roster carries.
+///
+/// It sits strictly inside the `down` client's grace window (grid_cli's
+/// `kStationStopGrace`, 10 s — pinned there by a test) so the shell's lock
+/// release, which runs after this call, is reached before `down` gives up.
+const Duration kUnwindDeadline = Duration(seconds: 8);
+
 /// The budget ONE unwind step of [StationWorkRuntime.shutdown] is awaited
-/// under (tg-supq). Loud and bounded beats silent and parked: a step that
-/// outlives it is named and abandoned, never awaited past the `down` client's
-/// grace window.
+/// under (tg-supq), before [kUnwindDeadline] clamps it. Loud and bounded beats
+/// silent and parked: a step that outlives it is named and abandoned.
 const Duration kUnwindStepBudget = Duration(seconds: 5);
 
-/// The sources' shutdown tail, bounded per step and reporting each expired
-/// step through [onTimeout].
+/// The sources' shutdown tail: each step awaited under the budget [within]
+/// hands out at the moment it starts, each expired step reported through
+/// [onTimeout].
 typedef _SourcesShutdown =
     Future<void> Function({
-      required Duration within,
+      required Duration Function() within,
       required void Function(String step, Duration within) onTimeout,
     });
 
@@ -1061,10 +1111,13 @@ typedef _SourcesShutdown =
 /// prints [narrative] into the `down` story so the operator sees WHICH handle
 /// is still open rather than an idle process and an unreleased lock.
 final class StationWorkUnwindReport {
-  /// Reports [timedOutSteps] abandoned and [stores] as the confirm pass found.
+  /// Reports [timedOutSteps] abandoned and [stores] as the confirm pass found,
+  /// the whole unwind having spent [elapsed] of its [deadline].
   const StationWorkUnwindReport({
     required this.timedOutSteps,
     required this.stores,
+    this.deadline = kUnwindDeadline,
+    this.elapsed = Duration.zero,
   });
 
   /// The unwind steps that outlived their budget, in shutdown order.
@@ -1072,6 +1125,12 @@ final class StationWorkUnwindReport {
 
   /// The store-handle confirm pass.
   final StoreCloseReport stores;
+
+  /// The TOTAL the unwind ran under.
+  final Duration deadline;
+
+  /// The wall-clock the unwind actually spent.
+  final Duration elapsed;
 
   /// True when every step completed and every handle confirmed its close.
   bool get isClean => timedOutSteps.isEmpty && stores.allConfirmed;
@@ -2230,7 +2289,7 @@ Future<StationWorkRuntime> _acquireStationWork({
       await settle(
         'state bundle shutdown',
         stateBundle.shutdown,
-        within: within,
+        within: within(),
         onRefusal: refusalSink,
         onTimeout: onTimeout,
       );
@@ -2238,7 +2297,7 @@ Future<StationWorkRuntime> _acquireStationWork({
         await settle(
           'work bundle shutdown (${entry.key})',
           entry.value.shutdown,
-          within: within,
+          within: within(),
           onRefusal: refusalSink,
           onTimeout: onTimeout,
         );
@@ -2246,7 +2305,7 @@ Future<StationWorkRuntime> _acquireStationWork({
       await settle(
         'federated source dispose',
         work.dispose,
-        within: within,
+        within: within(),
         onRefusal: refusalSink,
         onTimeout: onTimeout,
       );
@@ -2383,11 +2442,6 @@ Future<GitRunResult> ghRunner(String workDir, List<String> args) async {
   );
 }
 
-/// The INERT git service for dry-run — a no-op `git` (every invocation an
-/// empty success) so `listBeadWorktrees` parses an empty worktree set WITHOUT
-/// executing a real `git`, the restart reconcile finds no survivors, and
-/// `provisionWorktree` materializes NOTHING. Exposed for the inertness
-/// regression tests.
 /// How long an attach waits for a proxied store to publish its proxy pid and
 /// SQL endpoint before refusing (tg-ejzb). bd materialises the proxy on the
 /// first command against the store, so a freshly initialised store attached
@@ -2500,6 +2554,11 @@ WorkBeadLandGate buildWorkBeadLandGate({
   };
 };
 
+/// The INERT git service for dry-run — a no-op `git` (every invocation an
+/// empty success) so `listBeadWorktrees` parses an empty worktree set WITHOUT
+/// executing a real `git`, the restart reconcile finds no survivors, and
+/// `provisionWorktree` materializes NOTHING. Exposed for the inertness
+/// regression tests.
 StationGitService buildDryStationGitService() => DryStationGitService();
 
 /// Adapts a live [GridControllerRuntime] to the engine's [SnapshotSource] —

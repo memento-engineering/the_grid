@@ -640,9 +640,8 @@ void main() {
       expect(await settle('continued', () => continued = true), isTrue);
       expect(refusals, [
         'unwind step "throwing" failed: Bad state: exploded',
-        startsWith(
-          'unwind step "timed out" failed: TimeoutException after 0:00:00.005000',
-        ),
+        'unwind step "timed out" failed: budget of 5ms expired — no longer '
+            'awaited',
         'unwind step "asynchronous throwing" failed: '
             'Bad state: async exploded',
       ]);
@@ -687,8 +686,8 @@ void main() {
       ]);
       expect(
         report.outstanding[0].reason,
-        'close refused: Bad state: '
-        'close refused: earth',
+        'close refused (unwind step "store close (earth)" failed: Bad state: '
+        'close refused: earth)',
       );
       expect(
         report.outstanding[1].reason,
@@ -699,16 +698,18 @@ void main() {
       expect(report.narrative, [
         'store connections closed: 1/3',
         'store handle still outstanding: "earth" ((endpoint not vended)) — '
-            'close refused: Bad state: close refused: earth',
+            'close refused (unwind step "store close (earth)" failed: Bad '
+            'state: close refused: earth)',
         'store handle still outstanding: "mars" ((endpoint not vended)) — '
             'close did not confirm within 40ms',
       ]);
+      // The per-handle refusal IS the settle step line — the same
+      // `store close (<name>)` step the resident shell has always printed.
       expect(refusals, [
-        'unwind: store handle "earth" ((endpoint not vended)) — close '
-            'refused: Bad state: close refused: earth — still open, no '
+        'unwind step "store close (earth)" failed: Bad state: close refused: '
+            'earth',
+        'unwind step "store close (mars)" failed: budget of 40ms expired — no '
             'longer awaited',
-        'unwind: store handle "mars" ((endpoint not vended)) — close did '
-            'not confirm within 40ms — still open, no longer awaited',
       ]);
       expect(flares.map((flare) => flare.name), [
         'unwind.storeHandleOutstanding',
@@ -748,6 +749,96 @@ void main() {
         isFalse,
       );
       expect(timedOut, [('hung', within)]);
+    });
+
+    test('an action that THROWS a TimeoutException is a failure, not a budget '
+        'expiry: onTimeout never fires and the line carries the action\'s own '
+        'exception (tg-supq review)', () async {
+      final timedOut = <String>[];
+      final refusals = <String>[];
+      // The reviewer's case: a close whose own internal timer fires fast,
+      // well inside a generous budget.
+      expect(
+        await settle(
+          'self-timing close',
+          () async {
+            await Future<void>.delayed(const Duration(milliseconds: 5));
+            throw TimeoutException(
+              'dolt close gave up',
+              const Duration(seconds: 1),
+            );
+          },
+          within: const Duration(seconds: 5),
+          onRefusal: refusals.add,
+          onTimeout: (step, _) => timedOut.add(step),
+        ),
+        isFalse,
+      );
+      // Synchronously thrown, too.
+      expect(
+        await settle(
+          'sync self-timing close',
+          () => throw TimeoutException('sync gave up'),
+          within: const Duration(seconds: 5),
+          onRefusal: refusals.add,
+          onTimeout: (step, _) => timedOut.add(step),
+        ),
+        isFalse,
+      );
+      expect(timedOut, isEmpty);
+      expect(refusals, [
+        'unwind step "self-timing close" failed: TimeoutException after '
+            '0:00:01.000000: dolt close gave up',
+        'unwind step "sync self-timing close" failed: TimeoutException: sync '
+            'gave up',
+      ]);
+      expect(refusals.join('\n'), isNot(contains('budget of')));
+    });
+
+    test('UnwindDeadline clamps each budget to what is left, holds back a '
+        'reserve, and hands out zero once spent', () async {
+      final deadline = UnwindDeadline(const Duration(milliseconds: 200));
+      expect(
+        deadline.budget(const Duration(seconds: 5)),
+        lessThanOrEqualTo(const Duration(milliseconds: 200)),
+      );
+      expect(
+        deadline.budget(const Duration(milliseconds: 10)),
+        const Duration(milliseconds: 10),
+      );
+      expect(
+        deadline.budget(
+          const Duration(seconds: 5),
+          reserve: const Duration(milliseconds: 100),
+        ),
+        lessThanOrEqualTo(const Duration(milliseconds: 100)),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+      expect(deadline.expired, isTrue);
+      expect(deadline.budget(const Duration(seconds: 5)), Duration.zero);
+    });
+
+    test('the store pass under a spent deadline still REQUESTS every close '
+        'and names each handle without waiting', () async {
+      final deadline = UnwindDeadline(Duration.zero);
+      final stores = [
+        for (var i = 0; i < 6; i++) _FakeStore('store$i', hangs: true),
+      ];
+      final watch = Stopwatch()..start();
+      final report = await closeStoreConnections(
+        stores,
+        deadline: deadline,
+        onRefusal: (_) {},
+      ).timeout(const Duration(seconds: 5));
+      watch.stop();
+      expect(watch.elapsed, lessThan(const Duration(seconds: 1)));
+      expect(report.closed, isEmpty);
+      expect(report.outstanding.map((handle) => handle.name), [
+        for (var i = 0; i < 6; i++) 'store$i',
+      ]);
+      for (final store in stores) {
+        expect(store.closeCalls, 1, reason: '${store.name} close requested');
+      }
     });
   });
 
@@ -807,6 +898,8 @@ void main() {
       void Function(String)? onRefusal,
       Map<String, String>? environment,
       EndpointWarmRunnerFactory? endpointWarmRunnerFactory,
+      List<String> extraWork = const <String>[],
+      GridRuntimeBundle Function(String storeName)? workBundleFor,
     }) => assembleStationWork(
       stateStore: GridStateStore.forGridRoot('${temporary.path}/home'),
       substations: [
@@ -815,6 +908,12 @@ void main() {
           root: '${temporary.path}/first',
           head: 'main',
         ),
+        for (final name in extraWork)
+          SubstationWorkSpec(
+            name: name,
+            root: '${temporary.path}/$name',
+            head: 'main',
+          ),
       ],
       resolver: const _NullResolver(),
       dryRun: dryRun,
@@ -833,7 +932,9 @@ void main() {
             required storeName,
             required workspace,
             required buildDefault,
-          }) async => storeName == 'state' ? stateBundle : workBundle,
+          }) async => storeName == 'state'
+          ? stateBundle
+          : workBundleFor?.call(storeName) ?? workBundle,
       federatedSourceBuilder: ({required buildDefault}) => federated,
       joinBridgeBuilder: ({required buildDefault}) => bridge,
       driverBuilder: driverBuilder,
@@ -1855,11 +1956,13 @@ void main() {
         // Both the bundle step and the confirm pass attempted the close: a
         // refused-or-expired close is retried, never dropped.
         expect(hanging.closeCalls, 2);
+        // A budget expiry is rendered AS an expiry — never as a
+        // TimeoutException the step's action might itself have thrown.
         expect(refusals, [
-          startsWith(
-            'unwind step "state bundle shutdown" failed: TimeoutException '
-            'after 0:00:00.100000',
-          ),
+          'unwind step "state bundle shutdown" failed: budget of 100ms '
+              'expired — no longer awaited',
+          'unwind step "store close (state)" failed: budget of 80ms expired '
+              '— no longer awaited',
           'unwind: store handle "state" (127.0.0.1:65123/tranquility) — close '
               'did not confirm within 80ms — still open, no longer awaited',
         ]);
@@ -1873,6 +1976,7 @@ void main() {
         expect(transport.flares[0].data, {
           'step': 'state bundle shutdown',
           'budgetMs': '100',
+          'deadlineMs': '${kUnwindDeadline.inMilliseconds}',
         });
         expect(transport.flares[1].data, {
           'store': 'state',
@@ -1884,8 +1988,11 @@ void main() {
           'closedStores': 'trajectory',
           'outstandingStores': 'state',
           'timedOutSteps': 'state bundle shutdown',
+          'deadlineMs': '${kUnwindDeadline.inMilliseconds}',
+          'elapsedMs': '${report.elapsed.inMilliseconds}',
           'clean': 'false',
         });
+        expect(report.elapsed, lessThan(kUnwindDeadline));
 
         // Idempotent: the second call is the same unwind, not a second one.
         expect(identical(await runtime.shutdown(), report), isTrue);
@@ -1957,14 +2064,133 @@ void main() {
         expect(report.stores.allConfirmed, isTrue);
         expect(report.isClean, isFalse);
         expect(refusals, [
-          startsWith(
-            'unwind step "work bundle shutdown (first)" failed: '
-            'TimeoutException after 0:00:00.050000',
-          ),
+          'unwind step "work bundle shutdown (first)" failed: budget of 50ms '
+              'expired — no longer awaited',
         ]);
         expect(federated.disposeCalls, 1);
       },
     );
+
+    test('on a roster-scale unwind where EVERY source bundle and EVERY store '
+        'handle hangs, ONE total deadline bounds the wall clock — per-step '
+        'budgets alone would sum to ~90 s — while every close is still '
+        'requested and every hung thing is named (tg-supq review)', () async {
+      // Lunar's roster shape: the state store plus twelve work stores
+      // beside `first` — thirteen pooled handles, thirteen bundles.
+      final extra = [
+        for (var i = 1; i <= 12; i++) 'w${i.toString().padLeft(2, '0')}',
+      ];
+      for (final name in extra) {
+        _seedStore('${temporary.path}/$name', database: name);
+      }
+      final events = <String>[];
+      final refusals = <String>[];
+      final transport = _RecordingTransport();
+      final pools = <String, _HangingDoltQueryService>{};
+      GridRuntimeBundle hangingBundle(String name, String event) {
+        final pool = pools[name] ??= _HangingDoltQueryService();
+        return GridRuntimeBundle(
+          runtime: _GatedGridControllerRuntime(label: name, events: events),
+          probeReader: const _EmptyBeadProbeReader(),
+          readPath: ReadPath.sql,
+          dolt: pool,
+          shutdown: () async {
+            events.add(event);
+            await pool.close();
+          },
+        );
+      }
+
+      final provider = _RecordingProvider(events);
+      final trajectory = await _recordingTrajectory(events);
+      final federated = _RecordingFederatedSource(events);
+      final bridge = _RecordingJoinBridge(events);
+      final runtime = await assembleRecordingRuntime(
+        workBundle: hangingBundle('first', 'work bundle shutdown (first)'),
+        workBundleFor: (name) =>
+            hangingBundle(name, 'work bundle shutdown ($name)'),
+        extraWork: extra,
+        stateBundle: hangingBundle('state', 'state bundle shutdown'),
+        provider: provider,
+        trajectory: trajectory,
+        federated: federated,
+        bridge: bridge,
+        transport: transport,
+        onRefusal: refusals.add,
+        driverBuilder: ({required buildDefault}) =>
+            _RecordingStartDriver(bridge: bridge, events: events),
+      );
+      final work = ['first', ...extra];
+      expect(runtime.openStores.map((store) => store.name), [
+        'state',
+        'trajectory',
+        ...work,
+      ]);
+      events.clear();
+
+      // DEFAULT per-step (5 s) and per-close (2 s) budgets: summed over
+      // this roster they are 14 x 5 s + 14 x 2 s. Only the total bounds it.
+      const deadline = Duration(milliseconds: 800);
+      final watch = Stopwatch()..start();
+      final report = await runtime
+          .shutdown(deadline: deadline)
+          .timeout(const Duration(seconds: 20));
+      watch.stop();
+
+      expect(
+        watch.elapsed,
+        lessThan(deadline + const Duration(milliseconds: 1500)),
+        reason: 'the unwind is bounded by its TOTAL, not the per-step sum',
+      );
+      expect(report.deadline, deadline);
+      // Every bundle step was still STARTED — a close never requested is a
+      // socket never closed — and every pool saw a close.
+      expect(events, containsAllInOrder(['trajectory.shutdown']));
+      for (final name in work) {
+        expect(events, contains('work bundle shutdown ($name)'));
+      }
+      expect(events, contains('state bundle shutdown'));
+      expect(events, contains('federated source dispose'));
+      for (final entry in pools.entries) {
+        expect(
+          entry.value.closeCalls,
+          greaterThanOrEqualTo(1),
+          reason: '${entry.key} pool close requested',
+        );
+      }
+      // Every hung thing is named.
+      expect(
+        report.timedOutSteps,
+        containsAll([
+          'state bundle shutdown',
+          for (final name in work) 'work bundle shutdown ($name)',
+        ]),
+      );
+      expect(report.stores.closed, ['trajectory']);
+      expect(report.stores.outstanding.map((handle) => handle.name), [
+        'state',
+        ...work,
+      ]);
+      for (final name in ['state', ...work]) {
+        expect(
+          refusals,
+          contains(
+            'unwind: store handle "$name" '
+            '(127.0.0.1:65123/tranquility) — close did not confirm within '
+            '0ms — still open, no longer awaited',
+          ),
+          reason: 'past the deadline each handle is named, not awaited',
+        );
+      }
+    });
+
+    test('the default total deadline sits inside the down client grace', () {
+      // grid_cli's `kStationStopGrace` (10 s) is the authoritative pin (a
+      // grid_cli test compares the two directly; grid_sdk cannot import it).
+      expect(kUnwindDeadline, lessThan(const Duration(seconds: 10)));
+      expect(kUnwindStepBudget, lessThanOrEqualTo(kUnwindDeadline));
+      expect(kStoreCloseTimeout, lessThanOrEqualTo(kUnwindDeadline));
+    });
 
     test(
       'GridHandle.teardown names an orphan sweep that outlives its budget and '
