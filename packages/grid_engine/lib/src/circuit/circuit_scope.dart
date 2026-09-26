@@ -29,6 +29,7 @@ import '../sdk/cursor.dart';
 import '../sdk/circuit.dart';
 import '../sdk/frontier.dart';
 import 'capability_registry.dart';
+import 'failure_policy.dart';
 import 'session_handle.dart';
 
 /// The pure inflater for one circuit instance rooted at [nodePath], under
@@ -43,6 +44,8 @@ class CircuitScope extends StatelessSeed with GridDiagnosticable {
     required this.cursor,
     required this.nodePath,
     this.circuitRoundsByPath = const {},
+    this.adoptedFailures = const {},
+    this.onAdoptedLatch,
     super.key,
   });
 
@@ -59,6 +62,13 @@ class CircuitScope extends StatelessSeed with GridDiagnosticable {
 
   /// Session circuit incarnation by full step node path.
   final Map<String, int> circuitRoundsByPath;
+
+  /// Exhausted durable failures selected by SessionScope for adoption-time
+  /// re-evaluation, keyed by exact full node path.
+  final Map<String, PersistedFailureEvidence> adoptedFailures;
+
+  /// The existing breaker-close seam for a shared-policy `latchFailed` result.
+  final AdoptedFailureLatch? onAdoptedLatch;
 
   @override
   void debugFillProperties(DiagnosticsBuilder properties) {
@@ -123,8 +133,9 @@ class CircuitScope extends StatelessSeed with GridDiagnosticable {
     for (final step in circuit.steps) {
       final path = stepPath(nodePath, step.stepId);
       final node = cursorNodeAt(cursor, path);
+      final adoptedFailure = adoptedFailures[path];
       Seed? effect;
-      if (eligiblePaths.contains(path)) {
+      if (eligiblePaths.contains(path) || adoptedFailure != null) {
         switch (step) {
           case CapabilityStep():
             final beadId = beadIds[path];
@@ -165,6 +176,8 @@ class CircuitScope extends StatelessSeed with GridDiagnosticable {
                 ),
                 backoff: circuit.backoff,
                 maxRestarts: circuit.maxRestarts,
+                adoptedFailure: adoptedFailure,
+                onAdoptedLatch: onAdoptedLatch,
               ),
             );
           case SubCircuitStep(:final circuitId):
@@ -175,6 +188,8 @@ class CircuitScope extends StatelessSeed with GridDiagnosticable {
                 cursor: cursor,
                 nodePath: path,
                 circuitRoundsByPath: circuitRoundsByPath,
+                adoptedFailures: adoptedFailures,
+                onAdoptedLatch: onAdoptedLatch,
                 key: ValueKey('$path/scope'),
               );
             }

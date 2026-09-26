@@ -67,20 +67,39 @@ void main() {
     final forbiddenEmitter = RegExp(
       '($pouredConstructor|$supersededConstructor)',
     );
-    final emitterScope = <File>{
-      ..._dartFiles(enginePackage),
-      ..._dartFiles(runtimeLib),
-    };
-    expect(emitterScope, isNotEmpty);
-    for (final file in emitterScope) {
+    final engineEmitterScope = _dartFiles(
+      enginePackage,
+    ).toList(growable: false);
+    expect(engineEmitterScope, isNotEmpty);
+    for (final file in engineEmitterScope) {
       expect(
         file.readAsStringSync(),
         isNot(matches(forbiddenEmitter)),
-        reason: 'G2-1 adds no record emitter: ${file.path}',
+        reason: 'grid_engine never constructs trajectory records: ${file.path}',
       );
     }
 
-    final nonOffDefault = RegExp(r'=\s*G2Posture\.(?:shadow|cut)\b');
+    final recorderPath =
+        '${workspace.path}/packages/grid_runtime/lib/src/trajectory/'
+        'station_trajectory_recorder.dart';
+    for (final file in _dartFiles(runtimeLib)) {
+      final source = file.readAsStringSync();
+      if (file.path == recorderPath) {
+        expect(RegExp(pouredConstructor).allMatches(source), hasLength(1));
+        expect(RegExp(supersededConstructor).allMatches(source), hasLength(1));
+      } else {
+        expect(
+          source,
+          isNot(matches(forbiddenEmitter)),
+          reason:
+              'only the station recorder constructs G2 records: ${file.path}',
+        );
+      }
+    }
+
+    final nonOffDefault = RegExp(
+      r'=\s*(?:G2Posture|G2EmissionMode)\.(?:shadow|cut)\b',
+    );
     final productionLibraries = <File>[
       for (final package in packageRoot.listSync().whereType<Directory>())
         if (Directory('${package.path}/lib').existsSync())

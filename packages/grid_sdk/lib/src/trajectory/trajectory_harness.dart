@@ -753,6 +753,22 @@ class TrajectoryHarness {
         return;
       }
 
+      // THE STALE TERMINAL-GUARD REFUSAL — unconditional because every
+      // terminal append writes this durable table at every posture. The
+      // migration preserves rows but changes the primary-key shape, so it is
+      // quiesce-only and belongs to `traj replay`, never boot-time mutation.
+      if (await terminalGuardNeedsSubjectKey(db)) {
+        _degrade(
+          'traj_terminal_guard still uses the attempt-only key — the '
+          'trajectory refuses to arm rather than append against a stale '
+          'terminal identity constraint. Run the QUIESCED migration first: '
+          '`traj replay` (station down), which preserves every guard row and '
+          'migrates the key to (subject_kind, subject_id).',
+        );
+        await _closeDbQuietly();
+        return;
+      }
+
       final claim = await appender.claimEpoch(
         pid: _identity.pid,
         pgid: _identity.pgid,
@@ -897,9 +913,9 @@ class TrajectoryHarness {
   /// observed terminal it exists to yield to.
   bool hasQueuedAppendForAttemptOrSession({
     required String sessionId,
-    required String attemptId,
+    required String? attemptId,
   }) {
-    if (hasQueuedAppendFor(attemptId)) return true;
+    if (attemptId != null && hasQueuedAppendFor(attemptId)) return true;
     if (_inFlightTerminalSessionId == sessionId) return true;
     for (final entry in _queue) {
       final request = entry.request;
@@ -944,8 +960,9 @@ class TrajectoryHarness {
     try {
       final existing = await _serialize(
         () => _requireDb().execute(
-          'SELECT attempt_id FROM traj_terminal_guard '
-          'WHERE attempt_id = :attempt_id LIMIT 1',
+          'SELECT subject_id FROM traj_terminal_guard '
+          "WHERE subject_kind = 'attempt' AND subject_id = :attempt_id "
+          'LIMIT 1',
           {'attempt_id': request.attemptId},
         ),
       );

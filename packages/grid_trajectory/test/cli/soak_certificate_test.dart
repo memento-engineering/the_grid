@@ -309,4 +309,45 @@ void main() {
       );
     });
   });
+
+  test('G2 round diagnostics are reported but never gated', () {
+    final cleanRows = seededBoots();
+    final diagnosticRows = seededBoots(
+      dirty: const {
+        52: {
+          'g2_molecule_graph_mismatches': 1,
+          'g2_molecule_graph_mismatches_in_window': 1,
+          'g2_molecule_graph_mismatches_historical': 0,
+        },
+      },
+    );
+    SoakCertificate fold(List<TrajectoryEnvelope> rows) => foldSoakCertificate(
+      requestedBoots: 3,
+      claimedEpochs: const [50, 51, 52],
+      windows: [
+        for (final epoch in const [50, 51, 52]) _window(epoch, rows),
+      ],
+    );
+
+    final clean = fold(cleanRows);
+    final diagnostic = fold(diagnosticRows);
+    expect(diagnostic.certified, clean.certified);
+    expect(diagnostic.exitCode, clean.exitCode);
+    expect(
+      diagnostic.items.map((item) => item.toJson()).toList(),
+      clean.items.map((item) => item.toJson()).toList(),
+    );
+    expect(diagnostic.boots.last.g2DiagnosticRounds, hasLength(1));
+    final json = diagnostic.boots.last.toJson();
+    final rounds = json['g2_round_diagnostics']! as List<Object?>;
+    expect(rounds, hasLength(1));
+    expect((rounds.single! as Map<String, Object?>)['epoch'], 52);
+    expect('$rounds', contains('g2_molecule_graph_mismatches'));
+    expect(
+      kCertificateGatingCounters.toSet().intersection(
+        kG2DiagnosticCounters.toSet(),
+      ),
+      isEmpty,
+    );
+  });
 }

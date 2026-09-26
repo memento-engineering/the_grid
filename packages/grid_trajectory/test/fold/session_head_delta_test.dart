@@ -385,13 +385,14 @@ void main() {
       TrajectoryProvenance provenance = TrajectoryProvenance.observed,
       String? unknownReason,
       String? resolvesRecordId,
+      bool attemptless = false,
       int seq = 2,
     }) => envelope(
       recordType: 'attempt.terminal',
       family: TrajectoryFamily.attempt,
       seq: seq,
       sessionId: 'tranquility-1',
-      attemptId: '01J8ATTEMPT000000000000002',
+      attemptId: attemptless ? null : '01J8ATTEMPT000000000000002',
       outcome: outcome,
       unknownReason: unknownReason,
       resolvesRecordId: resolvesRecordId,
@@ -408,6 +409,25 @@ void main() {
       }
       return rows['tranquility-1']!;
     }
+
+    test(
+      'an attempt-less terminal uses the existing session-id delta path',
+      () {
+        final record = terminal(
+          outcome: TerminalOutcome.lost,
+          provenance: TrajectoryProvenance.reconstructed,
+          attemptless: true,
+        );
+
+        final update = sessionHeadDeltaFor(record)! as SessionHeadUpdate;
+
+        expect(update.sessionId, 'tranquility-1');
+        expect(update.columns['status'], 'closed');
+        expect(update.columns['outcome'], 'lost');
+        expect(update.guardAttemptId, isNull);
+        expect(update.guardTerminalLess, isTrue);
+      },
+    );
 
     test('a RECONSTRUCTED terminal marks a terminal-less head and carries the '
         'explicit-unknown word', () {

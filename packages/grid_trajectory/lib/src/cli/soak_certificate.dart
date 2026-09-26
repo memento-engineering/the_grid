@@ -147,6 +147,46 @@ const List<String> kCertificateReportedCounters = [
   'append_ack_p99_ms',
 ];
 
+/// G2 counters retained per round as report-only diagnostics.
+///
+/// Decision `the_grid#the-g1-certificate-is-one-clean-primary-boot` retired
+/// comparator counters as gates. These keys therefore never join
+/// [kCertificateGatingCounters], never affect a certificate row, and never
+/// create a G2 streak or artifact. `traj certify` only reuses this file's row
+/// shape to make the diagnostics readable.
+const List<String> kG2DiagnosticCounters = [
+  'g2_append_failures',
+  'g2_append_failures_in_window',
+  'g2_append_failures_historical',
+  'g2_fold_failures',
+  'g2_fold_failures_in_window',
+  'g2_fold_failures_historical',
+  'g2_comparison_failures',
+  'g2_comparison_failures_in_window',
+  'g2_comparison_failures_historical',
+  'g2_projection_fallbacks',
+  'g2_projection_fallbacks_in_window',
+  'g2_projection_fallbacks_historical',
+  'g2_molecule_graph_mismatches',
+  'g2_molecule_graph_mismatches_in_window',
+  'g2_molecule_graph_mismatches_historical',
+  'g2_graph_apply_plan_mismatches',
+  'g2_graph_apply_plan_mismatches_in_window',
+  'g2_graph_apply_plan_mismatches_historical',
+  'g2_successor_relationship_mismatches',
+  'g2_successor_relationship_mismatches_in_window',
+  'g2_successor_relationship_mismatches_historical',
+  'g2_successor_depth_mismatches',
+  'g2_successor_depth_mismatches_in_window',
+  'g2_successor_depth_mismatches_historical',
+  'g2_non_atomic_crash_gaps',
+  'g2_non_atomic_crash_gaps_in_window',
+  'g2_non_atomic_crash_gaps_historical',
+  'g2_unexplained_mismatches',
+  'g2_unexplained_mismatches_in_window',
+  'g2_unexplained_mismatches_historical',
+];
+
 /// §W2.5's EPOCH ANCHOR (`clean`, structural): an unseeded snapshot classifies
 /// EVERY miss legacy-era, so a boot without this timestamp prints a
 /// `miss_post_epoch_total` of 0 that is zero BY CONSTRUCTION. The doc refuses
@@ -358,6 +398,7 @@ class BootEvidence {
     required this.offSeatRounds,
     required this.unjoinedRounds,
     required this.nonRoundNotes,
+    required this.g2DiagnosticRounds,
     this.governing,
   });
 
@@ -394,6 +435,9 @@ class BootEvidence {
   /// went. [governing] is normally one of them.
   final int nonRoundNotes;
 
+  /// Ordered round-scoped summaries carrying at least one G2 diagnostic key.
+  final List<RoundSummaryNote> g2DiagnosticRounds;
+
   /// The measured numbers, gating first, absent keys carried as null so a
   /// reader can tell "zero" from "never emitted".
   Map<String, Object?> get counters => <String, Object?>{
@@ -427,6 +471,23 @@ class BootEvidence {
     'off_seat_rounds': offSeatRounds,
     'unjoined_rounds': unjoinedRounds,
     'non_round_notes': nonRoundNotes,
+    'g2_round_diagnostics': [
+      for (final note in g2DiagnosticRounds)
+        <String, Object?>{
+          'epoch': epoch,
+          'seq': note.seq,
+          'session_id': note.sessionId,
+          'scope': note.scope,
+          'taxonomy': [
+            for (final key in kG2DiagnosticCounters)
+              if ((note.intOf(key) ?? 0) > 0) key,
+          ],
+          'counts': <String, int>{
+            for (final key in kG2DiagnosticCounters)
+              if ((note.intOf(key) ?? 0) > 0) key: note.intOf(key)!,
+          },
+        },
+    ],
   };
 }
 
@@ -624,6 +685,12 @@ BootEvidence foldBootEvidence(
     offSeatRounds: offSeat,
     unjoinedRounds: unjoined,
     nonRoundNotes: nonRound,
+    g2DiagnosticRounds: [
+      for (final note in notes)
+        if (note.isRoundScoped &&
+            kG2DiagnosticCounters.any(note.body.containsKey))
+          note,
+    ],
   );
 }
 

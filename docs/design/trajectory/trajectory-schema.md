@@ -73,7 +73,8 @@ erDiagram
         JSON payload "codec-validated, type-specific"
     }
     traj_terminal_guard {
-        CHAR attempt_id PK
+        ENUM subject_kind PK "attempt or session"
+        VARCHAR subject_id PK "attempt_id, or session_id for a pre-spawn void heal"
         BIGINT seq "the latest terminal in the chain"
         CHAR settled_by "record_id of the resolving terminal"
     }
@@ -86,7 +87,7 @@ erDiagram
     }
     traj_epoch ||--o{ trajectory : "boot_epoch, per station"
     traj_fence ||..o{ trajectory : "counter-CAS on every append"
-    traj_terminal_guard ||--o{ trajectory : "attempt_id, seq of attempt.terminal"
+    traj_terminal_guard ||--o{ trajectory : "subject kind/id, seq of attempt.terminal"
     trajectory ||..o| traj_pulse : "attempt_id equals subject_id"
     traj_epoch ||..|| traj_fence : "one cell per station"
 ```
@@ -211,7 +212,7 @@ flowchart LR
 | `attempt.liveness.lost` / `.regained` | last_beat_at✓, threshold_ms✓ | Raw beats are **not records** — they ride `traj_pulse` (working-set, dolt_ignore'd); only threshold *transitions* append, **keyed on the observed crossing** (`liveness:<attempt_id>:<last_beat_at µs>:<lost\|regained>` — deterministic per observation, idempotent under retry of that observation; a five-flap attempt records five losses, major fix). **The detector honours `unknown`** (major fix): it may emit `lost` only for an attempt whose beat it has itself observed **within the current epoch** — an empty pulse table after any of the five `unknown` paths (restore, rebuild, epoch advance, branch switch, `--force` trap recovery — §10/§13) yields `unknown`, never `lost`, so a restore cannot mint terminals for live attempts. `traj_pulse` is truncated at epoch advance; rows prune on attempt terminal (§4). |
 | `attempt.lease.acquired` / `.released` / `.swept` | token✓ (= attempt_id), disposition:enum(held,released,killed,refused_unsafe,left_adoptable), terminate_result, clear_failure | The in-place breadcrumb overwrite becomes append history. |
 | `attempt.adopt.proved` | outcome:enum(adopted,respawned)✓, fence_pgid, fence_pid | Adopted-vs-respawned durable for the first time. |
-| `attempt.terminal` | reason; envelope outcome✓, unknown_reason when unknown; `resolves_record_id` on a **settling** terminal | One terminal type (merge of `.succeeded/.escalated/.lost/.settled`). Voiding stops rewriting `work_bead`; `outcome='lost'` + intact keys replace `#void-`. One record, **no tail** — head stamp, gate sweep, worktree reap are derived obligations (§5). **An unknown terminal is settleable** (major fix): a later probe appends a second `attempt.terminal` with `resolves_record_id` → the unknown one; `traj_terminal_guard` permits the chain while still refusing two *independent* terminals (§4). |
+| `attempt.terminal` | reason; envelope outcome✓, unknown_reason when unknown; `resolves_record_id` on a **settling** terminal | One terminal type (merge of `.succeeded/.escalated/.lost/.settled`). Voiding stops rewriting `work_bead`; `outcome='lost'` + intact keys replace `#void-`. An ordinary terminal is attempt-keyed. Only a reconstructed heal for a never-spawned, void-closed session may omit `attempt_id` and use `session_id` as the guard subject. One record, **no tail** — head stamp, gate sweep, worktree reap are derived obligations (§5). **An unknown terminal is settleable** (major fix): a later probe appends a second `attempt.terminal` with `resolves_record_id` → the unknown one; `traj_terminal_guard` permits the chain while still refusing two *independent* terminals (§4). |
 | `attempt.round.retired` | old_round✓, new_round✓, cause:enum(rework,void)✓ | Bumps envelope `round` only. Merges `attempt.round.closed`. Operator note/spec-clear stays a bd write (B). |
 | `attempt.rework_declined` | reason✓ | HELD served from P1. |
 | `attempt.mint.outcome` | phase:enum(failed,exhausted,abandoned,refused)✓, mint_attempt✓, max_attempts, stage, reason | Merge of the four mint flares; durable for the first time; keyed by `work_bead_id` + `mount_attempt_id`. |
@@ -550,18 +551,40 @@ CREATE TABLE trajectory (
   CONSTRAINT ck_substation CHECK (work_bead_id IS NULL OR substation IS NOT NULL)
 );
 
--- one UNSETTLED terminal per attempt, structurally, even under a key-grammar bug —
--- while PERMITTING the settlement chain (major fix):
+-- one UNSETTLED terminal per subject, structurally, even under a key-grammar
+-- bug — while PERMITTING the settlement chain (major fix). The session
+-- subject is reserved for a never-spawned void heal:
 CREATE TABLE traj_terminal_guard (
-  attempt_id CHAR(26) NOT NULL PRIMARY KEY,
-  seq        BIGINT   NOT NULL,       -- the latest terminal in the chain
-  settled_by CHAR(26) NULL            -- record_id of the resolving terminal, if any
+  subject_kind ENUM('attempt','session') NOT NULL,
+  subject_id   VARCHAR(40) NOT NULL,
+  seq          BIGINT NOT NULL,       -- the latest terminal in the chain
+  settled_by   CHAR(26) NULL,         -- record_id of the resolving terminal, if any
+  PRIMARY KEY (subject_kind, subject_id)
 );
 -- Rule: an attempt.terminal with resolves_record_id IS NULL INSERTs (a second
 -- independent terminal fails the PK — the invariant footnote 1 argued for, kept).
 -- A SETTLING terminal (resolves_record_id set, pointing at the prior terminal)
 -- UPDATEs seq + settled_by instead of inserting. "No two independent terminals"
 -- holds; "unknown, then healed" (Q8) is finally possible for attempts, not just acks.
+-- Existing homes migrate in place under the quiescence fence through the one
+-- migration home, `traj replay`: add subject_kind defaulted to `attempt`, drop
+-- the old PK, rename+widen attempt_id to subject_id, then add the composite PK.
+-- This preserves every prior attempt row. `traj replay --check` reports the
+-- stale shape, and the harness refuses it before claiming authority with the
+-- exact quiesced-replay operator action.
+
+The attempt-less void heal keeps the one terminal vocabulary. Its unsettled
+identity text is `terminal-reconcile:session:<sessionId>`; a settling form is
+`terminal-resolve:session:<sessionId>:<recordId>`. It carries `outcome='lost'`,
+`provenance='reconstructed'`, and the session id without inventing an attempt.
+The fixed pre-spawn-void reason takes the existing bounded derivation path:
+`TrajectoryAppender` bounds the log-row `*_reason` fields and
+`sessionHeadDeltaFor` bounds projection `*_reason` fields from the §4 DDL via
+`boundReasonColumns`. There is no width change or second derivation site. This
+applies `the_grid#reason-columns-are-bounded-at-derivation`: “Every column the
+Section 4 DDL declares whose name ends `_reason` is shaped to its declared
+width — parsed from the DDL, never a hand-copied list — at the point the writer
+derives it.”
 
 -- coalesced liveness pulses: dolt_ignore'd, working-set only, NON-rebuildable,
 -- never an admission input; ≥30s per subject; also carries federation lease beats

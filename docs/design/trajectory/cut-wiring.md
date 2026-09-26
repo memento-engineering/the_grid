@@ -1303,8 +1303,17 @@ decide is marked **r6 design, not ruled**.
   ever being settled over. `inferred` is the tick's vocabulary for SETTLEMENTS (`:273`).
   The amendment ratifies that shipped word. Census
   correction from #341's review: 161 of the 267 orphans are retired `#rN` rounds the fold
-  keeps OPEN by design (E9); 36 heads heal; 70 attempt-less heads stay open by rule (Q-A,
-  open). (2) W2-A: under cut the three terminal appends become `appendAcked` (E5 class,
+  keeps OPEN by design (E9); 36 heads heal. The later attempt-less void repair adds a
+  separately bounded arm for open heads with no attempt id. A candidate advances through
+  grace only when `sessionClosureOf` reports a present, non-retired `lost` closure — the
+  void re-key. Open ledger sessions, absent beads, retired rounds, and every non-lost close
+  remain untouched. After grace it appends the same `attempt.terminal` vocabulary with the
+  session id, no attempt id, `outcome='lost'`, `provenance='reconstructed'`, heal basis
+  `terminal-reconcile`, and a session-subject guard. The fold's existing session-id delta
+  closes that attempt-less head; no alternate terminal type or clean-row exemption exists.
+  The heal reason continues through the DDL-derived reason bounding in `TrajectoryAppender`
+  and `sessionHeadDeltaFor`, with no width change or second derivation site, applying
+  `the_grid#reason-columns-are-bounded-at-derivation`. (2) W2-A: under cut the three terminal appends become `appendAcked` (E5 class,
   `decisionBearing`); a lost terminal ack HALTS (E2) — but the bd close already happened,
   so the obligation closes the loop on the next boot. "Read P1 once the input is
   complete" is made concrete in W2-B: the barrier's terminal predicate is P1-terminal OR

@@ -29,10 +29,13 @@
 /// [seedSessionAttempt] / [seedRound].
 library;
 
+import 'dart:math' as math;
+
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:meta/meta.dart';
 
 import '../lifecycle/bead_ownership.dart';
+import 'canonical_molecule_graph.dart';
 import 'trajectory_append_result.dart';
 
 /// The flare seam — shape-compatible with `ExplorationTransport.flare` (and
@@ -259,6 +262,7 @@ final class TrajectoryRecorderStats {
     required this.derived,
     required this.skipped,
     required this.deriveFailures,
+    required this.g2ShadowAppendDivergences,
   });
 
   /// Records built and handed to the sink.
@@ -272,10 +276,14 @@ final class TrajectoryRecorderStats {
   /// propagated into the legacy path.
   final int deriveFailures;
 
+  /// Stage-2 shadow appends that did not earn an acknowledgement.
+  final int g2ShadowAppendDivergences;
+
   @override
   String toString() =>
       'TrajectoryRecorderStats(derived: $derived, skipped: $skipped, '
-      'deriveFailures: $deriveFailures)';
+      'deriveFailures: $deriveFailures, '
+      'g2ShadowAppendDivergences: $g2ShadowAppendDivergences)';
 }
 
 /// The engine-side derivation layer (stage1-wiring §2), constructed by the
@@ -402,11 +410,13 @@ class StationTrajectoryRecorder {
   int _derived = 0;
   int _skipped = 0;
   int _deriveFailures = 0;
+  int _g2ShadowAppendDivergences = 0;
 
   TrajectoryRecorderStats get stats => TrajectoryRecorderStats(
     derived: _derived,
     skipped: _skipped,
     deriveFailures: _deriveFailures,
+    g2ShadowAppendDivergences: _g2ShadowAppendDivergences,
   );
 
   /// Whether the sink currently accepts records. Exposed for ONE purpose: a
@@ -1201,6 +1211,32 @@ class StationTrajectoryRecorder {
   // reason the whole recorder exists (§2's "the ONLY code that names concrete
   // record classes").
 
+  /// `molecule.poured` — after the authoritative legacy graph write returns.
+  ///
+  /// [molecule] is the one canonical value already used to build the legacy
+  /// graph plan. This observation copies its trajectory payload rather than
+  /// deriving the graph a second time.
+  Future<TrajectoryAppendResult> moleculePoured({
+    required String sessionId,
+    required CanonicalMoleculeGraph molecule,
+    DateTime? occurredAt,
+  }) => _observeG2Acked(
+    site: 'moleculePoured',
+    recordType: 'molecule.poured',
+    sessionId: sessionId,
+    derive: () => DerivedRecord(
+      MoleculePoured(
+        sessionId: sessionId,
+        round: _rounds[sessionId] ?? 0,
+        formula: molecule.formula,
+        graph: molecule.graph,
+        nodeCount: molecule.nodeCount,
+        graphDigest: molecule.graphDigest,
+      ),
+    ),
+    occurredAt: occurredAt,
+  );
+
   /// `step.transition(running)` — after `_persistStarted`'s step-bead write.
   /// Non-terminal: it carries the kick instant and nothing else.
   Future<TrajectoryAppendResult> stepRunning({
@@ -1406,6 +1442,36 @@ class StationTrajectoryRecorder {
     );
   }
 
+  /// `step.superseded` — after the authoritative successor write returns.
+  ///
+  /// The logical step keeps [stepPath], while the successor advances exactly
+  /// one structural generation. [spentRounds] is the verdict-bearing budget
+  /// spend, which is distinct from that structural depth.
+  Future<TrajectoryAppendResult> stepSuperseded({
+    required String sessionId,
+    required String stepPath,
+    required int currentDepth,
+    required int spentRounds,
+    required int maxReworkRounds,
+    DateTime? occurredAt,
+  }) => _observeG2Acked(
+    site: 'stepSuperseded',
+    recordType: 'step.superseded',
+    sessionId: sessionId,
+    derive: () => DerivedRecord(
+      StepSuperseded(
+        sessionId: sessionId,
+        round: _rounds[sessionId] ?? 0,
+        stepPath: stepPath,
+        cause: 'validation-failed',
+        budgetRemaining: math.max(0, maxReworkRounds - (spentRounds + 1)),
+        oldStepRound: currentDepth,
+        newStepRound: currentDepth + 1,
+      ),
+    ),
+    occurredAt: occurredAt,
+  );
+
   // ── worktree builders (§2.3 worktree rows) ───────────────────────────────
 
   /// `worktree.provisioned` — INSIDE `provisionWorktree`, where `preexisting`
@@ -1567,7 +1633,8 @@ class StationTrajectoryRecorder {
   /// never observed the process end — so the provenance stays `reconstructed`.
   DerivedRecord buildTerminalReconciled({
     required String sessionId,
-    required String attemptId,
+    String? attemptId,
+    bool mintAttemptIfMissing = true,
     String? workBeadId,
     String? reason,
     TerminalOutcome outcome = TerminalOutcome.unknown,
@@ -1581,6 +1648,7 @@ class StationTrajectoryRecorder {
         ? kExternalCloseUnknownReason
         : null,
     healBasis: kTerminalReconcileBasis,
+    mintAttemptIfMissing: mintAttemptIfMissing,
   );
 
   /// The `worktree.reaped` record — the observation method's builder, and the
@@ -1853,6 +1921,7 @@ class StationTrajectoryRecorder {
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
     void Function()? afterEnqueue,
+    void Function(Object error)? onError,
   }) {
     try {
       final derived = derive();
@@ -1878,6 +1947,7 @@ class StationTrajectoryRecorder {
           (value) => value,
           onError: (Object error, StackTrace stackTrace) {
             _deriveFailures += 1;
+            onError?.call(error);
             _flare('trajectory.deriveFailed', {
               'site': site,
               'reason': '$error',
@@ -1901,9 +1971,65 @@ class StationTrajectoryRecorder {
       return Future.value(const TrajectoryAppendResult.acked());
     } on Object catch (error) {
       _deriveFailures += 1;
+      onError?.call(error);
       _flare('trajectory.deriveFailed', {'site': site, 'reason': '$error'});
       return Future.value(const TrajectoryAppendResult.dropped());
     }
+  }
+
+  Future<TrajectoryAppendResult> _observeG2Acked({
+    required String site,
+    required String recordType,
+    required String sessionId,
+    required DerivedRecord Function() derive,
+    DateTime? occurredAt,
+  }) {
+    String? failureReason;
+    return _observeAcked(
+      site,
+      derive,
+      occurredAt: occurredAt,
+      onError: (error) => failureReason = '$error',
+    ).then((result) {
+      switch (result) {
+        case Acked():
+          break;
+        case Dropped():
+          _recordG2ShadowAppendDivergence(
+            site: site,
+            recordType: recordType,
+            sessionId: sessionId,
+            disposition: 'dropped',
+            reason: failureReason,
+          );
+        case Suppressed():
+          _recordG2ShadowAppendDivergence(
+            site: site,
+            recordType: recordType,
+            sessionId: sessionId,
+            disposition: 'suppressed',
+            reason: failureReason,
+          );
+      }
+      return result;
+    });
+  }
+
+  void _recordG2ShadowAppendDivergence({
+    required String site,
+    required String recordType,
+    required String sessionId,
+    required String disposition,
+    String? reason,
+  }) {
+    _g2ShadowAppendDivergences += 1;
+    _flare('trajectory.g2ShadowAppendDivergence', {
+      'site': site,
+      'recordType': recordType,
+      'sessionId': sessionId,
+      'disposition': disposition,
+      if (reason != null) 'reason': reason,
+    });
   }
 
   void _terminal({
@@ -1973,11 +2099,12 @@ class StationTrajectoryRecorder {
     String? healBasis,
     String? resolvesRecordId,
     String mintedAttemptBasis = kRecorderMintedAttemptBasis,
+    bool mintAttemptIfMissing = true,
   }) {
     final parsed = workBeadId == null ? null : parseLegacyWorkKey(workBeadId);
     String? attemptIdBasis;
     var resolved = attemptId ?? _sessionAttempts[sessionId];
-    if (resolved == null) {
+    if (resolved == null && mintAttemptIfMissing) {
       // No breadcrumb, no cached mint, no seed: mint and SAY SO rather than
       // refuse — such rows are outside the shadow's comparable set (§2.1).
       resolved = _mintUlid();

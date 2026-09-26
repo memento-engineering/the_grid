@@ -288,7 +288,7 @@ WorktreeOutstandingFinding evaluateWorktreeOutstanding({
       detail:
           '$kWorktreeOutstandingClause: the P6 mirror has not beaten for '
           '$kWorktreeOutstandingStaleTicks tick intervals '
-          '(${read.staleAfter.inSeconds}s; last beat '
+          '(${read.staleAfter.inSeconds}s; beat source P6; last beat '
           '${beat == null ? 'never' : beat.toUtc().toIso8601String()}; '
           'mirror health ${read.health?.name ?? 'unknown'}) — '
           'a wedged harness cannot prove this bead has no outstanding worktree',

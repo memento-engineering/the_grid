@@ -448,9 +448,6 @@ class StationWorkRuntime implements SubstationProvisioner {
   /// stuck?" from raw sessions. A plain derived VALUE, read fresh per request.
   WedgeState get wedge => _driver.wedge;
 
-  /// Samples [snapshot] through the owned wedge latch for one status request.
-  WedgeState wedgeFor(JoinedSnapshot snapshot) => _driver.wedgeFor(snapshot);
-
   /// A fresh plain-value read of the trajectory posture, append counters,
   /// and—when dual read is armed—the shared soak-certification instrument.
   Map<String, Object?> trajectoryStatus() {
@@ -1071,6 +1068,10 @@ typedef StationWorkDriverBuilder =
 /// resource without acquiring the default; once returned, that resource's
 /// lifetime transfers to this assembly. Null builders invoke their default
 /// exactly once in the existing acquisition order.
+/// [endpointWarmRunnerFactory] is a boot-only, read-only seam for the bounded
+/// bd calls that materialize an ephemeral proxied endpoint and verify that the
+/// resolved binary can serve the store's dolt mode. It does not participate in
+/// later sync or reconnects.
 ///
 /// [registryBuilder] retains the original one-argument capability seam.
 /// [registryBuilderWithSpecWriter] adds the SPECIFY-authored prose seam without
@@ -1119,6 +1120,7 @@ Future<StationWorkRuntime> assembleStationWork({
   TrajectoryConfig trajectoryConfig = const TrajectoryConfig(),
   TrajectoryHarness? trajectoryOverride,
   Map<String, String>? environment,
+  EndpointWarmRunnerFactory? endpointWarmRunnerFactory,
   StationWorkBundleBuilder? bundleBuilder,
   StationWorkFederatedSourceBuilder? federatedSourceBuilder,
   StationWorkJoinBridgeBuilder? joinBridgeBuilder,
@@ -1131,6 +1133,11 @@ Future<StationWorkRuntime> assembleStationWork({
   final g2G1PrerequisiteRefusal =
       resolvedTrajectoryConfig.g2G1PrerequisiteRefusal;
   if (g2G1PrerequisiteRefusal != null) throw g2G1PrerequisiteRefusal;
+  final g2EmissionMode = switch (resolvedTrajectoryConfig.g2Posture) {
+    G2Posture.off => G2EmissionMode.off,
+    G2Posture.shadow => G2EmissionMode.shadow,
+    G2Posture.cut => G2EmissionMode.cut,
+  };
   final cutPostureRefusal = resolvedTrajectoryConfig.cutPostureRefusal;
   if (cutPostureRefusal != null) throw cutPostureRefusal;
 
@@ -1191,7 +1198,10 @@ Future<StationWorkRuntime> assembleStationWork({
       root: p.canonicalize(s.root),
       substationName: s.name,
     );
-    final ws = BeadsWorkspace.discover(start: s.root);
+    final ws = await BeadsWorkspace.discoverWarmed(
+      start: s.root,
+      warmRunnerFactory: endpointWarmRunnerFactory,
+    );
     if (ws == null || !_sameCanonicalRoot(ws.root, s.root)) {
       throw StoreRefusal(
         'assembleStationWork: substation "${s.name}": could not parse the work '
@@ -1207,7 +1217,10 @@ Future<StationWorkRuntime> assembleStationWork({
       'the substation-init process (docs/SUBSTATION-INIT.md) before arming.',
     );
   }
-  final stateWs = BeadsWorkspace.discover(start: stateStore.runtimeDir);
+  final stateWs = await BeadsWorkspace.discoverWarmed(
+    start: stateStore.runtimeDir,
+    warmRunnerFactory: endpointWarmRunnerFactory,
+  );
   if (stateWs == null ||
       !_sameCanonicalRoot(stateWs.root, stateStore.runtimeDir)) {
     throw StoreRefusal(
@@ -1235,6 +1248,22 @@ Future<StationWorkRuntime> assembleStationWork({
       '${stateWs.endpointResolution.diagnostic ?? 'endpoint resolution failed.'}',
     );
   }
+
+  final bdModeCapabilities = <String, Future<void>>{};
+  for (final entry in workspacesByName.entries) {
+    await _requireBdModeCapability(
+      storeLabel: 'assembleStationWork: substation "${entry.key}"',
+      workspace: entry.value,
+      endpointWarmRunnerFactory: endpointWarmRunnerFactory,
+      capabilities: bdModeCapabilities,
+    );
+  }
+  await _requireBdModeCapability(
+    storeLabel: 'assembleStationWork: state store',
+    workspace: stateWs,
+    endpointWarmRunnerFactory: endpointWarmRunnerFactory,
+    capabilities: bdModeCapabilities,
+  );
 
   final refusalSink = onRefusal ?? (String m) => stdout.writeln(m);
   final MaintenanceSink stateStorePruneSink =
@@ -1264,6 +1293,7 @@ Future<StationWorkRuntime> assembleStationWork({
       wedgePollInterval: wedgePollInterval,
       syncFloorInterval: syncFloorInterval,
       trajectoryConfig: resolvedTrajectoryConfig,
+      g2EmissionMode: g2EmissionMode,
       trajectoryOverride: trajectoryOverride,
       bundleBuilder: bundleBuilder,
       federatedSourceBuilder: federatedSourceBuilder,
@@ -1272,6 +1302,8 @@ Future<StationWorkRuntime> assembleStationWork({
       workspacesByName: workspacesByName,
       stateWorkspace: stateWs,
       stateSubstation: stateSubstation,
+      endpointWarmRunnerFactory: endpointWarmRunnerFactory,
+      bdModeCapabilities: bdModeCapabilities,
       refusalSink: refusalSink,
       disposers: disposers,
     );
@@ -1310,6 +1342,7 @@ Future<StationWorkRuntime> _acquireStationWork({
   required Duration wedgePollInterval,
   required Duration syncFloorInterval,
   required TrajectoryConfig trajectoryConfig,
+  required G2EmissionMode g2EmissionMode,
   required TrajectoryHarness? trajectoryOverride,
   required StationWorkBundleBuilder? bundleBuilder,
   required StationWorkFederatedSourceBuilder? federatedSourceBuilder,
@@ -1318,6 +1351,8 @@ Future<StationWorkRuntime> _acquireStationWork({
   required Map<String, BeadsWorkspace> workspacesByName,
   required BeadsWorkspace stateWorkspace,
   required String stateSubstation,
+  required EndpointWarmRunnerFactory? endpointWarmRunnerFactory,
+  required Map<String, Future<void>> bdModeCapabilities,
   required void Function(String message) refusalSink,
   required List<({String step, FutureOr<void> Function() dispose})> disposers,
 }) async {
@@ -1827,6 +1862,8 @@ Future<StationWorkRuntime> _acquireStationWork({
     // The barrier's observer, shared with the ambient recorder scope below so
     // the authority path and the offline path count onto ONE bookkeeper.
     admissionBarrier: admissionBarrier,
+    g2EmissionMode: g2EmissionMode,
+    trajectoryRecorder: recorder,
     // THE COMPLETION FENCE. A detached one-shot agent's vanish is reported as an
     // INFERRED clean exit — a murder and a completion look identical on the wire.
     // The engine advances the circuit on such an exit only for a capability that
@@ -1959,9 +1996,19 @@ Future<StationWorkRuntime> _acquireStationWork({
     // THE BARRIER's third mirror (§W2.4 W2-B): the pre-fetched P6
     // process/worktree identity read, on the same terms as P1 and P2 — a
     // value the pure join takes, null at `off` so the clause stays disarmed.
+    // Its publication seam also stays null at `off`; while armed it rebuilds
+    // the SAME JoinedSnapshot and bead-scoped eligibility revision consumed by
+    // StationAdmissionAuthority (admission-authority-in-process-cut), so a
+    // resumed heartbeat cannot leave the authority evaluating a stale basis.
     processIdentitySnapshot: dualReadArmed
         ? () => trajectory.processIdentities
         : null,
+    onProcessIdentityChanges: !dualReadArmed
+        ? null
+        : (listener) => trajectory.onProcessIdentitiesChanged(
+            listener,
+            fireImmediately: false,
+          ),
   );
   final bridge =
       joinBridgeBuilder?.call(buildDefault: buildJoinBridgeDefault) ??
@@ -2039,12 +2086,15 @@ Future<StationWorkRuntime> _acquireStationWork({
       await stateBundle.runtime.start();
     },
     sourcesShutdown: () async {
+      final shutdownBundles = List<MapEntry<String, GridRuntimeBundle>>.of(
+        bundles.entries,
+      );
       await settle(
         'state bundle shutdown',
         stateBundle.shutdown,
         onRefusal: refusalSink,
       );
-      for (final entry in bundles.entries) {
+      for (final entry in shutdownBundles) {
         await settle(
           'work bundle shutdown (${entry.key})',
           entry.value.shutdown,
@@ -2078,17 +2128,25 @@ Future<StationWorkRuntime> _acquireStationWork({
     rootsByName: rootsByName,
     specsByName: <String, SubstationWorkSpec>{},
     dryRun: dryRun,
-    buildMember: (workspace, storeName) => GridRuntimeFactory.build(
-      workspace: workspace,
-      preferSql: preferSql,
-      syncFloorInterval: syncFloorInterval,
-      lifecycleTypes: {...IssueType.coreTypes, ...GridIssueTypes.all},
-      onDirtySourceClosed: (source) => transport?.flare(
-        'sync.dirtySignalsClosed',
-        {'substation': storeName, 'source': source},
-      ),
-      onReadRefusal: (message) => unresolvedSink('[$storeName] $message'),
-    ),
+    buildMember: (workspace, storeName) async {
+      await _requireBdModeCapability(
+        storeLabel: 'attach "$storeName"',
+        workspace: workspace,
+        endpointWarmRunnerFactory: endpointWarmRunnerFactory,
+        capabilities: bdModeCapabilities,
+      );
+      return GridRuntimeFactory.build(
+        workspace: workspace,
+        preferSql: preferSql,
+        syncFloorInterval: syncFloorInterval,
+        lifecycleTypes: {...IssueType.coreTypes, ...GridIssueTypes.all},
+        onDirtySourceClosed: (source) => transport?.flare(
+          'sync.dirtySignalsClosed',
+          {'substation': storeName, 'source': source},
+        ),
+        onReadRefusal: (message) => unresolvedSink('[$storeName] $message'),
+      );
+    },
     buildWorkWriter: (spec, bundle) => StationBeadWriter(
       bd: BdCliService(
         // Runtime-attached dry seats obey the same ownership rule as coded
@@ -2107,6 +2165,28 @@ Future<StationWorkRuntime> _acquireStationWork({
   runtime._bindRoster(roster);
   commands.bindRoster(roster);
   return runtime;
+}
+
+Future<void> _requireBdModeCapability({
+  required String storeLabel,
+  required BeadsWorkspace workspace,
+  required EndpointWarmRunnerFactory? endpointWarmRunnerFactory,
+  required Map<String, Future<void>> capabilities,
+}) async {
+  if (workspace.mode != DoltMode.proxiedServer) return;
+
+  final runner =
+      endpointWarmRunnerFactory?.call(workspace.root) ??
+      ProcessBdRunner(workspaceRoot: workspace.root);
+  final bd = BdCliService(runner, doltMode: workspace.mode);
+  final key = '${bd.resolvedExecutable}\u0000proxied-server';
+  await capabilities.putIfAbsent(key, () async {
+    try {
+      await bd.ensureDoltModeSupported(storePath: workspace.root);
+    } on BdGuardrailRefused catch (error) {
+      throw StoreRefusal('$storeLabel: ${error.message}');
+    }
+  });
 }
 
 /// The station's WORK-SIGNAL probe — the live binding of the engine's COMPLETION

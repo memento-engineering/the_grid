@@ -24,10 +24,28 @@ void main() {
         now: t0,
       );
       expect(sample.live, 2);
+      expect(sample.paused, 0);
+      expect(sample.active, 2);
       expect(sample.running, 0);
       expect(sample.gated, 2);
       expect(sample.isStalled, isTrue);
-      expect(sample.reason, contains('ALL 2'));
+      expect(sample.reason, contains('2 open gate bead(s)'));
+    });
+
+    test('joined open-gate evidence wins exactly over cursor fallback', () {
+      final sample = sampleWedge(
+        _join({'tg-1': _gated(openGateBeadCount: 2)}),
+        now: t0,
+      );
+
+      expect(sample.gated, 2, reason: 'the gated cursor must not add a third');
+      expect(sample.toJson(), {
+        'live': 1,
+        'paused': 0,
+        'running': 0,
+        'gated': 2,
+        'cooling': 0,
+      });
     });
 
     test('sampleWedge exposes sorted frozen session ids', () {
@@ -258,6 +276,7 @@ void main() {
 
         expect(transport.flares, hasLength(1));
         expect(transport.flares.single.name, 'station.wedged');
+        expect(transport.flares.single.data['paused'], '0');
         expect(transport.flares.single.data['gated'], '2');
         expect(transport.flares.single.data['since'], t0.toIso8601String());
 
@@ -310,19 +329,69 @@ void main() {
       expect(transport.flares[1].data, {
         'since': t0.toIso8601String(),
         'reason':
-            'ALL 3 live session(s) parked at a gate; 0 running, 0 cooling '
-            'down — no forward progress',
+            '3 open gate bead(s) across 3 active session(s) leave work parked '
+            'at a gate; 0 running, 0 cooling down — no forward progress',
         'live': '3',
+        'paused': '0',
         'running': '0',
         'gated': '3',
         'cooling': '0',
         'frozenSessionIds': '["tgdog-s1","tgdog-s2","tgdog-s3"]',
         'previousLive': '2',
+        'previousPaused': '0',
         'previousRunning': '0',
         'previousGated': '2',
         'previousCooling': '0',
       });
     });
+
+    test(
+      'paused is part of the change tuple and all-paused is a falling edge',
+      () {
+        sessions = {
+          'tg-1': _gated(
+            workBeadId: 'tg-1',
+            sessionId: 'tgdog-s1',
+            openGateBeadCount: 1,
+          ),
+          'tg-2': _gated(
+            workBeadId: 'tg-2',
+            sessionId: 'tgdog-s2',
+            openGateBeadCount: 1,
+          ),
+        };
+        monitor.start();
+        clock.advance(const Duration(minutes: 10));
+        timers.fireAll();
+        expect(transport.names, ['station.wedged']);
+
+        sessions['tg-1'] = _gated(
+          workBeadId: 'tg-1',
+          sessionId: 'tgdog-s1',
+          pauseState: SessionPauseState.paused,
+          openGateBeadCount: 1,
+        );
+        monitor.poll();
+        expect(transport.names, ['station.wedged', 'station.wedgeChanged']);
+        expect(transport.flares.last.data['paused'], '1');
+        expect(transport.flares.last.data['previousPaused'], '0');
+
+        sessions['tg-2'] = _gated(
+          workBeadId: 'tg-2',
+          sessionId: 'tgdog-s2',
+          pauseState: SessionPauseState.paused,
+          openGateBeadCount: 1,
+        );
+        monitor.poll();
+        expect(transport.names, [
+          'station.wedged',
+          'station.wedgeChanged',
+          'station.unwedged',
+        ]);
+        expect(monitor.state.sample.active, 0);
+        expect(monitor.state.sample.reason, contains('operator-paused'));
+      },
+    );
 
     test(
       'any running session clears the wedge (one station.unwedged), and a NEW '
@@ -473,11 +542,13 @@ SessionProjection _molecule(
   String? sessionId = 'tgdog-x',
   SessionPauseState pauseState = SessionPauseState.none,
   bool terminal = false,
+  int openGateBeadCount = 0,
 }) => SessionProjection(
   workBeadId: workBeadId,
   sessionId: sessionId,
   pauseState: pauseState,
   isTerminal: terminal,
+  openGateBeadCount: openGateBeadCount,
   isMolecule: true,
   moleculeBeads: steps,
 );
@@ -487,12 +558,14 @@ SessionProjection _gated({
   String? sessionId = 'tgdog-x',
   SessionPauseState pauseState = SessionPauseState.none,
   bool terminal = false,
+  int openGateBeadCount = 0,
 }) => _molecule(
   [_step('$workBeadId/spec_review', state: StepState.gated)],
   workBeadId: workBeadId,
   sessionId: sessionId,
   pauseState: pauseState,
   terminal: terminal,
+  openGateBeadCount: openGateBeadCount,
 );
 
 SessionProjection _running({

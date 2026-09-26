@@ -167,6 +167,14 @@ abstract class SessionProjection with _$SessionProjection {
     /// parked node (`SessionScope` flips it back to `pending`).
     @Default(<String>{}) Set<String> openGateNodes,
 
+    /// The exact number of OPEN `type=gate` beads blocking this session.
+    ///
+    /// This is deliberately distinct from [openGateNodes]: multiple durable
+    /// gates may name the same node path, while the re-arm path only needs the
+    /// unique set. Status reporting needs the bead count so it agrees with the
+    /// state store rather than under-counting duplicate-node gates.
+    @Default(0) int openGateBeadCount,
+
     /// The number of CLOSED `type=gate` beads for each structural step
     /// incarnation in this session. Keys are produced by [closedGateCountKey].
     /// The join derives this history from the watched state snapshot; this is

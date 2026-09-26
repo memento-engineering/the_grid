@@ -1,3 +1,9 @@
+## 0.2.1-dev.8
+
+ - **FIX**(trajectory): close voided prespawn session heads (#502).
+ - **FIX**(rework): require minted successors for readiness holds (#495).
+ - **FEAT**(trajectory): emit G2 molecule and successor shadows (#503).
+
 ## 0.2.1-dev.7
 
  - **FIX**(engine): publish closed external dependency targets (#494).

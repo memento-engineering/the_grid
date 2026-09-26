@@ -152,6 +152,30 @@ final class _RecordingStateRunner implements BdRunner {
   }
 }
 
+final class _ScriptedModeProbeRunner implements BdRunner {
+  _ScriptedModeProbeRunner(this.calls);
+
+  final List<List<String>> calls;
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    calls.add(List<String>.unmodifiable(args));
+    return switch (args) {
+      ['query', 'id=grid-endpoint-warm', '--all', '--json', '--limit', '0'] ||
+      ['types', '--json'] => const BdResult(
+        exitCode: 0,
+        stdout: '{"schema_version":1,"data":{}}',
+        stderr: '',
+      ),
+      _ => throw StateError('unexpected mode-probe call: $args'),
+    };
+  }
+}
+
 final class _RecordingTransport implements ExplorationTransport {
   final List<({String name, Map<String, String> data})> flares = [];
 
@@ -644,6 +668,7 @@ void main() {
       ExplorationTransport? transport,
       void Function(String)? onRefusal,
       Map<String, String>? environment,
+      EndpointWarmRunnerFactory? endpointWarmRunnerFactory,
     }) => assembleStationWork(
       stateStore: GridStateStore.forGridRoot('${temporary.path}/home'),
       substations: [
@@ -662,6 +687,7 @@ void main() {
       transport: transport,
       onRefusal: onRefusal,
       environment: environment,
+      endpointWarmRunnerFactory: endpointWarmRunnerFactory,
       trajectoryConfig: trajectoryConfig,
       trajectoryOverride: trajectory,
       bundleBuilder:
@@ -916,6 +942,7 @@ void main() {
       final bridge = _RecordingJoinBridge(events);
       final transport = _RecordingTransport();
       final banners = <String>[];
+      final modeProbeCalls = <List<String>>[];
       late _RecordingStartDriver driver;
       final runtime = await assembleRecordingRuntime(
         workBundle: workBundle,
@@ -930,6 +957,8 @@ void main() {
         transport: transport,
         onRefusal: banners.add,
         environment: const {kGridG1BreakGlass: reason},
+        endpointWarmRunnerFactory: (_) =>
+            _ScriptedModeProbeRunner(modeProbeCalls),
         driverBuilder: ({required buildDefault}) =>
             driver = _RecordingStartDriver(bridge: bridge, events: events),
       );
@@ -952,6 +981,10 @@ void main() {
       final writes = runner.calls.map((call) => call.join(' ')).join('\n');
       expect(writes, contains('grid.voided_reason=break-glass:$reason'));
       expect(banners, ['grid: BREAK-GLASS reason=$reason voided=2']);
+      expect(modeProbeCalls, [
+        ['query', 'id=grid-endpoint-warm', '--all', '--json', '--limit', '0'],
+        ['types', '--json'],
+      ]);
       final breakGlassFlares = transport.flares
           .where((flare) => flare.name == 'trajectory.breakGlass')
           .toList(growable: false);
@@ -992,6 +1025,7 @@ void main() {
       );
       final federated = _RecordingFederatedSource(events);
       final bridge = _RecordingJoinBridge(events);
+      final modeProbeCalls = <List<String>>[];
       late _RecordingStartDriver driver;
       final runtime = await assembleRecordingRuntime(
         workBundle: workBundle,
@@ -1002,6 +1036,8 @@ void main() {
         bridge: bridge,
         trajectoryConfig: cut,
         dryRun: false,
+        endpointWarmRunnerFactory: (_) =>
+            _ScriptedModeProbeRunner(modeProbeCalls),
         driverBuilder: ({required buildDefault}) =>
             driver = _RecordingStartDriver(bridge: bridge, events: events),
       );
@@ -1019,6 +1055,10 @@ void main() {
       expect(failure.error, same(first));
       expect(driver.startCalls, 0);
       expect(events, contains('trajectory.shutdown'));
+      expect(modeProbeCalls, [
+        ['query', 'id=grid-endpoint-warm', '--all', '--json', '--limit', '0'],
+        ['types', '--json'],
+      ]);
 
       await expectLater(
         runtime.start(),
@@ -1140,6 +1180,7 @@ void main() {
         );
         final federated = _RecordingFederatedSource(events);
         final bridge = _RecordingJoinBridge(events);
+        final modeProbeCalls = <List<String>>[];
         late _RecordingStartDriver driver;
         final runtime = await assembleRecordingRuntime(
           workBundle: workBundle,
@@ -1151,6 +1192,8 @@ void main() {
           trajectoryConfig: cut,
           dryRun: false,
           onRefusal: refusals.add,
+          endpointWarmRunnerFactory: (_) =>
+              _ScriptedModeProbeRunner(modeProbeCalls),
           driverBuilder: ({required buildDefault}) =>
               driver = _RecordingStartDriver(bridge: bridge, events: events),
         );
@@ -1193,6 +1236,10 @@ void main() {
         expect(stateSource.requeryCalls, 4);
         expect(driver.startCalls, 0);
         expect(db.closed, isTrue);
+        expect(modeProbeCalls, [
+          ['query', 'id=grid-endpoint-warm', '--all', '--json', '--limit', '0'],
+          ['types', '--json'],
+        ]);
         expect(
           events.where((event) => event == 'trajectory.shutdown'),
           hasLength(1),
@@ -1628,6 +1675,7 @@ void main() {
         'trajectoryConfig',
         'trajectoryOverride',
         'environment',
+        'endpointWarmRunnerFactory',
         'bundleBuilder',
         'federatedSourceBuilder',
         'joinBridgeBuilder',
@@ -1664,6 +1712,16 @@ void main() {
     StationDriver Function({required StationDriver Function() buildDefault});''',
         ),
       );
+      expect(
+        source,
+        contains('''onProcessIdentityChanges: !dualReadArmed
+        ? null
+        : (listener) => trajectory.onProcessIdentitiesChanged(
+            listener,
+            fireImmediately: false,
+          ),'''),
+        reason: 'P6 rejoins only while the dual read is armed',
+      );
       for (final retired in [
         'workBundleOverrides',
         'stateBundleOverride',
@@ -1674,6 +1732,34 @@ void main() {
       }
 
       final assembly = source.substring(signatureStart);
+      final sourcesShutdownStart = assembly.indexOf(
+        '    sourcesShutdown: () async {',
+      );
+      final sourcesShutdownEnd = assembly.indexOf(
+        '\n    freshnessBarrier:',
+        sourcesShutdownStart,
+      );
+      expect(sourcesShutdownStart, isNonNegative);
+      expect(sourcesShutdownEnd, greaterThan(sourcesShutdownStart));
+      final sourcesShutdown = assembly.substring(
+        sourcesShutdownStart,
+        sourcesShutdownEnd,
+      );
+      final shutdownSnapshot = sourcesShutdown.indexOf(
+        '''final shutdownBundles = List<MapEntry<String, GridRuntimeBundle>>.of(
+        bundles.entries,
+      );''',
+      );
+      final firstAwait = sourcesShutdown.indexOf('await settle(');
+      expect(shutdownSnapshot, isNonNegative);
+      expect(firstAwait, greaterThan(shutdownSnapshot));
+      expect(sourcesShutdown, contains('for (final entry in shutdownBundles)'));
+      expect(
+        sourcesShutdown,
+        isNot(contains('for (final entry in bundles.entries)')),
+        reason: 'an awaited shutdown loop must not retain a live map iterator',
+      );
+
       var cursor = 0;
       for (final acquisition in [
         'Future<GridRuntimeBundle> buildDefault() => GridRuntimeFactory.build(',

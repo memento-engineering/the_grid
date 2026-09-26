@@ -115,4 +115,32 @@ void main() {
     expect(result.isIncomplete, isTrue);
     expect(result.incompleteReason, contains('cut at 1 row'));
   });
+
+  test('G2 callback contributes through the same ordered result', () async {
+    final seen = <String>[];
+    final result = await CompositeShadow(
+      [
+        _Lane({'status'}, mismatches: [_mismatch('status')]),
+      ],
+      g2Compare:
+          ({
+            required sessionId,
+            required records,
+            round,
+            required corroboration,
+          }) async {
+            seen.add('$sessionId/$round/${records.isComplete}');
+            return ShadowCompareResult.partial([
+              _mismatch('successor_depth'),
+            ], 'projection absent');
+          },
+    ).compare(sessionId: 's', records: _records, round: 4);
+
+    expect(seen, ['s/4/true']);
+    expect(result.mismatches.map((row) => row.field), [
+      'status',
+      'successor_depth',
+    ]);
+    expect(result.incompleteReason, contains('G2 — projection absent'));
+  });
 }

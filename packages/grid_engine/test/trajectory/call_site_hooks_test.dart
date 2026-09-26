@@ -110,6 +110,69 @@ final class _AckResultSink extends _CapturingSink
   }
 }
 
+final class _OrderedAckSink extends _CapturingSink
+    implements TrajectoryAckRecordSink {
+  _OrderedAckSink(this.events, this.result);
+
+  final List<String> events;
+  final TrajectoryAppendResult result;
+
+  @override
+  Future<TrajectoryAppendResult> appendAcked(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+    required bool decisionBearing,
+  }) async {
+    expect(decisionBearing, isTrue);
+    events.add('append');
+    enqueue(
+      record,
+      occurredAt: occurredAt,
+      substation: substation,
+      provenance: provenance,
+      provenanceBasis: provenanceBasis,
+    );
+    return result;
+  }
+}
+
+final class _OrderedMoleculeRunner extends RecordingBdRunner {
+  _OrderedMoleculeRunner(this.events);
+
+  final List<String> events;
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) async {
+    final result = await super.openBeads(
+      types: types,
+      metadataAll: metadataAll,
+      metadataAny: metadataAny,
+    );
+    if (result.isNotEmpty) events.add('legacy-return');
+    return result;
+  }
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    final result = await super.run(args, timeout: timeout, stdin: stdin);
+    if (args.length > 1 && args[0] == 'create' && args[1] == '--graph') {
+      events.add('legacy-return');
+    }
+    return result;
+  }
+}
+
 /// The LATCHED / degraded / disabled posture: the sink stops accepting, so the
 /// recorder short-circuits every observation to a count.
 final class _RefusingSink implements TrajectoryRecordSink {
@@ -146,6 +209,26 @@ StationTrajectoryRecorder _recorderOver(TrajectoryRecordSink sink) =>
     StationTrajectoryRecorder(
       sink: sink,
       substationPrefixes: const {'tg', 'tgdog'},
+    );
+
+CanonicalMoleculeGraph _canonicalMolecule(String sessionId) =>
+    CanonicalMoleculeGraph(
+      formula: 'code',
+      commitMessage: 'pour code',
+      nodeDefinitions: [
+        GraphNode(
+          key: 'tg-1',
+          title: 'tg-1',
+          type: GridIssueTypes.molecule.wire,
+          parentId: sessionId,
+        ),
+        GraphNode(
+          key: 'tg-1/build',
+          title: 'build',
+          type: GridIssueTypes.step.wire,
+        ),
+      ],
+      edges: const [],
     );
 
 /// The three postures a differential test runs the SAME scenario under.
@@ -947,6 +1030,146 @@ void main() {
       expect(swept.single.disposition, LeaseSweepDisposition.killed);
       expect(sink.records, isEmpty);
     });
+  });
+
+  group('G2 — molecule.poured at the admission authority', () {
+    Future<
+      ({
+        Map<String, String> result,
+        _OrderedAckSink sink,
+        StationTrajectoryRecorder recorder,
+      })
+    >
+    pour({
+      required G2EmissionMode mode,
+      required Map<String, String> graphIds,
+      bool deduplicated = false,
+      TrajectoryAppendResult appendResult =
+          const TrajectoryAppendResult.acked(),
+    }) async {
+      final events = <String>[];
+      final runner = _OrderedMoleculeRunner(events)..graphApplyIds = graphIds;
+      if (deduplicated) {
+        runner.exportBeads = const [
+          Bead(
+            id: 'tgdog-existing',
+            issueType: GridIssueTypes.molecule,
+            status: BeadStatus.open,
+            metadata: {
+              'rig': stateSubstation,
+              MoleculeCircuitKeys.session: 'tgdog-session',
+            },
+          ),
+        ];
+      }
+      final sink = _OrderedAckSink(events, appendResult);
+      final flares = <(String, Map<String, String>)>[];
+      final recorder = StationTrajectoryRecorder(
+        sink: sink,
+        onFlare: (name, data) => flares.add((name, data)),
+      );
+      final provider = FakeRuntimeProvider();
+      addTearDown(provider.close);
+      final services = StationServices(
+        provider: provider,
+        writer: StationBeadWriter(
+          bd: BdCliService(runner),
+          reader: runner,
+          ownership: BeadOwnershipPredicate(const {stateSubstation}),
+        ),
+        stateSubstation: stateSubstation,
+        g2EmissionMode: mode,
+        trajectoryRecorder: recorder,
+      );
+      addTearDown(services.dispose);
+      services.admission.addInvalidationListener(
+        () => events.add('invalidation'),
+      );
+
+      final result = await services.admission.pourMolecule(
+        _canonicalMolecule('tgdog-session'),
+        workBeadId: 'tg-1',
+        sessionId: 'tgdog-session',
+        rootCrumbs: const ['tg-1', 'tgdog-session'],
+        services: const ServiceBundle(),
+      );
+
+      expect(events, [
+        'legacy-return',
+        if (mode != G2EmissionMode.off) 'append',
+        'invalidation',
+      ]);
+      if (appendResult is! Acked) {
+        expect(
+          flares.where(
+            (flare) => flare.$1 == 'trajectory.g2ShadowAppendDivergence',
+          ),
+          hasLength(1),
+        );
+      }
+      return (result: result, sink: sink, recorder: recorder);
+    }
+
+    test('off skips the recorder after the authoritative pour', () async {
+      final observed = await pour(
+        mode: G2EmissionMode.off,
+        graphIds: const {'tg-1': 'tgdog-molecule', 'tg-1/build': 'tgdog-build'},
+      );
+
+      expect(observed.sink.records, isEmpty);
+      expect(observed.recorder.stats.derived, 0);
+    });
+
+    test(
+      'fresh and deduplicated pours append the same deterministic fact',
+      () async {
+        final fresh = await pour(
+          mode: G2EmissionMode.shadow,
+          graphIds: const {
+            'tg-1': 'tgdog-molecule',
+            'tg-1/build': 'tgdog-build',
+          },
+        );
+        final deduplicated = await pour(
+          mode: G2EmissionMode.shadow,
+          graphIds: const {},
+          deduplicated: true,
+        );
+
+        expect(fresh.result, isNotEmpty);
+        expect(deduplicated.result, isEmpty);
+        final context = const IdemContext(station: 'station', bootEpoch: 1);
+        expect(
+          fresh.sink.records.single.idemKeyText(context),
+          'pour:tgdog-session:0',
+        );
+        expect(
+          deduplicated.sink.records.single.idemKeyText(context),
+          'pour:tgdog-session:0',
+        );
+        expect(fresh.sink.fact('molecule.poured')['formula'], 'code');
+      },
+    );
+
+    test(
+      'a failed append flares once without changing the legacy result',
+      () async {
+        final observed = await pour(
+          mode: G2EmissionMode.shadow,
+          graphIds: const {
+            'tg-1': 'tgdog-molecule',
+            'tg-1/build': 'tgdog-build',
+          },
+          appendResult: const TrajectoryAppendResult.dropped(),
+        );
+
+        expect(observed.result, {
+          'tg-1': 'tgdog-molecule',
+          'tg-1/build': 'tgdog-build',
+        });
+        expect(observed.recorder.stats.g2ShadowAppendDivergences, 1);
+      },
+    );
   });
 
   group('W4 — the terminal callers (§2.3, r2 major 6)', () {

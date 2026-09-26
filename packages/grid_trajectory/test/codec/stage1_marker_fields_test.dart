@@ -98,6 +98,25 @@ void main() {
       expect(typed.substationBasis, 'no-owned-prefix');
       expect(typed.payloadToJson(), record.payloadToJson());
     });
+
+    test('an attempt-less terminal round-trips on its session subject', () {
+      final record = AttemptTerminal(
+        sessionId: 's-void',
+        workBeadId: 'tg-9xk2',
+        outcome: TerminalOutcome.lost,
+        healBasis: 'terminal-reconcile',
+      );
+      final typed =
+          TrajectoryCodec.decode(_envelope(record)) as AttemptTerminal;
+
+      expect(typed.attemptId, isNull);
+      expect(typed.sessionId, 's-void');
+      expect(typed.terminalGuardSubject, (
+        kind: TerminalGuardSubjectKind.session,
+        id: 's-void',
+      ));
+      expect(typed.correlationToJson(), record.correlationToJson());
+    });
   });
 
   group('attempt.mint.outcome markers', () {

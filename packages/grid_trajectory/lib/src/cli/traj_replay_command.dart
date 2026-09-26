@@ -31,6 +31,10 @@
 /// `trajectory.seat` became `trajectory.substation`, and a home provisioned
 /// before that carries the old column. Unlike the P1 reshape this one IS an
 /// ALTER — the journal is the versioned log, not rebuildable projection state.
+///
+/// **The terminal-guard key migration** also runs ahead of every projection.
+/// It preserves every attempt-keyed row while widening the durable key to
+/// `(subject_kind, subject_id)` so a never-spawned session may own a terminal.
 library;
 
 import 'dart:io';
@@ -239,6 +243,13 @@ Future<void> _writeCheck(
       '`seat`; a quiesced `traj replay` renames it',
     );
   }
+  if (await terminalGuardNeedsSubjectKey(db)) {
+    write(
+      '  migrate: PENDING — traj_terminal_guard still uses the attempt-only '
+      'key; a quiesced `traj replay` preserves its rows and migrates it to '
+      '(subject_kind, subject_id)',
+    );
+  }
   if (await sessionHeadProjectionNeedsReshape(db)) {
     write(
       '  migrate: PENDING — proj_session_head predates the current '
@@ -291,6 +302,15 @@ Future<int> _rebuild(
     write(
       '  migrate: trajectory.seat RENAMEd to trajectory.substation, '
       'ck_seat re-added as ck_substation',
+    );
+  }
+
+  if (await terminalGuardNeedsSubjectKey(db)) {
+    await migrateTerminalGuardSubjectKey(db);
+    write(
+      '  migrate: traj_terminal_guard keyed by '
+      '(subject_kind, subject_id); existing rows preserved as attempt '
+      'subjects',
     );
   }
 

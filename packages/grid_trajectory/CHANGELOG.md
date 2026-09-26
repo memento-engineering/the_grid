@@ -1,3 +1,7 @@
+## 0.2.1-dev.6
+
+ - **FIX**(trajectory): close voided prespawn session heads (#502).
+
 ## 0.2.1-dev.5
 
  - **FIX**(trajectory): require complete shadow accounting (#485).

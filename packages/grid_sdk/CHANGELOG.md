@@ -1,3 +1,13 @@
+## 0.4.0-dev.7
+
+ - **FIX**(maintenance): restore proxied stores after flatten (tg-l5qd) (#508).
+ - **FIX**(trajectory): refresh P6 heartbeat after resume (#506).
+ - **FIX**(cli): refuse unusable lifecycle vocabularies (#504).
+ - **FIX**: warm stores and report SQL boot fallbacks (#505).
+ - **FIX**(trajectory): close voided prespawn session heads (#502).
+ - **FIX**(rework): require minted successors for readiness holds (#495).
+ - **FEAT**(trajectory): emit G2 molecule and successor shadows (#503).
+
 ## 0.4.0-dev.6
 
  - **FIX**(gate): resume blocked steps on gate resolve and acknowledged re-arm (#486).

@@ -145,9 +145,11 @@ CREATE TABLE IF NOT EXISTS trajectory (
 )''',
   '''
 CREATE TABLE IF NOT EXISTS traj_terminal_guard (
-  attempt_id CHAR(26) NOT NULL PRIMARY KEY,
-  seq        BIGINT   NOT NULL,
-  settled_by CHAR(26) NULL
+  subject_kind ENUM('attempt','session') NOT NULL,
+  subject_id   VARCHAR(40) NOT NULL,
+  seq          BIGINT      NOT NULL,
+  settled_by   CHAR(26)    NULL,
+  PRIMARY KEY (subject_kind, subject_id)
 )''',
   '''
 CREATE TABLE IF NOT EXISTS traj_pulse (
@@ -430,5 +432,44 @@ Future<void> renameJournalSubstationColumn(TrajectoryDb db) async {
   await db.execute(
     'ALTER TABLE trajectory ADD CONSTRAINT ck_substation '
     'CHECK (work_bead_id IS NULL OR substation IS NOT NULL)',
+  );
+}
+
+/// The live column set of the durable terminal guard.
+const String terminalGuardColumnsSql =
+    'SELECT column_name AS name FROM information_schema.columns '
+    "WHERE table_schema = DATABASE() AND table_name = 'traj_terminal_guard'";
+
+/// True when this home's terminal guard still uses the attempt-only key.
+///
+/// An absent table is not migrated speculatively: provisioning creates the
+/// current shape, and this migration exists only for durable legacy rows.
+Future<bool> terminalGuardNeedsSubjectKey(TrajectoryDb db) async {
+  final result = await db.execute(terminalGuardColumnsSql);
+  final columns = {for (final row in result.rows) row['name']?.toLowerCase()};
+  if (columns.isEmpty) return false;
+  return columns.contains('attempt_id') ||
+      !columns.containsAll(const {'subject_kind', 'subject_id'});
+}
+
+/// Migrates the durable attempt-only guard to the attempt-or-session key.
+///
+/// The caller holds the `traj replay` quiescence fence. DDL cannot ride a
+/// transaction, so the lossless order is load-bearing: add the defaulted kind
+/// while every row is still attempt-keyed, release the old primary key, rename
+/// and widen its id column, then establish the composite primary key.
+Future<void> migrateTerminalGuardSubjectKey(TrajectoryDb db) async {
+  await db.execute(
+    'ALTER TABLE traj_terminal_guard ADD COLUMN subject_kind '
+    "ENUM('attempt','session') NOT NULL DEFAULT 'attempt' FIRST",
+  );
+  await db.execute('ALTER TABLE traj_terminal_guard DROP PRIMARY KEY');
+  await db.execute(
+    'ALTER TABLE traj_terminal_guard CHANGE COLUMN attempt_id subject_id '
+    'VARCHAR(40) NOT NULL',
+  );
+  await db.execute(
+    'ALTER TABLE traj_terminal_guard ADD PRIMARY KEY '
+    '(subject_kind, subject_id)',
   );
 }

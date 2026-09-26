@@ -232,4 +232,70 @@ void main() {
       expect(trajectory, contains('CONSTRAINT $constraint'));
     }
   });
+
+  group('the terminal-guard subject-key migration', () {
+    test('fresh homes use the attempt-or-session composite key', () {
+      final guard = trajectoryTableDdl[3];
+      expect(
+        guard,
+        contains("subject_kind ENUM('attempt','session') NOT NULL"),
+      );
+      expect(guard, contains('subject_id   VARCHAR(40) NOT NULL'));
+      expect(guard, contains('PRIMARY KEY (subject_kind, subject_id)'));
+      expect(guard, isNot(contains('attempt_id')));
+    });
+
+    test(
+      'the read-only probe distinguishes old, current, and absent guards',
+      () async {
+        final stale = ScriptedDb()
+          ..on(
+            "table_name = 'traj_terminal_guard'",
+            result: const SqlResult(
+              rows: [
+                {'name': 'attempt_id'},
+                {'name': 'seq'},
+                {'name': 'settled_by'},
+              ],
+            ),
+          );
+        final current = ScriptedDb()
+          ..on(
+            "table_name = 'traj_terminal_guard'",
+            result: const SqlResult(
+              rows: [
+                {'name': 'SUBJECT_KIND'},
+                {'name': 'subject_id'},
+                {'name': 'seq'},
+              ],
+            ),
+          );
+
+        expect(await terminalGuardNeedsSubjectKey(stale), isTrue);
+        expect(await terminalGuardNeedsSubjectKey(current), isFalse);
+        expect(await terminalGuardNeedsSubjectKey(ScriptedDb()), isFalse);
+      },
+    );
+
+    test(
+      'the lossless ALTER order preserves old rows as attempt subjects',
+      () async {
+        final db = ScriptedDb();
+
+        await migrateTerminalGuardSubjectKey(db);
+
+        expect(db.log.map((call) => call.sql), [
+          'ALTER TABLE traj_terminal_guard ADD COLUMN subject_kind '
+              "ENUM('attempt','session') NOT NULL DEFAULT 'attempt' FIRST",
+          'ALTER TABLE traj_terminal_guard DROP PRIMARY KEY',
+          'ALTER TABLE traj_terminal_guard CHANGE COLUMN attempt_id subject_id '
+              'VARCHAR(40) NOT NULL',
+          'ALTER TABLE traj_terminal_guard ADD PRIMARY KEY '
+              '(subject_kind, subject_id)',
+        ]);
+        expect(db.matching('DROP TABLE'), isEmpty);
+        expect(db.matching('START TRANSACTION'), isEmpty);
+      },
+    );
+  });
 }

@@ -1,3 +1,8 @@
+## 0.6.0-dev.6
+
+ - **FIX**(cli): refuse unusable lifecycle vocabularies (#504).
+ - **FIX**(rework): require minted successors for readiness holds (#495).
+
 ## 0.6.0-dev.5
 
  - **FIX**(gate): resume blocked steps on gate resolve and acknowledged re-arm (#486).

@@ -1998,6 +1998,9 @@ final class StationCommandHandler implements GridCommandHandler {
           case StepNodeClass.stepLag:
             accounting.openStepLag += 1;
           case StepNodeClass.divergence:
+            // This incumbent park-cursor disagreement predates G2 and stays
+            // generic: it is a real unexplained divergence, never a G2
+            // taxonomy hit and never a projection fallback success.
             accounting.recordStepDivergence(
               sessionId: sessionId,
               stepPath: node.stepPath,

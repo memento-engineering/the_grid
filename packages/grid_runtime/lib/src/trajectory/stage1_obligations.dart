@@ -133,7 +133,7 @@ typedef SessionClosureProbe = SessionClosure? Function(String sessionId);
 /// SESSION too, because the head's attempt id is the spawn's while an
 /// observed session terminal carries the recorder's per-session id.
 typedef AppendQueuedProbe =
-    bool Function({required String sessionId, required String attemptId});
+    bool Function({required String sessionId, required String? attemptId});
 
 /// Obligation names — stable identifiers for the tick's telemetry and for the
 /// stuck-obligation accounting (schema §5).
@@ -404,7 +404,8 @@ final class UnknownTerminalSettlementObligation extends ObligationQuery {
       't.unknown_reason AS unknown_reason, p.pid AS pid, '
       'p.worktree AS worktree '
       'FROM trajectory t '
-      'JOIN traj_terminal_guard g ON g.attempt_id = t.attempt_id '
+      "JOIN traj_terminal_guard g ON g.subject_kind = 'attempt' "
+      'AND g.subject_id = t.attempt_id '
       'LEFT JOIN proj_process_identity p ON p.attempt_id = t.attempt_id '
       "WHERE t.record_type = 'attempt.terminal' AND t.outcome = 'unknown' "
       "AND t.provenance != 'reconstructed' "
@@ -485,11 +486,11 @@ final class UnknownTerminalSettlementObligation extends ObligationQuery {
 ///     the heal's own (`terminal-reconcile:<attemptId>`), so the comparator's
 ///     heal and this one dedupe against each other.
 ///
-/// A head with no `attempt_id` predates process start: `AttemptTerminal`
-/// requires the id and none is ever minted here, so those rows are left out of
-/// the scan by construction (they would otherwise hold the oldest-first window
-/// forever) and stay open until a real attempt is observed — the same SKIP the
-/// comparator's heal counts.
+/// A head with no `attempt_id` predates process start. A second, independently
+/// bounded arm sees only those heads; it heals one only when the ledger still
+/// holds the session and classifies its close as the void disposition `lost`.
+/// Live pre-spawn heads, absent beads, retired rounds, and non-void closes are
+/// untouched.
 ///
 /// The bd write this record is ABOUT already happened; nothing here writes bd
 /// or the filesystem (the wave-1 invariant). A settled successor is never
@@ -554,22 +555,38 @@ final class ExternalCloseTerminalObligation extends ObligationQuery {
   @override
   String get name => kExternalCloseTerminalObligation;
 
-  /// The open heads of THIS station whose attempt never reached the terminal
-  /// guard. `g.attempt_id IS NULL` IS "no terminal of any provenance landed"
-  /// (the guard is written in the same transaction as every terminal append);
-  /// `h.attempt_id IS NOT NULL` keeps the un-healable pre-spawn heads out of
-  /// the oldest-first window. Live sessions match too — the ledger probe is
-  /// what tells them apart, and they cost one map lookup each.
+  /// Two independently bounded windows. The first is the existing
+  /// attempt-bearing scan. The second admits only never-spawned heads and
+  /// excludes session-subject guard rows; the ledger probe narrows that arm to
+  /// void closes in [repair].
   @override
   String get sql =>
+      'SELECT candidates.session_id AS session_id, '
+      'candidates.work_bead_id AS work_bead_id, '
+      'candidates.attempt_id AS attempt_id, '
+      'candidates.last_seq AS last_seq FROM ('
+      '('
       'SELECT h.session_id AS session_id, h.work_bead_id AS work_bead_id, '
       'h.attempt_id AS attempt_id, h.last_seq AS last_seq '
       'FROM proj_session_head h '
-      'LEFT JOIN traj_terminal_guard g ON g.attempt_id = h.attempt_id '
+      "LEFT JOIN traj_terminal_guard g ON g.subject_kind = 'attempt' "
+      'AND g.subject_id = h.attempt_id '
       "WHERE h.status = 'open' AND h.attempt_id IS NOT NULL "
-      'AND g.attempt_id IS NULL AND h.rig = :station '
+      'AND g.subject_id IS NULL AND h.rig = :station '
       '${_skipClause()}'
-      'ORDER BY h.last_seq LIMIT $batch';
+      'ORDER BY h.last_seq LIMIT $batch'
+      ') UNION ALL ('
+      'SELECT h.session_id AS session_id, h.work_bead_id AS work_bead_id, '
+      'h.attempt_id AS attempt_id, h.last_seq AS last_seq '
+      'FROM proj_session_head h '
+      "LEFT JOIN traj_terminal_guard g ON g.subject_kind = 'session' "
+      'AND g.subject_id = h.session_id '
+      "WHERE h.status = 'open' AND h.attempt_id IS NULL "
+      'AND g.subject_id IS NULL AND h.rig = :station '
+      '${_skipClause()}'
+      'ORDER BY h.last_seq LIMIT $batch'
+      ')'
+      ') candidates';
 
   /// `AND h.session_id NOT IN (:skip0, ...)` over [_skippedRetired], empty
   /// until the first retired head is seen. Bound so a pathological store can
@@ -608,7 +625,7 @@ final class ExternalCloseTerminalObligation extends ObligationQuery {
     for (final row in rows) {
       final sessionId = row['session_id'];
       final attemptId = row['attempt_id'];
-      if (sessionId == null || attemptId == null) continue;
+      if (sessionId == null) continue;
       final closure = probe(sessionId);
       if (closure == null) {
         // Open in bd, or no snapshot to read yet: a live round, or a head the
@@ -619,6 +636,11 @@ final class ExternalCloseTerminalObligation extends ObligationQuery {
         continue;
       }
       if (closure.absentFromLedger) {
+        if (attemptId == null) {
+          _firstSeenClosed.remove(sessionId);
+          lastAbsentInLedger += 1;
+          continue;
+        }
         // The ledger LOST this bead (reaped, pruned): nothing will ever close
         // it, so it takes the same grace as a closed bead and heals as `lost`
         // — the only way it leaves the window (tg-6uhz).
@@ -631,6 +653,10 @@ final class ExternalCloseTerminalObligation extends ObligationQuery {
         _firstSeenClosed.remove(sessionId);
         _skippedRetired.add(sessionId);
         lastRetiredRound += 1;
+        continue;
+      }
+      if (attemptId == null && closure.outcome != TerminalOutcome.lost) {
+        _firstSeenClosed.remove(sessionId);
         continue;
       }
       final firstSeen = _firstSeenClosed.putIfAbsent(sessionId, () => now);
@@ -650,9 +676,13 @@ final class ExternalCloseTerminalObligation extends ObligationQuery {
       final derived = _recorder.buildTerminalReconciled(
         sessionId: sessionId,
         attemptId: attemptId,
+        mintAttemptIfMissing: attemptId != null,
         workBeadId: row['work_bead_id'],
         outcome: closure.outcome ?? TerminalOutcome.unknown,
-        reason: closure.absentFromLedger
+        reason: attemptId == null
+            ? 'terminal-reconcile: the ledger void-closed this pre-spawn '
+                  'session before any attempt started'
+            : closure.absentFromLedger
             ? 'terminal-reconcile: the ledger no longer holds this session '
                   'bead (absent from the state snapshot) and no terminal '
                   'record was ever observed for its attempt '

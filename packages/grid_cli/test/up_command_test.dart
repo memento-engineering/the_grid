@@ -4,7 +4,7 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:beads_dart/beads_dart.dart'
-    show Bead, BeadStatus, GraphSnapshot, IssueType;
+    show BdCommandFailed, Bead, BeadStatus, GraphSnapshot, IssueType;
 import 'package:grid_cli/grid_cli.dart';
 import 'package:grid_engine/grid_engine.dart'
     show
@@ -54,9 +54,6 @@ final class _View implements StationView {
   StationAdmissionStatus get admission => _admission ?? _emptyAdmission;
   @override
   WedgeState get wedge => monitor.state;
-  @override
-  WedgeState wedgeFor(JoinedSnapshot snapshot) =>
-      monitor.pollSnapshot(snapshot);
   @override
   Map<String, Object?> syncStatus() => const <String, Object?>{};
   @override
@@ -635,81 +632,45 @@ final class _ProjectedDiagnosticsNode extends MultiChildSeed
 }
 
 void main() {
-  test('status projection uses one snapshot', () async {
-    final fixtures = <({JoinedSnapshot snapshot, int gated, bool ripens})>[
-      (
-        snapshot: _statusSnapshot(beads: const [], readyIds: {}, sessions: {}),
-        gated: 0,
-        ripens: false,
-      ),
-      (
-        snapshot: _statusSnapshot(
-          beads: [_statusBead('earth-running')],
-          readyIds: {},
-          sessions: {
-            'earth-running': _statusSession('earth-running', StepState.running),
-          },
-        ),
-        gated: 0,
-        ripens: false,
-      ),
-      (
-        snapshot: _statusSnapshot(
-          beads: [
-            for (final id in ['earth-a', 'earth-b', 'earth-c']) _statusBead(id),
-          ],
-          readyIds: {},
-          sessions: {
-            for (final id in ['earth-a', 'earth-b', 'earth-c'])
-              id: _statusSession(id, StepState.gated),
-          },
-        ),
-        gated: 3,
-        ripens: true,
-      ),
-    ];
+  test('status projection reads the resident wedge sample', () async {
+    final snapshot = _statusSnapshot(
+      beads: [
+        for (final id in ['earth-a', 'earth-b', 'earth-c']) _statusBead(id),
+      ],
+      readyIds: {},
+      sessions: {
+        for (final id in ['earth-a', 'earth-b', 'earth-c'])
+          id: _statusSession(id, StepState.gated),
+      },
+    );
+    final monitor = WedgeMonitor(
+      latest: () => snapshot,
+      threshold: Duration.zero,
+    );
+    addTearDown(monitor.dispose);
+    final residentSample = monitor.pollSnapshot(snapshot);
+    final h = await _Harness.create(
+      holdOpen: true,
+      snapshot: snapshot,
+      monitor: monitor,
+    );
+    addTearDown(h.dispose);
+    final run = h.run(untimed: true);
+    await h.stationUp.future;
 
-    for (final fixture in fixtures) {
-      var now = DateTime.utc(2026, 8, 21);
-      final monitor = WedgeMonitor(
-        latest: () => fixture.snapshot,
-        threshold: const Duration(minutes: 10),
-        clock: () => now,
-      );
-      addTearDown(monitor.dispose);
-      final h = await _Harness.create(
-        holdOpen: true,
-        snapshot: fixture.snapshot,
-        monitor: monitor,
-      );
-      addTearDown(h.dispose);
-      final run = h.run(untimed: true);
-      await h.stationUp.future;
+    final status = h.statusView!();
+    final body = status.toJson();
+    final wedge = body['wedge'] as Map<String, Object?>;
+    final work = body['work'] as Map<String, Object?>;
+    expect(status.wedge, same(residentSample));
+    expect(wedge['live'], 3);
+    expect(wedge['live'], work['liveSessions']);
+    expect(wedge['gated'], 3);
+    expect(wedge['wedged'], isTrue);
+    expect(work['mintFailedScopes'], 0);
 
-      var body = h.statusView!().toJson();
-      var wedge = body['wedge'] as Map<String, Object?>;
-      final work = body['work'] as Map<String, Object?>;
-      expect(wedge['live'], work['liveSessions']);
-      expect(wedge['gated'], fixture.gated);
-      expect(work['mintFailedScopes'], 0);
-
-      if (fixture.ripens) {
-        now = now.add(const Duration(minutes: 10));
-        body = h.statusView!().toJson();
-        wedge = body['wedge'] as Map<String, Object?>;
-        expect(
-          wedge['live'],
-          (body['work'] as Map<String, Object?>)['liveSessions'],
-        );
-        expect(wedge['gated'], fixture.gated);
-        expect(wedge['wedged'], isTrue);
-        expect(wedge['since'], isNotNull);
-        expect(wedge['reason'], contains('parked at a gate'));
-      }
-
-      h.release.complete();
-      expect(await run, 0);
-    }
+    h.release.complete();
+    expect(await run, 0);
   });
 
   test('status projection forwards the live view admission snapshot', () async {
@@ -1053,67 +1014,193 @@ void main() {
       },
     );
 
-    test(
-      'incomplete types.custom warns once in banner and boots anyway',
-      () async {
-        final all = [for (final type in GridIssueTypes.customTypes) type.wire];
-        final missing = <String>[all[1], all[all.length - 2]];
+    group('lifecycle type preflight', () {
+      final all = [for (final type in GridIssueTypes.customTypes) type.wire];
+
+      void expectPreLockRefusal(_Harness h) {
+        expect(h.events, <String>[
+          'inspect:earth',
+          'types',
+          'delegate.dispose',
+        ]);
+        expect(
+          File(GridStateStore.forGridRoot(h.home).lockPath).existsSync(),
+          isFalse,
+        );
+        expect(h.events, isNot(contains('delegate.boot')));
+        expect(h.events, isNot(contains('runGrid')));
+        expect(h.events, isNot(contains('control')));
+      }
+
+      test('one missing lifecycle type refuses before arming', () async {
+        final missing = all[1];
         final h = await _Harness.create(
           typesEnvelope: <String, dynamic>{
             'custom_types': <Object>[
               for (var index = 0; index < all.length; index++)
-                if (!missing.contains(all[index]))
+                if (all[index] != missing)
                   index.isEven ? all[index] : {'name': all[index]},
             ],
           },
         );
         addTearDown(h.dispose);
 
-        expect(await h.run(extra: const ['--no-dry-run']), 0);
-        final lines = h.stdoutText.split('\n');
-        final warning = lines.where((line) => line.contains('types.custom'));
-        expect(warning, hasLength(1));
+        expect(await h.run(extra: const ['--no-dry-run']), 1);
         expect(
-          warning.single,
-          'WARNING: types.custom is missing GridIssueTypes.customTypes: '
-          '${missing.join(', ')} — station may be unable to mint its own beads; '
-          'booting anyway.',
+          h.stderrText,
+          allOf(
+            startsWith('lunar up: StoreRefusal:'),
+            contains(
+              'types.custom is missing GridIssueTypes.customTypes: $missing',
+            ),
+            contains(GridStateStore.forGridRoot(h.home).beadsDir),
+            contains('configure types.custom before booting'),
+          ),
         );
-        final warningIndex = lines.indexOf(warning.single);
-        expect(lines[warningIndex - 1], startsWith('stores:'));
-        expect(lines[warningIndex + 1], startsWith('control:'));
+        expectPreLockRefusal(h);
+      });
+
+      test(
+        'all missing lifecycle types refuse with the complete set',
+        () async {
+          final h = await _Harness.create(
+            typesEnvelope: <String, dynamic>{'custom_types': <Object>[]},
+          );
+          addTearDown(h.dispose);
+
+          expect(await h.run(extra: const ['--no-dry-run']), 1);
+          expect(
+            h.stderrText,
+            contains(
+              'types.custom is missing GridIssueTypes.customTypes: '
+              '${all.join(', ')}',
+            ),
+          );
+          expectPreLockRefusal(h);
+        },
+      );
+
+      test(
+        'omitted custom_types refuses as all missing, not unreadable',
+        () async {
+          final h = await _Harness.create(typesEnvelope: <String, dynamic>{});
+          addTearDown(h.dispose);
+
+          expect(await h.run(extra: const ['--no-dry-run']), 1);
+          expect(
+            h.stderrText,
+            contains(
+              'types.custom is missing GridIssueTypes.customTypes: '
+              '${all.join(', ')}',
+            ),
+          );
+          expect(h.stderrText, isNot(contains('probe FAILED')));
+          expectPreLockRefusal(h);
+        },
+      );
+
+      test(
+        'BdCommandFailed from the types probe refuses before arming',
+        () async {
+          final h = await _Harness.create(
+            typesError: const BdCommandFailed(
+              command: <String>['bd', 'types', '--json'],
+              exitCode: 1,
+              message: 'cannot open proxied-server store',
+            ),
+          );
+          addTearDown(h.dispose);
+
+          expect(await h.run(extra: const ['--no-dry-run']), 1);
+          expect(
+            h.stderrText,
+            allOf(
+              startsWith('lunar up: StoreRefusal:'),
+              contains('types.custom probe FAILED'),
+              contains('BdCommandFailed: cannot open proxied-server store'),
+              contains(GridStateStore.forGridRoot(h.home).beadsDir),
+              contains(
+                'make the store readable and configure types.custom before '
+                'booting',
+              ),
+            ),
+          );
+          expectPreLockRefusal(h);
+        },
+      );
+
+      test('dry arm refuses missing lifecycle vocabulary', () async {
+        final h = await _Harness.create(
+          typesEnvelope: <String, dynamic>{'custom_types': <Object>[]},
+        );
+        addTearDown(h.dispose);
+
+        expect(await h.run(), 1);
         expect(
-          h.events,
-          containsAllInOrder(<String>[
-            'types',
-            'lock',
-            'delegate.boot',
-            'runGrid',
-            'control',
-          ]),
+          h.stderrText,
+          contains('types.custom is missing GridIssueTypes.customTypes'),
         );
-      },
-    );
+        expectPreLockRefusal(h);
+      });
 
-    test('complete types.custom boots without vocabulary noise', () async {
-      final h = await _Harness.create();
-      addTearDown(h.dispose);
-      expect(await h.run(), 0);
-      expect(h.stdoutText, isNot(contains('types.custom')));
-      expect(h.events, containsAllInOrder(<String>['types', 'runGrid']));
-    });
+      test('dry arm refuses unreadable lifecycle vocabulary', () async {
+        final h = await _Harness.create(
+          typesError: const BdCommandFailed(
+            command: <String>['bd', 'types', '--json'],
+            exitCode: 1,
+            message: 'state store is unreadable',
+          ),
+        );
+        addTearDown(h.dispose);
 
-    test('types probe failure warns once and boots anyway', () async {
-      final h = await _Harness.create(typesError: StateError('probe boom'));
-      addTearDown(h.dispose);
-      expect(await h.run(), 0);
-      final warnings = h.stdoutText
-          .split('\n')
-          .where((line) => line.contains('WARNING'));
-      expect(warnings, hasLength(1));
-      expect(warnings.single, contains('probe boom'));
-      expect(warnings.single, contains('booting anyway'));
-      expect(h.events, containsAllInOrder(<String>['types', 'runGrid']));
+        expect(await h.run(), 1);
+        expect(h.stderrText, contains('types.custom probe FAILED'));
+        expect(h.stderrText, contains('state store is unreadable'));
+        expectPreLockRefusal(h);
+      });
+
+      test(
+        'complete lifecycle vocabulary reads once and arms normally',
+        () async {
+          final h = await _Harness.create();
+          addTearDown(h.dispose);
+
+          expect(await h.run(), 0);
+          expect(h.stdoutText, isNot(contains('types.custom')));
+          expect(h.stderrText, isNot(contains('types.custom')));
+          expect(h.events.where((event) => event == 'types'), hasLength(1));
+          expect(
+            h.events,
+            containsAllInOrder(<String>[
+              'inspect:earth',
+              'types',
+              'lock',
+              'delegate.boot',
+              'runGrid',
+              'control',
+            ]),
+          );
+        },
+      );
+
+      test('lifecycle vocabulary refusals use StoreRefusal only', () {
+        final source = File('lib/src/up_command.dart').readAsStringSync();
+        final start = source.indexOf('final stateStorePath =');
+        final end = source.indexOf('final startedAt =', start);
+        expect(start, greaterThanOrEqualTo(0));
+        expect(end, greaterThan(start));
+        final preflight = source.substring(start, end);
+
+        expect(
+          RegExp(r'throw StoreRefusal\(').allMatches(preflight),
+          hasLength(2),
+        );
+        expect(
+          RegExp(r'throw StationRefusal\(').allMatches(preflight),
+          isEmpty,
+        );
+        expect(RegExp(r'class\s+\w*Refusal\b').allMatches(preflight), isEmpty);
+      });
     });
 
     test('success pins startup and the reverse shutdown', () async {

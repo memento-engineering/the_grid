@@ -59,3 +59,53 @@ class LegacySessionView {
 abstract interface class LegacySessionReader {
   Future<LegacySessionView?> sessionView(String sessionId);
 }
+
+/// One normalized semantic edge from the legacy G2 bead graph.
+@immutable
+final class LegacyG2EdgeView {
+  const LegacyG2EdgeView({
+    required this.fromPath,
+    required this.toPath,
+    required this.kind,
+  });
+
+  final String fromPath;
+  final String toPath;
+  final String kind;
+}
+
+/// The dependency-neutral legacy graph oracle for one poured molecule.
+@immutable
+final class LegacyG2GraphView {
+  LegacyG2GraphView({
+    required Iterable<String> nodes,
+    required Iterable<LegacyG2EdgeView> edges,
+  }) : nodes = Set.unmodifiable(nodes),
+       edges = List.unmodifiable(edges);
+
+  final Set<String> nodes;
+  final List<LegacyG2EdgeView> edges;
+}
+
+/// One legacy successor bead and its supersedes-chain depth.
+@immutable
+final class LegacyG2SuccessorView {
+  const LegacyG2SuccessorView({
+    required this.stepPath,
+    required this.successorId,
+    required this.supersedesId,
+    required this.depth,
+  });
+
+  final String stepPath;
+  final String successorId;
+  final String supersedesId;
+  final int depth;
+}
+
+/// Injected read seam for the two legacy G2 oracles.
+abstract interface class LegacyG2Reader {
+  Future<LegacyG2GraphView?> graphView(String sessionId);
+
+  Future<List<LegacyG2SuccessorView>> successorViews(String sessionId);
+}

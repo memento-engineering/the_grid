@@ -15,7 +15,9 @@ T _$identity<T>(T value) => value;
 mixin _$WedgeSample {
 
 /// Live (non-terminal) sessions.
- int get live;/// Live sessions with at least one node in [StepState.running] — the ONLY
+ int get live;/// Live sessions deliberately parked by an operator. They remain visible
+/// as durable, non-terminal store rows but are not currently driveable.
+ int get paused;/// Live sessions with at least one node in [StepState.running] — the ONLY
 /// evidence of an active stage. [StepState.ready] does NOT count: it is a
 /// POSITIVE TERMINAL (a daemon signalled up, its dep satisfied), so a
 /// session whose sole non-terminal node is a `ready` daemon with nothing
@@ -38,16 +40,16 @@ $WedgeSampleCopyWith<WedgeSample> get copyWith => _$WedgeSampleCopyWithImpl<Wedg
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is WedgeSample&&(identical(other.live, live) || other.live == live)&&(identical(other.running, running) || other.running == running)&&(identical(other.gated, gated) || other.gated == gated)&&(identical(other.cooling, cooling) || other.cooling == cooling)&&const DeepCollectionEquality().equals(other.frozenSessionIds, frozenSessionIds));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is WedgeSample&&(identical(other.live, live) || other.live == live)&&(identical(other.paused, paused) || other.paused == paused)&&(identical(other.running, running) || other.running == running)&&(identical(other.gated, gated) || other.gated == gated)&&(identical(other.cooling, cooling) || other.cooling == cooling)&&const DeepCollectionEquality().equals(other.frozenSessionIds, frozenSessionIds));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,live,running,gated,cooling,const DeepCollectionEquality().hash(frozenSessionIds));
+int get hashCode => Object.hash(runtimeType,live,paused,running,gated,cooling,const DeepCollectionEquality().hash(frozenSessionIds));
 
 @override
 String toString() {
-  return 'WedgeSample(live: $live, running: $running, gated: $gated, cooling: $cooling, frozenSessionIds: $frozenSessionIds)';
+  return 'WedgeSample(live: $live, paused: $paused, running: $running, gated: $gated, cooling: $cooling, frozenSessionIds: $frozenSessionIds)';
 }
 
 
@@ -58,7 +60,7 @@ abstract mixin class $WedgeSampleCopyWith<$Res>  {
   factory $WedgeSampleCopyWith(WedgeSample value, $Res Function(WedgeSample) _then) = _$WedgeSampleCopyWithImpl;
 @useResult
 $Res call({
- int live, int running, int gated, int cooling, List<String> frozenSessionIds
+ int live, int paused, int running, int gated, int cooling, List<String> frozenSessionIds
 });
 
 
@@ -75,9 +77,10 @@ class _$WedgeSampleCopyWithImpl<$Res>
 
 /// Create a copy of WedgeSample
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? live = null,Object? running = null,Object? gated = null,Object? cooling = null,Object? frozenSessionIds = null,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? live = null,Object? paused = null,Object? running = null,Object? gated = null,Object? cooling = null,Object? frozenSessionIds = null,}) {
   return _then(_self.copyWith(
 live: null == live ? _self.live : live // ignore: cast_nullable_to_non_nullable
+as int,paused: null == paused ? _self.paused : paused // ignore: cast_nullable_to_non_nullable
 as int,running: null == running ? _self.running : running // ignore: cast_nullable_to_non_nullable
 as int,gated: null == gated ? _self.gated : gated // ignore: cast_nullable_to_non_nullable
 as int,cooling: null == cooling ? _self.cooling : cooling // ignore: cast_nullable_to_non_nullable
@@ -167,10 +170,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( int live,  int running,  int gated,  int cooling,  List<String> frozenSessionIds)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( int live,  int paused,  int running,  int gated,  int cooling,  List<String> frozenSessionIds)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _WedgeSample() when $default != null:
-return $default(_that.live,_that.running,_that.gated,_that.cooling,_that.frozenSessionIds);case _:
+return $default(_that.live,_that.paused,_that.running,_that.gated,_that.cooling,_that.frozenSessionIds);case _:
   return orElse();
 
 }
@@ -188,10 +191,10 @@ return $default(_that.live,_that.running,_that.gated,_that.cooling,_that.frozenS
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( int live,  int running,  int gated,  int cooling,  List<String> frozenSessionIds)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( int live,  int paused,  int running,  int gated,  int cooling,  List<String> frozenSessionIds)  $default,) {final _that = this;
 switch (_that) {
 case _WedgeSample():
-return $default(_that.live,_that.running,_that.gated,_that.cooling,_that.frozenSessionIds);case _:
+return $default(_that.live,_that.paused,_that.running,_that.gated,_that.cooling,_that.frozenSessionIds);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -208,10 +211,10 @@ return $default(_that.live,_that.running,_that.gated,_that.cooling,_that.frozenS
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( int live,  int running,  int gated,  int cooling,  List<String> frozenSessionIds)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( int live,  int paused,  int running,  int gated,  int cooling,  List<String> frozenSessionIds)?  $default,) {final _that = this;
 switch (_that) {
 case _WedgeSample() when $default != null:
-return $default(_that.live,_that.running,_that.gated,_that.cooling,_that.frozenSessionIds);case _:
+return $default(_that.live,_that.paused,_that.running,_that.gated,_that.cooling,_that.frozenSessionIds);case _:
   return null;
 
 }
@@ -223,11 +226,14 @@ return $default(_that.live,_that.running,_that.gated,_that.cooling,_that.frozenS
 
 
 class _WedgeSample extends WedgeSample {
-  const _WedgeSample({this.live = 0, this.running = 0, this.gated = 0, this.cooling = 0, final  List<String> frozenSessionIds = const <String>[]}): _frozenSessionIds = frozenSessionIds,super._();
+  const _WedgeSample({this.live = 0, this.paused = 0, this.running = 0, this.gated = 0, this.cooling = 0, final  List<String> frozenSessionIds = const <String>[]}): _frozenSessionIds = frozenSessionIds,super._();
   
 
 /// Live (non-terminal) sessions.
 @override@JsonKey() final  int live;
+/// Live sessions deliberately parked by an operator. They remain visible
+/// as durable, non-terminal store rows but are not currently driveable.
+@override@JsonKey() final  int paused;
 /// Live sessions with at least one node in [StepState.running] — the ONLY
 /// evidence of an active stage. [StepState.ready] does NOT count: it is a
 /// POSITIVE TERMINAL (a daemon signalled up, its dep satisfied), so a
@@ -263,16 +269,16 @@ _$WedgeSampleCopyWith<_WedgeSample> get copyWith => __$WedgeSampleCopyWithImpl<_
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _WedgeSample&&(identical(other.live, live) || other.live == live)&&(identical(other.running, running) || other.running == running)&&(identical(other.gated, gated) || other.gated == gated)&&(identical(other.cooling, cooling) || other.cooling == cooling)&&const DeepCollectionEquality().equals(other._frozenSessionIds, _frozenSessionIds));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _WedgeSample&&(identical(other.live, live) || other.live == live)&&(identical(other.paused, paused) || other.paused == paused)&&(identical(other.running, running) || other.running == running)&&(identical(other.gated, gated) || other.gated == gated)&&(identical(other.cooling, cooling) || other.cooling == cooling)&&const DeepCollectionEquality().equals(other._frozenSessionIds, _frozenSessionIds));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,live,running,gated,cooling,const DeepCollectionEquality().hash(_frozenSessionIds));
+int get hashCode => Object.hash(runtimeType,live,paused,running,gated,cooling,const DeepCollectionEquality().hash(_frozenSessionIds));
 
 @override
 String toString() {
-  return 'WedgeSample(live: $live, running: $running, gated: $gated, cooling: $cooling, frozenSessionIds: $frozenSessionIds)';
+  return 'WedgeSample(live: $live, paused: $paused, running: $running, gated: $gated, cooling: $cooling, frozenSessionIds: $frozenSessionIds)';
 }
 
 
@@ -283,7 +289,7 @@ abstract mixin class _$WedgeSampleCopyWith<$Res> implements $WedgeSampleCopyWith
   factory _$WedgeSampleCopyWith(_WedgeSample value, $Res Function(_WedgeSample) _then) = __$WedgeSampleCopyWithImpl;
 @override @useResult
 $Res call({
- int live, int running, int gated, int cooling, List<String> frozenSessionIds
+ int live, int paused, int running, int gated, int cooling, List<String> frozenSessionIds
 });
 
 
@@ -300,9 +306,10 @@ class __$WedgeSampleCopyWithImpl<$Res>
 
 /// Create a copy of WedgeSample
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? live = null,Object? running = null,Object? gated = null,Object? cooling = null,Object? frozenSessionIds = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? live = null,Object? paused = null,Object? running = null,Object? gated = null,Object? cooling = null,Object? frozenSessionIds = null,}) {
   return _then(_WedgeSample(
 live: null == live ? _self.live : live // ignore: cast_nullable_to_non_nullable
+as int,paused: null == paused ? _self.paused : paused // ignore: cast_nullable_to_non_nullable
 as int,running: null == running ? _self.running : running // ignore: cast_nullable_to_non_nullable
 as int,gated: null == gated ? _self.gated : gated // ignore: cast_nullable_to_non_nullable
 as int,cooling: null == cooling ? _self.cooling : cooling // ignore: cast_nullable_to_non_nullable

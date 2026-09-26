@@ -1,5 +1,6 @@
 import 'package:meta/meta.dart';
 
+import '../errors/bd_exception.dart';
 import '../services/bd_cli_service.dart';
 import '../services/bd_runner.dart';
 import '../services/beads_workspace.dart';
@@ -88,9 +89,25 @@ class GridRuntimeFactory {
     );
 
     final endpoint = workspace.endpoint;
-    if (preferSql && endpoint != null && endpoint.hasCredential) {
+    if (preferSql && endpoint == null) {
+      final diagnostic = workspace.endpointDiagnostic;
+      onReadRefusal?.call(
+        'SQL read path unavailable at boot for ${workspace.root}; using bd '
+        'CLI reads — '
+        '${diagnostic == null || diagnostic.trim().isEmpty ? 'endpoint resolution failed.' : diagnostic}',
+      );
+      dirtySources.add(PollingTickerSource(interval: pollInterval));
+    } else if (preferSql && !endpoint!.hasCredential) {
+      onReadRefusal?.call(
+        'SQL read path unavailable at boot for ${workspace.root}; using bd '
+        'CLI reads — resolved SQL endpoint has no credential.',
+      );
+      dirtySources.add(PollingTickerSource(interval: pollInterval));
+    } else if (preferSql) {
+      final resolvedEndpoint = endpoint!;
       final candidate =
-          doltQueryServiceFactory?.call(endpoint) ?? DoltQueryService(endpoint);
+          doltQueryServiceFactory?.call(resolvedEndpoint) ??
+          DoltQueryService(resolvedEndpoint);
       try {
         await candidate.connect(); // runs the schema-drift guard
         dolt = candidate;
@@ -111,9 +128,20 @@ class GridRuntimeFactory {
         // origin, not the path).
         dirtySources.add(PollingTickerSource(interval: syncFloorInterval));
         readPath = ReadPath.sql;
-      } on Object {
-        // Drift / auth / unreachable → CLI path, polling backstop.
+      } on BdSchemaDriftException catch (error) {
+        // A54: the connect-time guard is a shape probe, not a version pin.
         await candidate.close();
+        onReadRefusal?.call(
+          'SQL endpoint schema shape probe failed '
+          '(${error.runtimeType}): ${error.message}',
+        );
+        dolt = null;
+        dirtySources.add(PollingTickerSource(interval: pollInterval));
+      } on Object catch (error) {
+        await candidate.close();
+        onReadRefusal?.call(
+          'SQL endpoint connect failed (${error.runtimeType}): $error',
+        );
         dolt = null;
         dirtySources.add(PollingTickerSource(interval: pollInterval));
       }

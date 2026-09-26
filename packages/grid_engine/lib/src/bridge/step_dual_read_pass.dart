@@ -55,6 +55,84 @@ final class StepCursorOverlay {
   final String? trajAttemptId;
 }
 
+/// One semantic edge in a G2 molecule graph observation.
+@immutable
+final class G2GraphEdgeObservation {
+  const G2GraphEdgeObservation({
+    required this.fromPath,
+    required this.toPath,
+    required this.kind,
+  });
+
+  final String fromPath;
+  final String toPath;
+  final String kind;
+}
+
+/// One dependency-neutral graph value supplied to the incumbent comparator.
+@immutable
+final class G2GraphObservation {
+  G2GraphObservation({
+    required Iterable<String> nodes,
+    required Iterable<G2GraphEdgeObservation> edges,
+  }) : nodes = Set.unmodifiable(nodes),
+       edges = List.unmodifiable(edges);
+
+  final Set<String> nodes;
+  final List<G2GraphEdgeObservation> edges;
+}
+
+/// The three views of one `molecule.poured` fact.
+///
+/// [recordGraph] and [appliedPlanGraph] originate from the same canonical
+/// graph value. [legacyGraph] is the graph the incumbent store exposed after
+/// the write. Keeping all three as values makes the comparison pure and keeps
+/// `grid_engine` independent of the trajectory package and the bd reader.
+@immutable
+final class G2MoleculeObservation {
+  const G2MoleculeObservation({
+    required this.sessionId,
+    required this.round,
+    required this.recordGraph,
+    required this.legacyGraph,
+    required this.appliedPlanGraph,
+  });
+
+  final String sessionId;
+  final int round;
+  final G2GraphObservation recordGraph;
+  final G2GraphObservation legacyGraph;
+  final G2GraphObservation appliedPlanGraph;
+}
+
+/// One `step.superseded` record beside its legacy successor oracle.
+@immutable
+final class G2SuccessorObservation {
+  const G2SuccessorObservation({
+    required this.sessionId,
+    required this.round,
+    required this.stepPath,
+    required this.newStepRound,
+    required this.recordPresent,
+    required this.legacyPresent,
+    required this.recordSupersedes,
+    required this.legacySupersedes,
+    required this.recordDepth,
+    required this.legacyDepth,
+  });
+
+  final String sessionId;
+  final int round;
+  final String stepPath;
+  final int newStepRound;
+  final bool recordPresent;
+  final bool legacyPresent;
+  final String? recordSupersedes;
+  final String? legacySupersedes;
+  final int? recordDepth;
+  final int? legacyDepth;
+}
+
 /// Subscribes to the P2 mirror's published snapshots and returns the remover
 /// (house convention) — the step axis's own re-join seam, spelled as a plain
 /// function type for the same reason [HeadSnapshotSubscribe] is (the mirror is
@@ -137,6 +215,219 @@ class DualReadStepObserver {
   /// rollback posture, where the pass does not run and the bridge does not
   /// even subscribe to the P2 mirror. See [DualReadMode.off].
   bool get armed => _mode != DualReadMode.off;
+
+  /// Compares one G2 round through this observer's existing accounting and
+  /// flare seams. This is an extension of the station comparator, not a
+  /// second `ShadowCompare` implementation.
+  void observeG2Round(
+    G2MoleculeObservation? molecule,
+    Iterable<G2SuccessorObservation> successors, {
+    required int headEpoch,
+  }) {
+    if (!armed) return;
+    accounting.beginG2Round();
+    if (molecule != null) {
+      _compareG2Graph(
+        molecule,
+        source: 'legacy-graph',
+        actual: molecule.legacyGraph,
+        cause: DualReadDivergenceCause.moleculeGraphMismatch,
+        headEpoch: headEpoch,
+      );
+      _compareG2Graph(
+        molecule,
+        source: 'applied-plan',
+        actual: molecule.appliedPlanGraph,
+        cause: DualReadDivergenceCause.graphApplyPlanMismatch,
+        headEpoch: headEpoch,
+      );
+    }
+    for (final successor in successors) {
+      _compareG2Successor(successor, headEpoch: headEpoch);
+    }
+  }
+
+  void _compareG2Graph(
+    G2MoleculeObservation observation, {
+    required String source,
+    required G2GraphObservation actual,
+    required DualReadDivergenceCause cause,
+    required int headEpoch,
+  }) {
+    final expected = observation.recordGraph;
+    final nodePaths = {...expected.nodes, ...actual.nodes}.toList()..sort();
+    for (final path in nodePaths) {
+      final recordPresent = expected.nodes.contains(path);
+      final legacyPresent = actual.nodes.contains(path);
+      if (recordPresent == legacyPresent) continue;
+      _recordG2(
+        key: _g2MoleculeKey(
+          observation,
+          source: source,
+          fromPath: path,
+          toPath: path,
+          field: 'presence',
+        ),
+        sessionId: observation.sessionId,
+        coordinate: path,
+        field: 'presence',
+        legacyValue: '$legacyPresent',
+        foldValue: '$recordPresent',
+        cause: cause,
+        headEpoch: headEpoch,
+      );
+    }
+    final expectedEdges = _edgesByCoordinate(expected.edges);
+    final actualEdges = _edgesByCoordinate(actual.edges);
+    final coordinates = {...expectedEdges.keys, ...actualEdges.keys}.toList()
+      ..sort();
+    for (final coordinate in coordinates) {
+      final expectedEdge = expectedEdges[coordinate];
+      final actualEdge = actualEdges[coordinate];
+      if (expectedEdge?.kind == actualEdge?.kind) continue;
+      final endpoints = expectedEdge ?? actualEdge!;
+      _recordG2(
+        key: _g2MoleculeKey(
+          observation,
+          source: source,
+          fromPath: endpoints.fromPath,
+          toPath: endpoints.toPath,
+          field: 'kind',
+        ),
+        sessionId: observation.sessionId,
+        coordinate: '${endpoints.fromPath}->${endpoints.toPath}',
+        field: 'kind',
+        legacyValue: actualEdge?.kind ?? '<absent>',
+        foldValue: expectedEdge?.kind ?? '<absent>',
+        cause: cause,
+        headEpoch: headEpoch,
+      );
+    }
+  }
+
+  Map<String, G2GraphEdgeObservation> _edgesByCoordinate(
+    Iterable<G2GraphEdgeObservation> edges,
+  ) => <String, G2GraphEdgeObservation>{
+    for (final edge in edges) '${edge.fromPath}\u0000${edge.toPath}': edge,
+  };
+
+  String _g2MoleculeKey(
+    G2MoleculeObservation observation, {
+    required String source,
+    required String fromPath,
+    required String toPath,
+    required String field,
+  }) =>
+      'g2:molecule:${observation.sessionId}:${observation.round}:'
+      '$source:$fromPath:$toPath:$field';
+
+  void _compareG2Successor(
+    G2SuccessorObservation observation, {
+    required int headEpoch,
+  }) {
+    if (observation.recordPresent != observation.legacyPresent) {
+      _recordG2Successor(
+        observation,
+        field: 'presence',
+        legacyValue: '${observation.legacyPresent}',
+        foldValue: '${observation.recordPresent}',
+        cause: DualReadDivergenceCause.successorRelationshipMismatch,
+        headEpoch: headEpoch,
+      );
+    }
+    if (observation.recordSupersedes != observation.legacySupersedes) {
+      _recordG2Successor(
+        observation,
+        field: 'supersedes',
+        legacyValue: observation.legacySupersedes ?? '<absent>',
+        foldValue: observation.recordSupersedes ?? '<absent>',
+        cause: DualReadDivergenceCause.successorRelationshipMismatch,
+        headEpoch: headEpoch,
+      );
+    }
+    if (observation.recordDepth != observation.legacyDepth) {
+      _recordG2Successor(
+        observation,
+        field: 'depth',
+        legacyValue: '${observation.legacyDepth ?? '<absent>'}',
+        foldValue: '${observation.recordDepth ?? '<absent>'}',
+        cause: DualReadDivergenceCause.successorDepthMismatch,
+        headEpoch: headEpoch,
+      );
+    }
+    if (observation.recordDepth != observation.newStepRound) {
+      _recordG2Successor(
+        observation,
+        field: 'new_step_round',
+        legacyValue: '${observation.recordDepth ?? '<absent>'}',
+        foldValue: '${observation.newStepRound}',
+        cause: DualReadDivergenceCause.successorDepthMismatch,
+        headEpoch: headEpoch,
+      );
+    }
+  }
+
+  void _recordG2Successor(
+    G2SuccessorObservation observation, {
+    required String field,
+    required String legacyValue,
+    required String foldValue,
+    required DualReadDivergenceCause cause,
+    required int headEpoch,
+  }) {
+    _recordG2(
+      key:
+          'g2:successor:${observation.sessionId}:${observation.round}:'
+          '${observation.stepPath}:${observation.newStepRound}:$field',
+      sessionId: observation.sessionId,
+      coordinate: observation.stepPath,
+      field: field,
+      legacyValue: legacyValue,
+      foldValue: foldValue,
+      cause: cause,
+      headEpoch: headEpoch,
+    );
+  }
+
+  void _recordG2({
+    required String key,
+    required String sessionId,
+    required String coordinate,
+    required String field,
+    required String legacyValue,
+    required String foldValue,
+    required DualReadDivergenceCause cause,
+    required int headEpoch,
+  }) {
+    if (!accounting.recordG2Mismatch(
+      mismatchKey: key,
+      sessionId: sessionId,
+      coordinate: coordinate,
+      field: field,
+      legacyValue: legacyValue,
+      foldValue: foldValue,
+      cause: cause,
+      headEpoch: headEpoch,
+    )) {
+      return;
+    }
+    final sink = _onFlare;
+    if (sink == null) return;
+    try {
+      sink(kDualReadDivergenceFlare, {
+        'axis': 'g2',
+        'session_id': sessionId,
+        'coordinate': coordinate,
+        'field': field,
+        'legacy_value': legacyValue,
+        'fold_value': foldValue,
+        'cause': cause.wire,
+        'mismatch_key': key,
+      });
+    } on Object {
+      // Emit-only, the flare convention.
+    }
+  }
 
   SessionProjection _winningLegacyRoundOf(
     SessionProjection legacy,

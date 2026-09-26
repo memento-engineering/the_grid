@@ -202,7 +202,7 @@ void main() {
 
   group('Track A3 — join: an OPEN gate bead surfaces in openGateNodes', () {
     test('an open type=gate blocks=<session> adds its node; closing it empties '
-        'the set', () {
+        'the set', () async {
       final work = FakeSnapshotSource(_graph([bead('tg-1')]));
       final sessionRow = sessionBead(id: 'tgdog-s', workBeadId: 'tg-1');
       final routeStep = _stepBead(
@@ -217,17 +217,48 @@ void main() {
           sessionRow,
           routeStep,
           _gate(id: 'tgdog-g1', blocks: 'tgdog-s', node: 'tg-1/route'),
+          _gate(id: 'tgdog-g2', blocks: 'tgdog-s', node: 'tg-1/route'),
         ]),
       );
-      final openBridge = StationJoinBridge(work: work, state: openState);
+      final openBridge = StationJoinBridge(work: work, state: openState)
+        ..start();
       addTearDown(openBridge.dispose);
       expect(openBridge.latest.sessionsByWorkBead['tg-1']!.openGateNodes, {
         'tg-1/route',
       });
       expect(
+        openBridge.latest.sessionsByWorkBead['tg-1']!.openGateBeadCount,
+        2,
+        reason: 'two durable gates may share one re-arm node path',
+      );
+      expect(
         openBridge.latest.sessionsByWorkBead['tg-1']!.closedGateCountByNodePath,
         isEmpty,
       );
+
+      // Close ONE of the duplicate-node gates. The next joined value retains
+      // the unique node but reports the exact remaining durable gate count and
+      // the closed history independently.
+      openState.push(
+        _graph([
+          sessionRow,
+          routeStep,
+          _gate(
+            id: 'tgdog-g1',
+            blocks: 'tgdog-s',
+            node: 'tg-1/route',
+            closed: true,
+          ),
+          _gate(id: 'tgdog-g2', blocks: 'tgdog-s', node: 'tg-1/route'),
+        ]),
+      );
+      await _pump();
+      final next = openBridge.latest.sessionsByWorkBead['tg-1']!;
+      expect(next.openGateNodes, {'tg-1/route'});
+      expect(next.openGateBeadCount, 1);
+      expect(next.closedGateCountByNodePath, {
+        closedGateCountKey('tg-1/route', 0): 1,
+      });
 
       // CLOSED gate (resolved) → no open gate node (the re-arm signal).
       final closedState = FakeSnapshotSource(
@@ -247,6 +278,10 @@ void main() {
       expect(
         closedBridge.latest.sessionsByWorkBead['tg-1']!.openGateNodes,
         isEmpty,
+      );
+      expect(
+        closedBridge.latest.sessionsByWorkBead['tg-1']!.openGateBeadCount,
+        0,
       );
       expect(
         closedBridge
@@ -293,6 +328,12 @@ void main() {
           sessionRow,
           routeStep,
           _gate(id: 'tgdog-g2', blocks: 'tgdog-other', node: 'tg-1/route'),
+          Bead(
+            id: 'tgdog-malformed',
+            issueType: GridIssueTypes.gate,
+            status: BeadStatus.open,
+            metadata: const {'blocks': 'tgdog-s', 'node': 42},
+          ),
         ]),
       );
       final strayBridge = StationJoinBridge(work: work, state: strayState);
@@ -300,6 +341,10 @@ void main() {
       expect(
         strayBridge.latest.sessionsByWorkBead['tg-1']!.openGateNodes,
         isEmpty,
+      );
+      expect(
+        strayBridge.latest.sessionsByWorkBead['tg-1']!.openGateBeadCount,
+        0,
       );
       expect(
         strayBridge

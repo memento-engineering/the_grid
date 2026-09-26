@@ -2573,6 +2573,25 @@ void main() {
       );
     });
 
+    test(
+      'park disagreement stays unexplained and never increments fallback',
+      () async {
+        final accounting = DualReadAccounting();
+        await park(
+          beadState: StepState.running,
+          rows: [_StepRow(stepPath: 'build', stepState: 'gated')],
+          mode: DualReadMode.primary,
+          accounting: accounting,
+        );
+        expect(accounting.stepUnexplainedDivergences, 1);
+        expect(accounting.stepFallbacks, 0);
+        expect(
+          accounting.divergenceDetails.single.cause,
+          DualReadDivergenceCause.unexplained,
+        );
+      },
+    );
+
     test('PRIMARY serves the FOLD: the SAME inputs proceed, because P2 says '
         'the node parked', () async {
       expect(
