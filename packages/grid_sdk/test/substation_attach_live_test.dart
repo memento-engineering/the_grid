@@ -549,6 +549,7 @@ void main() {
     // instead of racing our bd proxies. The timeout covers the queue's
     // patience plus the run; a starved waiter degrades, never fails. Where bd
     // is absent (the offline CI runner) it skips BY REASON, not exclusion.
+    skip: _bdMissing,
     timeout: const Timeout(Duration(minutes: 8)),
     () => withLiveStoreLock(
       () => _underLiveStores(
