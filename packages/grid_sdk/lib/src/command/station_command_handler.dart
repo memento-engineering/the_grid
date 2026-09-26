@@ -1168,17 +1168,24 @@ final class StationCommandHandler implements GridCommandHandler {
   /// it by hand leaves its bare `work_bead` key behind and the bead never
   /// re-mounts (the trap this verb exists to replace). So this door performs
   /// ONLY the gate-less tail of [_rework]: retire the session through the SAME
-  /// write chokepoint (`closeSessionAndOpenGatesForTerminal`), then re-key its
-  /// round through the same `update` onto the engine's own void payload
-  /// ([voidRetireMetadata] — `<bead>#void-<session>` plus the reason), which
-  /// by construction never matches the rework-round pattern and so never
-  /// spends the cap. No round-cap accounting, no gate-close logic, no
-  /// successor observation: the frontier mints the next round the way it
-  /// mints over any dead key.
+  /// write chokepoint (`closeSessionAndOpenGatesForTerminal`), clear the work
+  /// bead's specify-authored spec through the SAME work-store leg
+  /// (`clearRoundAuthoredSpec`), then re-key its round through the same
+  /// `update` onto the engine's own void payload ([voidRetireMetadata] —
+  /// `<bead>#void-<session>` plus the reason), which by construction never
+  /// matches the rework-round pattern and so never spends the cap. No
+  /// round-cap accounting, no gate-close logic, no successor observation: the
+  /// frontier mints the next round the way it mints over any unlinked bead.
   ///
   /// A GATED session is refused and pointed at `grid rework`, so the two exits
-  /// stay distinct and neither becomes a synonym for the other. A RUNNING step
-  /// is refused outright — a live process is never voided from under itself.
+  /// stay distinct and neither becomes a synonym for the other. A RUNNING
+  /// step is refused — but that guard reads the durable molecule cursor ONLY
+  /// (the `type=step` beads of a molecule-model session). A session with no
+  /// molecule step beads has no durable cursor anywhere (the flat
+  /// `grid.cursor.*` projection is retired), so for it the running and
+  /// gated-step refusals cannot fire and only an open gate bead protects it;
+  /// this door consults no process fence (`pid`/`pgid`) and no in-memory
+  /// resident scope.
   Future<GridCommandResult> _voidSession({
     required String sessionId,
     required String reason,
@@ -1226,6 +1233,13 @@ final class StationCommandHandler implements GridCommandHandler {
     final workBeadId = StationTrajectoryRecorder.parseLegacyWorkKey(
       rawKey,
     ).workBeadId;
+    final workStoreIdentity = BeadOwnershipPredicate.ownedPrefixOf(
+      workBeadId,
+      _workStoresByIdentity.keys,
+    );
+    final workStore = workStoreIdentity == null
+        ? null
+        : _workStoresByIdentity[workStoreIdentity];
 
     // THE GATE REFUSAL. The park marker is the gate bead whose `blocks` names
     // the session (the same evidence [_rework]'s park predicate keys on), and
@@ -1311,11 +1325,23 @@ final class StationCommandHandler implements GridCommandHandler {
       );
     }
     // THE RE-KEY — the same `update` [_rework] re-keys through, carrying the
-    // engine's own void payload so the operator door and the engine's
-    // automatic retire write one identical shape.
+    // engine's own void payload (the same metadata the engine's automatic
+    // void retire writes).
     final retiredKey = voidKeyFor(workBeadId, sessionId);
     String? reapFailure;
     try {
+      // THE WORK-STORE LEG — the SAME `clearRoundAuthoredSpec` [_rework] runs,
+      // in the same place (after the close, before the re-key). A voided
+      // round that reached specify would otherwise carry its machine-authored
+      // AC/design into the fresh round, which is exactly what rework's clear
+      // prevents; the two retire paths must not drift on it (tg-5snt). The
+      // writer clears only a `spec.author == specify` stamp and preserves
+      // operator prose. A work bead no resident work store owns is skipped:
+      // `writeSpecifyAuthoredSpec` refuses foreign prefixes, so no
+      // specify-authored stamp can exist there to clear.
+      if (workStore != null) {
+        await workStore.writer.clearRoundAuthoredSpec(workBeadId);
+      }
       await _stateWriter.update(
         sessionId,
         metadata: voidRetireMetadata(
