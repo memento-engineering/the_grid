@@ -7,12 +7,19 @@ library;
 import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart'
-    show Bead, BeadDependency, BeadStatus, DependencyType, IssueType;
+    show
+        BdException,
+        Bead,
+        BeadDependency,
+        BeadStatus,
+        DependencyType,
+        IssueType;
 import 'package:grid_cli/grid_cli.dart';
 import 'package:grid_trajectory/grid_trajectory.dart'
     show
         AttemptLifecycleShadow,
         CompositeShadow,
+        LegacyStepView,
         MountOrdinalShadow,
         ShadowCompare,
         StepTransitionShadow,
@@ -231,6 +238,65 @@ void main() {
       final views = await reader.stepViews('tranquility-1');
       // The path-less bead is dropped, not guessed at.
       expect(views.map((view) => view.stepPath), ['build']);
+      // No session fetch: every view is shadow-era.
+      expect(views.single.cutDiscipline, isFalse);
+    });
+
+    // tg-ul2v: the lane can only classify a retired legacy carrier when it
+    // knows the session ran under cut — and it learns that from the SESSION
+    // bead's own stamp, read through grid_engine's `sessionDisciplineOf`.
+    Future<List<LegacyStepView>> viewsFor(
+      Map<String, dynamic> sessionMetadata, {
+      bool throws = false,
+    }) => BdLegacyStepReader(
+      (session) async => [
+        stepBead(
+          metadata: {
+            'grid.step.session': session,
+            'grid.step.path': 'build',
+            'grid.step.state': 'pending',
+          },
+        ),
+      ],
+      sessionFetch: (ids) async {
+        if (throws) {
+          throw BdException.fromOutput(
+            command: const ['show', 'tranquility-1'],
+            exitCode: 1,
+            stdout: '',
+            stderr: 'bd show failed',
+          );
+        }
+        return [
+          sessionBead(
+            id: 'tranquility-OTHER',
+            metadata: const {'grid.session.discipline': 'cut'},
+          ),
+          sessionBead(metadata: sessionMetadata),
+        ];
+      },
+    ).stepViews('tranquility-1');
+
+    test('a CUT-stamped session marks every one of its step views', () async {
+      final views = await viewsFor(const {'grid.session.discipline': 'cut'});
+      expect(views.single.cutDiscipline, isTrue);
+    });
+
+    test('an unstamped or shadow session, or an unreadable one, is '
+        'shadow-era — never classified on a guess', () async {
+      expect((await viewsFor(const {})).single.cutDiscipline, isFalse);
+      expect(
+        (await viewsFor(const {
+          'grid.session.discipline': 'shadow',
+        })).single.cutDiscipline,
+        isFalse,
+      );
+      expect(
+        (await viewsFor(const {
+          'grid.session.discipline': 'cut',
+        }, throws: true)).single.cutDiscipline,
+        isFalse,
+      );
     });
   });
 
