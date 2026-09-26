@@ -20,6 +20,15 @@ const Duration _kFlushRetryDelay = Duration(seconds: 1);
 /// and stuck; a hot loop is neither.
 const int _kMaxFlushRetries = 5;
 
+/// The budget [GridHandle.teardown] awaits the orphan sweep under (tg-supq).
+/// The sweep reaps stragglers through bd writes and process-group kills; a bd
+/// child that inherits a pipe into a reparented grandchild (`bd send-metrics`
+/// spawned mid-unwind, reparented to 1) can hold such a write open past any
+/// grace window. Past this budget the sweep is reported by NAME as a
+/// `GridHookError` on hook `orphanSweep` and NO LONGER awaited, so the
+/// delegate disposes and the resident exits on the same path as a clean sweep.
+const Duration kOrphanSweepBudget = Duration(seconds: 15);
+
 final Object _gridNodePathZoneKey = Object();
 final Object _gridStepIdZoneKey = Object();
 
@@ -126,6 +135,12 @@ T runWithGridErrorAttribution<T>({
 /// deterministically offline. Defaults to [Timer.new]. It is the SAME
 /// `Timer Function(Duration, void Function())` seam `StationDriver` and
 /// `WedgeMonitor` already take — no new abstraction.
+///
+/// [orphanSweepBudget] bounds how long [GridHandle.teardown] awaits
+/// [orphanSweep] (default [kOrphanSweepBudget]). A sweep that outlives it is
+/// reported LOUDLY as a `GridHookError` on hook `orphanSweep` carrying a
+/// [TimeoutException], and teardown proceeds to dispose the delegate: an
+/// unwind step is never awaited past the operator's grace window (tg-supq).
 Future<GridHandle> runGrid(
   GridDelegate delegate, {
   void Function(GridHookError refusal)? onError,
@@ -136,6 +151,7 @@ Future<GridHandle> runGrid(
   GridDelegate Function()? delegateFactory,
   void Function(GridDelegate next)? onDelegateSwapped,
   Timer Function(Duration, void Function())? scheduleTimer,
+  Duration orphanSweepBudget = kOrphanSweepBudget,
 }) async {
   final report = onError ?? _reportToZone;
 
@@ -223,6 +239,7 @@ Future<GridHandle> runGrid(
       onDelegateSwapped,
       scheduleTimer ?? Timer.new,
       guardedZone,
+      orphanSweepBudget,
     );
     // Wire the flush trigger BEFORE mounting: the first build runs
     // synchronously in mountRoot with no markNeedsRebuild (the config scope
@@ -324,6 +341,7 @@ class GridHandle {
     this._onDelegateSwapped,
     this._scheduleTimer,
     this._guardedZone,
+    this._orphanSweepBudget,
   );
 
   final TreeOwner _owner;
@@ -371,6 +389,10 @@ class GridHandle {
 
   /// The one post-boot async-error boundary in which the tree was mounted.
   final Zone _guardedZone;
+
+  /// How long [teardown] awaits the orphan sweep before naming it and moving
+  /// on (see [runGrid]'s `orphanSweepBudget`).
+  final Duration _orphanSweepBudget;
 
   /// Consecutive failed flush passes — reset by the first clean pass. Bounds
   /// [_rearmAfterFailedFlush] so a branch that throws every time degrades into
@@ -692,7 +714,10 @@ class GridHandle {
   ///
   /// A THROWING sweep is loud (a [GridHookError] on hook `orphanSweep`, through
   /// [runGrid]'s error sink) and never breaks the teardown — the tree is already
-  /// unmounted by then.
+  /// unmounted by then. A sweep that outlives [runGrid]'s `orphanSweepBudget`
+  /// is reported the same way with a [TimeoutException] naming the budget and
+  /// is NO LONGER awaited (tg-supq): the delegate disposes and the caller's
+  /// unwind continues to its lock release instead of parking on a bd child.
   ///
   /// Idempotent: a second call returns the SAME future; the rails and the sweep
   /// run exactly once.
@@ -725,7 +750,21 @@ class GridHandle {
     final sweep = _orphanSweep;
     if (sweep != null) {
       try {
-        await sweep();
+        await sweep().timeout(_orphanSweepBudget);
+      } on TimeoutException catch (e, st) {
+        _report(
+          GridHookError(
+            'orphanSweep',
+            _delegate.runtimeType,
+            TimeoutException(
+              'the orphan sweep did not settle within '
+              '${_orphanSweepBudget.inMilliseconds}ms — no longer awaited; '
+              'the delegate disposes now (${e.message ?? 'pending'})',
+              _orphanSweepBudget,
+            ),
+            st,
+          ),
+        );
       } catch (e, st) {
         _report(GridHookError('orphanSweep', _delegate.runtimeType, e, st));
       }

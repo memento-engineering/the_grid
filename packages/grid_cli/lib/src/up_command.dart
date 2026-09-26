@@ -57,6 +57,7 @@ import 'package:grid_sdk/grid_sdk.dart'
         StoreRefusal,
         SubstationWorkSpec,
         TreeProjector,
+        closeStoreConnections,
         kNotWedged,
         runGrid,
         settle;
@@ -70,13 +71,12 @@ import 'station_flags.dart';
 import 'station_lock.dart';
 import 'station_stores.dart';
 
-/// The per-store close budget in the resident's unwind.
-///
-/// `StationAttach.stop` gives a stopping station a 10 s grace before `down`
-/// reports a timeout, and the closes run in order (state store first), so a
-/// station holding three stores stays inside that grace even if every close
-/// hangs on a half-open socket.
-const Duration kStoreCloseTimeout = Duration(seconds: 2);
+// The per-store close budget in the resident's unwind is grid_sdk's
+// `kStoreCloseTimeout` — one constant beside the one bounded close primitive
+// (`closeStoreConnections`) that both this shell and the SDK's
+// `StationWorkRuntime.shutdown` run (tg-supq). Re-exported so this library's
+// public surface keeps the name it has always vended.
+export 'package:grid_sdk/grid_sdk.dart' show kStoreCloseTimeout;
 
 /// Builds the station-authored delegate from parsed boot configuration ALONE
 /// (tg-1fa2.4): no wiring, no provisioner, no effect implementations —
@@ -385,21 +385,20 @@ class UpCommand extends Command<int> {
     // opened is closed here — state store first (it is the last writer) — each
     // on its own bounded budget. A throwing or hung close is loud and strands
     // neither the closes beneath it nor the lock release.
+    //
+    // The primitive is grid_sdk's `closeStoreConnections` — the same pass
+    // `StationWorkRuntime.shutdown` confirms with — so the budget, the step
+    // names and the narrative exist once. A handle that did not confirm is
+    // named with its endpoint on stdout, beside the count.
     Future<void> closeStores(List<StoreConnection> stores) async {
       if (stores.isEmpty) return;
-      var closed = 0;
-      for (final store in stores) {
-        final settled = await settle(
-          'store close (${store.name})',
-          store.close,
-          within: kStoreCloseTimeout,
-          onRefusal: reportUnwindRefusal,
-        );
-        if (settled) closed += 1;
-      }
-      stdout.writeln(
-        '$prefix: store connections closed: $closed/${stores.length}',
+      final report = await closeStoreConnections(
+        stores,
+        onRefusal: reportUnwindRefusal,
       );
+      for (final line in report.narrative) {
+        stdout.writeln('$prefix: $line');
+      }
     }
 
     final List<

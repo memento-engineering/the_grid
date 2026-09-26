@@ -25,6 +25,10 @@ import 'station_work.dart';
 
 part 'work_assembly.freezed.dart';
 
+/// Discovers (and warms) the beads workspace at a root — the attach path's
+/// discovery seam, so a test can script a proxy that publishes late.
+typedef _WorkspaceDiscovery = Future<BeadsWorkspace?> Function(String root);
+
 typedef _MemberFactory =
     Future<GridRuntimeBundle> Function(
       BeadsWorkspace workspace,
@@ -258,7 +262,7 @@ class StationWorkRuntime implements SubstationProvisioner {
     required void Function(String message) onOrphan,
     required void Function(String message) onRefusal,
     required Future<void> Function() sourcesStart,
-    required Future<void> Function() sourcesShutdown,
+    required _SourcesShutdown sourcesShutdown,
     required Future<void> Function() freshnessBarrier,
     required Future<void> Function() stateRequery,
     required GraphSnapshot Function() stateSnapshot,
@@ -277,6 +281,7 @@ class StationWorkRuntime implements SubstationProvisioner {
     required Map<String, RootCheckout> rootsByName,
     required Map<String, SubstationWorkSpec> specsByName,
     required bool dryRun,
+    required _WorkspaceDiscovery discoverWorkspace,
     required _MemberFactory buildMember,
     required _WorkWriterFactory buildWorkWriter,
   }) : _driver = driver,
@@ -306,6 +311,7 @@ class StationWorkRuntime implements SubstationProvisioner {
        _specsByName = specsByName,
        _workStoreConnectionStart = workStoreConnectionStart,
        _dryRun = dryRun,
+       _discoverWorkspace = discoverWorkspace,
        _buildMember = buildMember,
        _buildWorkWriter = buildWorkWriter;
 
@@ -359,7 +365,7 @@ class StationWorkRuntime implements SubstationProvisioner {
   /// silent.
   final void Function(String message) _onRefusal;
   final Future<void> Function() _sourcesStart;
-  final Future<void> Function() _sourcesShutdown;
+  final _SourcesShutdown _sourcesShutdown;
   final Future<void> Function() _freshnessBarrier;
   final Future<void> Function() _stateRequery;
   final GraphSnapshot Function() _stateSnapshot;
@@ -381,6 +387,7 @@ class StationWorkRuntime implements SubstationProvisioner {
       <String, DoltStoreConnection>{};
   final int _workStoreConnectionStart;
   final bool _dryRun;
+  final _WorkspaceDiscovery _discoverWorkspace;
   final _MemberFactory _buildMember;
   final _WorkWriterFactory _buildWorkWriter;
   SubstationRoster? _roster;
@@ -739,7 +746,12 @@ class StationWorkRuntime implements SubstationProvisioner {
       root: p.canonicalize(spec.root),
       substationName: spec.name,
     );
-    final workspace = BeadsWorkspace.discover(start: spec.root);
+    // The WARMED discovery (tg-ejzb): bd materialises a proxied store's proxy
+    // on the first command against it, so this gives it one bounded chance to
+    // publish before anything reads `proxy.pid`. The member factory then
+    // waits, bounded, for the endpoint to land — after the bd mode gate, so a
+    // refused bd is reported as that and never as a missing proxy.
+    final workspace = await _discoverWorkspace(spec.root);
     if (workspace == null || !_sameCanonicalRoot(workspace.root, spec.root)) {
       throw StoreRefusal(
         'provision "${spec.name}": could not parse the work store at '
@@ -916,55 +928,228 @@ class StationWorkRuntime implements SubstationProvisioner {
   );
 
   /// Tears the off-tree machinery down: the driver (backoff Timer + bridge),
-  /// then the controllers. Call AFTER `grid.teardown()` unmounted the tree
-  /// (effects torn down) — the bridge outlives the tree, never the reverse.
-  /// Idempotent.
-  Future<void> shutdown() async {
-    switch (_lifecycle) {
-      case StationWorkRuntimeShutdown():
-        return;
-      case StationWorkRuntimeNotStarted():
-      case StationWorkRuntimeStarting():
-      case StationWorkRuntimeStarted():
-      case StationWorkRuntimeFailed():
-        _lifecycle = const StationWorkRuntimeState.shutdown();
+  /// then the controllers, then CONFIRMS every store handle closed. Call AFTER
+  /// `grid.teardown()` unmounted the tree (effects torn down) — the bridge
+  /// outlives the tree, never the reverse. Idempotent: a second call returns
+  /// the same report.
+  ///
+  /// The whole unwind runs under ONE TOTAL [deadline] (tg-supq). Epoch 87's
+  /// resident flared `trajectory.shutdown` at fixpoint and then parked for 3+
+  /// minutes holding three ESTABLISHED dolt client sockets, because the steps
+  /// after that flare — the provider, the liveness relay, the source bundles
+  /// whose `DoltQueryService.close()` awaits the wire — were awaited without a
+  /// bound, and the shell's lock release sits behind this call. A per-step
+  /// bound alone is not enough: summed over a real roster (five fixed steps,
+  /// the state bundle, one bundle per work store, the federated source and a
+  /// close per handle) per-step budgets add up to minutes, an order of
+  /// magnitude past the `down` client's grace. So every step is awaited under
+  /// the SMALLER of its own budget ([stepBudget], or [storeCloseBudget] for a
+  /// handle close) and what is left of [deadline]; a step that outlives it is
+  /// named through the refusal sink and the `unwind.stepTimedOut` flare and
+  /// NO LONGER awaited. Once the deadline has passed the remaining steps are
+  /// still STARTED — a close that is never requested is a socket that is never
+  /// closed — but none is awaited, and each is named.
+  ///
+  /// The trajectory step is the one that may legitimately need time (its
+  /// fixpoint drain is bounded internally by
+  /// [TrajectoryConfig.shutdownDrainTimeout]); it may spend the deadline only
+  /// down to a held-back share ([deadline] halved) reserved for the socket
+  /// tail after it, so a slow drain can never starve the store closes. A drain
+  /// the deadline cuts short is crash-loss the successor boot's tick inherits
+  /// (§2.5), which the harness already flares; an unreleased lock is not.
+  ///
+  /// After the sources are down the store handles get one bounded CONFIRM pass
+  /// ([closeStoreConnections]): a handle whose close does not confirm is
+  /// reported by NAME with its ENDPOINT (the_grid#store-handles-are-tracked-
+  /// until-close-is-confirmed) instead of holding the exit, and the returned
+  /// [StationWorkUnwindReport] carries the same names for the shell's `down`
+  /// narrative. The state-store and substation sql-servers are NOT this
+  /// process's children and are never signalled here — only the resident's
+  /// own client sockets are closed.
+  Future<StationWorkUnwindReport> shutdown({
+    Duration deadline = kUnwindDeadline,
+    Duration stepBudget = kUnwindStepBudget,
+    Duration storeCloseBudget = kStoreCloseTimeout,
+  }) => _unwind ??= _runShutdown(
+    deadline: deadline,
+    stepBudget: stepBudget,
+    storeCloseBudget: storeCloseBudget,
+  );
+
+  Future<StationWorkUnwindReport>? _unwind;
+
+  Future<StationWorkUnwindReport> _runShutdown({
+    required Duration deadline,
+    required Duration stepBudget,
+    required Duration storeCloseBudget,
+  }) async {
+    // Set synchronously (an async body runs to its first await eagerly), so a
+    // caller observing [lifecycle] right after the call sees the shutdown.
+    _lifecycle = const StationWorkRuntimeState.shutdown();
+    // Total wall clock for the report. The deadline below bounds the steps
+    // BEFORE the trajectory drain and, restarted, the socket tail AFTER it;
+    // the drain itself keeps its configured budget (ruled 2026-09-25: under
+    // cut discipline a drain cut short is crash-loss handed to the next boot,
+    // so `down` may wait on a real drain but never on a hung socket).
+    final started = Stopwatch()..start();
+    var clock = UnwindDeadline(deadline);
+    final timedOut = <String>[];
+    void onTimeout(String step, Duration within) {
+      timedOut.add(step);
+      _onFlare?.call('unwind.stepTimedOut', {
+        'step': step,
+        'budgetMs': '${within.inMilliseconds}',
+        'deadlineMs': '${deadline.inMilliseconds}',
+      });
     }
-    await settle(
-      'station driver dispose',
-      _driver.dispose,
+
+    Future<void> step(String name, FutureOr<void> Function() action) => settle(
+      name,
+      action,
+      within: clock.budget(stepBudget),
       onRefusal: _onRefusal,
+      onTimeout: onTimeout,
     );
+
+    await step('station driver dispose', _driver.dispose);
     // The driver normally owns this disposal. Retain a separate idempotent
     // fallback so a throwing driver step cannot strand the bridge.
-    await settle(
-      'join bridge dispose',
-      _driver.bridge.dispose,
-      onRefusal: _onRefusal,
-    );
-    await settle(
-      'station admission dispose',
-      wiring.services.admission.dispose,
-      onRefusal: _onRefusal,
-    );
+    await step('join bridge dispose', _driver.bridge.dispose);
+    await step('station admission dispose', wiring.services.admission.dispose);
     // Trajectory down BEFORE the stores it reads (§1.2 shutdown order) —
     // settled so it NEVER blocks sources shutdown (r2, major 9). The harness
     // also settles its internal queue drain → fixpoint → boundary commit →
-    // dispose sequence, while this outer step protects the source tail.
+    // dispose sequence, each phase under its own drain timeout; this outer
+    // step caps it at its phases' sum and NOT at the unwind deadline: the
+    // drain is committed-boundary work, and cutting it short under cut
+    // discipline is crash-loss, not a faster exit.
     await settle(
       'trajectory shutdown',
       trajectory.shutdown,
+      within: _trajectoryShutdownBudget(stepBudget),
       onRefusal: _onRefusal,
+      onTimeout: onTimeout,
     );
+    // The deadline now bounds the TAIL: everything after the drain gets the
+    // full budget, however long the drain took.
+    clock = UnwindDeadline(deadline);
     if (_runtimeProviderDisposer(_provider) case final dispose?) {
-      await settle('runtime provider dispose', dispose, onRefusal: _onRefusal);
+      await step('runtime provider dispose', dispose);
     }
-    await settle(
-      'work-session liveness dispose',
-      sessionLiveness.dispose,
-      onRefusal: _onRefusal,
+    await step('work-session liveness dispose', sessionLiveness.dispose);
+    await _sourcesShutdown(
+      within: () => clock.budget(stepBudget),
+      onTimeout: onTimeout,
     );
-    await _sourcesShutdown();
+    // The CONFIRM pass: the bundles above already closed the same pools, and
+    // `DoltQueryService.close()` / `closeOpenSessions()` are idempotent, so a
+    // handle that confirmed is a no-op here — the pass exists to NAME the one
+    // that did not, and to retry a close a bundle step's budget cut short.
+    final stores = await closeStoreConnections(
+      openStores,
+      within: storeCloseBudget,
+      deadline: clock,
+      onRefusal: _onRefusal,
+      onFlare: _onFlare,
+    );
+    // A shell that awaits this call without reading the report (space's `up`)
+    // still gets each unconfirmed handle BY NAME WITH ITS ENDPOINT on the
+    // refusal sink — the line an operator would otherwise `lsof` for.
+    for (final handle in stores.outstanding) {
+      _onRefusal(
+        'unwind: store handle ${handle.describe()} — still open, no longer '
+        'awaited',
+      );
+    }
+    final report = StationWorkUnwindReport(
+      timedOutSteps: List<String>.unmodifiable(timedOut),
+      stores: stores,
+      deadline: deadline,
+      elapsed: started.elapsed,
+    );
+    _onFlare?.call('unwind.complete', {
+      'closedStores': stores.closed.join(', '),
+      'outstandingStores': [
+        for (final handle in stores.outstanding) handle.name,
+      ].join(', '),
+      'timedOutSteps': timedOut.join(', '),
+      'deadlineMs': '${deadline.inMilliseconds}',
+      'elapsedMs': '${started.elapsed.inMilliseconds}',
+      'clean': '${report.isClean}',
+    });
+    return report;
   }
+
+  /// The outer bound on the trajectory step, before the total clamps it: its
+  /// three internally bounded phases (drain, boundary commit, session close)
+  /// each run under
+  /// [TrajectoryConfig.shutdownDrainTimeout], plus one [stepBudget] of slack
+  /// for the un-bounded bookkeeping between them. It is NOT clamped by
+  /// [kUnwindDeadline]: the drain keeps its configured budget.
+  Duration _trajectoryShutdownBudget(Duration stepBudget) =>
+      _trajectoryConfig.shutdownDrainTimeout * 3 + stepBudget;
+}
+
+/// The wall-clock [StationWorkRuntime.shutdown] may spend (tg-supq) on the
+/// steps BEFORE the trajectory drain, and again on the socket tail AFTER it
+/// (the clock restarts once the drain settles), however many substations the
+/// roster carries. The drain itself keeps its own configured budget.
+///
+/// It sits strictly inside the `down` client's grace window (grid_cli's
+/// `kStationStopGrace`, 10 s — pinned there by a test) so the shell's lock
+/// release, which runs after this call, is reached before `down` gives up.
+const Duration kUnwindDeadline = Duration(seconds: 8);
+
+/// The budget ONE unwind step of [StationWorkRuntime.shutdown] is awaited
+/// under (tg-supq), before [kUnwindDeadline] clamps it. Loud and bounded beats
+/// silent and parked: a step that outlives it is named and abandoned.
+const Duration kUnwindStepBudget = Duration(seconds: 5);
+
+/// The sources' shutdown tail: each step awaited under the budget [within]
+/// hands out at the moment it starts, each expired step reported through
+/// [onTimeout].
+typedef _SourcesShutdown =
+    Future<void> Function({
+      required Duration Function() within,
+      required void Function(String step, Duration within) onTimeout,
+    });
+
+/// What [StationWorkRuntime.shutdown] left behind: the steps it stopped
+/// awaiting and the store handles that did not confirm their close. The shell
+/// prints [narrative] into the `down` story so the operator sees WHICH handle
+/// is still open rather than an idle process and an unreleased lock.
+final class StationWorkUnwindReport {
+  /// Reports [timedOutSteps] abandoned and [stores] as the confirm pass found,
+  /// the whole unwind having spent [elapsed] of its [deadline].
+  const StationWorkUnwindReport({
+    required this.timedOutSteps,
+    required this.stores,
+    this.deadline = kUnwindDeadline,
+    this.elapsed = Duration.zero,
+  });
+
+  /// The unwind steps that outlived their budget, in shutdown order.
+  final List<String> timedOutSteps;
+
+  /// The store-handle confirm pass.
+  final StoreCloseReport stores;
+
+  /// The TOTAL the unwind ran under.
+  final Duration deadline;
+
+  /// The wall-clock the unwind actually spent.
+  final Duration elapsed;
+
+  /// True when every step completed and every handle confirmed its close.
+  bool get isClean => timedOutSteps.isEmpty && stores.allConfirmed;
+
+  /// The operator lines: the store count, one line per outstanding handle,
+  /// one line per abandoned step.
+  List<String> get narrative => <String>[
+    ...stores.narrative,
+    for (final step in timedOutSteps)
+      'unwind step "$step" outlived its budget and is no longer awaited',
+  ];
 }
 
 Future<void> Function()? _runtimeProviderDisposer(RuntimeProvider provider) =>
@@ -1811,6 +1996,32 @@ Future<StationWorkRuntime> _acquireStationWork({
   // --- the transports (ONE dry/live posture, per-seam overrides = tests).
   // The provider itself is built above, beside the trajectory harness that
   // polls it.
+  // The FRESH-status land gate (tg-b1t8): grid_sdk is the one package that
+  // sees both the store readers and the driveability rule, so the predicate is
+  // built HERE and injected into BOTH production-shaped seams that can open a
+  // pull request — the engine's terminal delivery (`StationServices
+  // .deliveryGate`, asked by the CapabilityHost right before it actuates the
+  // bound DeliveryMethod — the path live PRs actually take) and
+  // `StationGitService.land`. grid_runtime gains no grid_engine dependency
+  // (ADR-0002's arc stays one-way). The gate reads the WORK bead's owning
+  // store at call time through the same name/prefix binding the command
+  // handler uses; `workCommandStores` and `bundles` are the live maps the
+  // roster attach/detach path mutates, so an attached seat is covered.
+  final landGate = buildWorkBeadLandGate(
+    readerFor: (beadId) => workBeadReaderFor(
+      beadId,
+      workStores: {
+        for (final entry in workCommandStores.entries)
+          entry.key: entry.value.substation,
+      },
+      readers: {
+        for (final entry in bundles.entries) entry.key: entry.value.probeReader,
+      },
+      stateSubstation: stateSubstation,
+      stateReader: stateBundle.probeReader,
+    ),
+  );
+
   git =
       gitOverride ??
       (dryRun
@@ -1822,6 +2033,7 @@ Future<StationWorkRuntime> _acquireStationWork({
               // (stage1-wiring §2.3, r2 blocker 3) — the only place that holds
               // `preexisting`, the branch, and the base sha at one instant.
               recorder: recorder,
+              landGate: landGate,
             ));
 
   // --- the registered roots. Dry-run registers nothing (the inert service
@@ -1880,6 +2092,10 @@ Future<StationWorkRuntime> _acquireStationWork({
     // the inert git service (its no-op runner returns empty output ⇒ every probe
     // `clear`), so a dry run is unchanged.
     workSignal: stationWorkSignal(git),
+    // THE FRESH-STATUS DELIVERY GATE (tg-b1t8): the terminal advance asks it
+    // right before the bound DeliveryMethod pushes and opens the PR. Wired in
+    // every posture — it only READS the owning store.
+    deliveryGate: landGate,
   );
   attemptLivenessRecovery = StationAttemptLivenessRecovery(
     services: () => services,
@@ -2095,26 +2311,32 @@ Future<StationWorkRuntime> _acquireStationWork({
       await Future.wait(bundles.values.map((b) => b.runtime.start()));
       await stateBundle.runtime.start();
     },
-    sourcesShutdown: () async {
+    sourcesShutdown: ({required within, required onTimeout}) async {
       final shutdownBundles = List<MapEntry<String, GridRuntimeBundle>>.of(
         bundles.entries,
       );
       await settle(
         'state bundle shutdown',
         stateBundle.shutdown,
+        within: within(),
         onRefusal: refusalSink,
+        onTimeout: onTimeout,
       );
       for (final entry in shutdownBundles) {
         await settle(
           'work bundle shutdown (${entry.key})',
           entry.value.shutdown,
+          within: within(),
           onRefusal: refusalSink,
+          onTimeout: onTimeout,
         );
       }
       await settle(
         'federated source dispose',
         work.dispose,
+        within: within(),
         onRefusal: refusalSink,
+        onTimeout: onTimeout,
       );
     },
     freshnessBarrier: freshnessBarrier,
@@ -2138,6 +2360,10 @@ Future<StationWorkRuntime> _acquireStationWork({
     rootsByName: rootsByName,
     specsByName: <String, SubstationWorkSpec>{},
     dryRun: dryRun,
+    discoverWorkspace: (root) => BeadsWorkspace.discoverWarmed(
+      start: root,
+      warmRunnerFactory: endpointWarmRunnerFactory,
+    ),
     buildMember: (workspace, storeName) async {
       await _requireBdModeCapability(
         storeLabel: 'attach "$storeName"',
@@ -2145,8 +2371,19 @@ Future<StationWorkRuntime> _acquireStationWork({
         endpointWarmRunnerFactory: endpointWarmRunnerFactory,
         capabilities: bdModeCapabilities,
       );
+      // A proxied store's pid/endpoint may still be landing on disk when the
+      // attach reaches this point (tg-ejzb): wait for it under a bounded
+      // deadline instead of reading proxy.pid once and falling through to a
+      // socket-less CLI member. The warmed discovery already ran in
+      // `provision`; the polls here re-read the on-disk artifacts only.
+      final ready = await awaitProxiedStoreEndpoint(
+        label: 'attach "$storeName"',
+        root: workspace.root,
+        initial: workspace,
+        discover: (root) async => BeadsWorkspace.discover(start: root),
+      );
       return GridRuntimeFactory.build(
-        workspace: workspace,
+        workspace: ready,
         preferSql: preferSql,
         syncFloorInterval: syncFloorInterval,
         lifecycleTypes: {...IssueType.coreTypes, ...GridIssueTypes.all},
@@ -2233,6 +2470,147 @@ Future<GitRunResult> ghRunner(String workDir, List<String> args) async {
     output: '${result.stdout}${result.stderr}',
   );
 }
+
+/// How long an attach waits for a proxied store to publish its proxy pid and
+/// SQL endpoint before refusing (tg-ejzb). bd materialises the proxy on the
+/// first command against the store, so a freshly initialised store attached
+/// under load can be read a beat before `proxy.pid` lands on disk.
+const Duration kProxiedStoreReadyTimeout = Duration(seconds: 10);
+
+/// Discovers the work store at [root] and, for a proxied-server store, WAITS
+/// under a bounded deadline for its proxy pid/endpoint to be published
+/// (tg-ejzb). The first read is [initial] when the caller already discovered
+/// the store, otherwise one [discover] (the warmed one, giving bd a bounded
+/// chance to start the proxy); every later poll re-reads the on-disk
+/// artifacts on a doubling backoff. A store that is not proxied returns as
+/// soon as it parses — its read path never needed a proxy.
+///
+/// Throws a [StoreRefusal] naming [label] when the root does not parse, or
+/// when the deadline passes with the endpoint still unpublished; that message
+/// names the deadline and carries the resolver's own diagnostic, so the
+/// operator reads WHY instead of a `PathNotFoundException` from a one-shot
+/// read.
+Future<BeadsWorkspace> awaitProxiedStoreEndpoint({
+  required String label,
+  required String root,
+  required Future<BeadsWorkspace?> Function(String root) discover,
+  BeadsWorkspace? initial,
+  Duration within = kProxiedStoreReadyTimeout,
+  Future<void> Function(Duration) delay = Future<void>.delayed,
+}) async {
+  final elapsed = Stopwatch()..start();
+  var backoff = const Duration(milliseconds: 50);
+  var polls = 0;
+  for (;;) {
+    final workspace = switch (polls) {
+      0 when initial != null => initial,
+      0 => await discover(root),
+      _ => BeadsWorkspace.discover(start: root),
+    };
+    polls++;
+    if (workspace == null || !_sameCanonicalRoot(workspace.root, root)) {
+      throw StoreRefusal(
+        '$label: could not parse the work store at $root/.beads '
+        '(resolved: ${workspace?.root ?? 'nothing'}).',
+      );
+    }
+    if (workspace.mode != DoltMode.proxiedServer ||
+        workspace.endpoint != null) {
+      return workspace;
+    }
+    if (elapsed.elapsed >= within) {
+      throw StoreRefusal(
+        '$label: the proxied store at $root published no proxy pid/endpoint '
+        'within ${within.inMilliseconds}ms ($polls reads) — '
+        '${workspace.endpointDiagnostic ?? 'no resolver diagnostic'}',
+      );
+    }
+    await delay(backoff);
+    backoff *= 2;
+    if (backoff > const Duration(seconds: 1)) {
+      backoff = const Duration(seconds: 1);
+    }
+  }
+}
+
+/// Routes work bead [beadId] to the probe reader of the store that OWNS it,
+/// for the fresh-status land gate (tg-b1t8), or null when no attached store
+/// does.
+///
+/// [workStores] maps every work store's name AND prefix to its substation (the
+/// command handler's binding); [readers] maps a substation to its reader. The
+/// owning prefix is the LONGEST that matches, over the work prefixes and
+/// [stateSubstation] together: a work-store bead reads from its own store, a
+/// bead of the state partition reads from [stateReader], and a bead whose
+/// prefix NOTHING attached owns is `null` — the gate reports it as `unowned`.
+/// It is never read from a store that does not own it: the first round's
+/// fallback sent every unmatched bead to the state store, where it read
+/// `absent` and suppressed its PR on a wrong-store answer.
+BeadProbeReader? workBeadReaderFor(
+  String beadId, {
+  required Map<String, String> workStores,
+  required Map<String, BeadProbeReader> readers,
+  required String stateSubstation,
+  required BeadProbeReader stateReader,
+}) {
+  final owned = BeadOwnershipPredicate.ownedPrefixOf(beadId, {
+    ...workStores.keys,
+    stateSubstation,
+  });
+  if (owned == null) return null;
+  if (workStores[owned] case final substation?) return readers[substation];
+  return stateReader;
+}
+
+/// Builds the FRESH-status land gate [assembleStationWork] injects into
+/// [StationGitService.land] (tg-b1t8): asked with the work bead's id right
+/// before the PR opens, it READS the bead from its owning store AT CALL TIME
+/// through [readerFor] and answers whether the bead is open and driveable right
+/// now. It never consults a mount-time snapshot — the zombie it exists to stop
+/// was open when its round started.
+///
+/// Two clauses, in order:
+///  1. **status** — only [BeadStatus.open] lands; `deferred`, `closed`, or any
+///     other status refuses with that status named; an absent bead (or one no
+///     attached store owns) refuses as `absent` / `unowned`.
+///  2. **kind** — the resident's own [dispatchableWorkClause] is COMPOSED, not
+///     re-stated and not stood in for: `IssueTypeDriveability` answers whether
+///     this KIND of bead may ever mount, and a fresh open bead of an
+///     organisational type (an epic re-typed mid-round) still refuses.
+WorkBeadLandGate buildWorkBeadLandGate({
+  required BeadProbeReader? Function(String beadId) readerFor,
+}) => (beadId) async {
+  final reader = readerFor(beadId);
+  if (reader == null) {
+    return LandGateDecision.refused(
+      status: 'unowned',
+      reason: 'no attached store owns bead $beadId',
+    );
+  }
+  final bead = await reader.beadById(
+    beadId,
+    types: {...IssueType.coreTypes, ...GridIssueTypes.all},
+  );
+  if (bead == null) {
+    return LandGateDecision.refused(
+      status: 'absent',
+      reason: 'bead $beadId is not in its store',
+    );
+  }
+  if (bead.status != BeadStatus.open) {
+    return LandGateDecision.refused(
+      status: bead.status.wire,
+      reason: 'only an open bead lands; $beadId reads ${bead.status.wire}',
+    );
+  }
+  return switch (dispatchableWorkClause(resident: true)(bead)) {
+    MountEligible() => const LandGateDecision.open(),
+    MountRefused(:final clause) => LandGateDecision.refused(
+      status: 'open but not driveable (${bead.issueType.wire})',
+      reason: clause,
+    ),
+  };
+};
 
 /// The INERT git service for dry-run — a no-op `git` (every invocation an
 /// empty success) so `listBeadWorktrees` parses an empty worktree set WITHOUT
