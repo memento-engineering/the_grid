@@ -2,6 +2,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 
 import '../sdk/allocation.dart';
 import 'admission_barrier.dart';
+import 'state_store_write_governor.dart';
 import 'station_admission_authority.dart';
 import 'trajectory_scope.dart';
 
@@ -39,7 +40,14 @@ class StationServices {
     StationTrajectoryRecorder? trajectoryRecorder,
     this.maxConcurrentWork = kDefaultMaxConcurrentWork,
     DateTime Function()? clock,
-  }) : admission = StationAdmissionAuthority(
+    StateStoreWriteGovernor? terminalWrites,
+  }) : terminalWrites =
+           terminalWrites ??
+           StateStoreWriteGovernor(
+             bound: kTerminalWriteConcurrency,
+             lane: 'terminal-gate-close',
+           ),
+       admission = StationAdmissionAuthority(
          writer: writer,
          provider: provider,
          stateSubstation: stateSubstation,
@@ -113,6 +121,13 @@ class StationServices {
   /// The single station-owned admission and durable attempt-transition owner.
   final StationAdmissionAuthority admission;
 
+  /// THE STATION-WIDE terminal-write bound (tg-66w8): the one governor every
+  /// substation `WorkList` drains its terminal gate closes and work-terminal
+  /// settlements through, admitting at most [kTerminalWriteConcurrency] at a
+  /// time across the WHOLE station. It lives here rather than on the WorkList
+  /// precisely so the count cannot scale with the roster.
+  final StateStoreWriteGovernor terminalWrites;
+
   /// Disposes the station admission owner. Idempotent.
   void dispose() => admission.dispose();
 }
@@ -121,13 +136,18 @@ class StationServices {
 /// so ordinary single/few-bead dev and dry-run flows never throttle.
 const int kDefaultMaxConcurrentWork = 4;
 
-/// How many terminal-session gate writes the work axis drains at once at boot
-/// (tg-gxp6). The restart sweep used to fire one unawaited write per closed
-/// session simultaneously; on a store with hundreds of them the tail of that
-/// burst blew `DoltQueryService.queryTimeout`, and the failed gate closes
-/// cancelled the first mint of every ready bead. Bounded, the same sweep still
-/// completes but never saturates the state store. Two, not four: dolt serialises
-/// commits, and the bound is per WorkList (one per substation), so the effective
-/// station-wide concurrency is this number times the substations holding
-/// terminal sessions.
+/// How many terminal-session gate writes the whole STATION drains at once at
+/// boot (tg-gxp6, made station-wide by tg-66w8). The restart sweep used to fire
+/// one unawaited write per closed session simultaneously; on a store with
+/// hundreds of them the tail of that burst blew `DoltQueryService.queryTimeout`,
+/// and the failed gate closes cancelled the first mint of every ready bead.
+/// Bounded, the same sweep still completes but never saturates the state store.
+///
+/// The bound is STATION-WIDE: `StationServices.terminalWrites` is one
+/// [StateStoreWriteGovernor] shared by every substation `WorkList`, so this
+/// number is the ceiling however many substations hold terminal sessions. It
+/// used to be per WorkList, which multiplied it by the roster — lunar's
+/// thirteen substations re-formed the burst at up to twenty-six simultaneous
+/// writes and every session-terminal close of epoch 98 died at the deadline.
+/// Two, not four: dolt serialises commits.
 const int kTerminalWriteConcurrency = 2;
