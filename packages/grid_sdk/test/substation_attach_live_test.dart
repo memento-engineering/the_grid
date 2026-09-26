@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -7,6 +8,8 @@ import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart' show BeadWorktree, RootCheckout;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
+
+import 'support/live_store_lock.dart';
 
 /// Why the two bd-backed tests below skip when `bd` is absent: they bootstrap
 /// REAL proxied stores with `bd init --proxied-server` and tear them down with a
@@ -542,59 +545,73 @@ void main() {
     'live attached Dolt store joins and leaves the shell close list',
     tags: ['integration'],
     skip: _bdMissing,
-    () async {
-      final temp = Directory.systemTemp.createTempSync('attach-store-handle-');
-      addTearDown(() => temp.deleteSync(recursive: true));
-      final home = '${temp.path}/home';
-      final bootRoot = '${temp.path}/mars';
-      final attachedRoot = '${temp.path}/earth';
-      final roots = ['$home/.grid', bootRoot, attachedRoot];
-      addTearDown(() => _fenceProxiedStores(roots, temp.path));
-      await _initializeStore(roots[0], database: 'tgstate', sqlCapable: true);
-      await _initializeStore(roots[1], database: 'mars', sqlCapable: true);
-      await _initializeStore(roots[2], database: 'earth', sqlCapable: true);
+    // SELF-BOUNDED (tg-ejzb): the body runs under the machine-wide live-store
+    // lock so a second lane's instance waits instead of racing our bd proxies,
+    // and the timeout covers that wait plus the run.
+    timeout: const Timeout(Duration(minutes: 8)),
+    () => withLiveStoreLock(
+      () => _underLiveStores(
+        prefix: 'attach-store-handle-',
+        roots: (temp) => ['$temp/home/.grid', '$temp/mars', '$temp/earth'],
+        (temp, roots) async {
+          final home = '$temp/home';
+          final bootRoot = roots[1];
+          final attachedRoot = roots[2];
+          await _initializeStore(
+            roots[0],
+            database: 'tgstate',
+            sqlCapable: true,
+          );
+          await _initializeStore(roots[1], database: 'mars', sqlCapable: true);
+          await _initializeStore(roots[2], database: 'earth', sqlCapable: true);
 
-      final work = await assembleStationWork(
-        stateStore: GridStateStore.forGridRoot(home),
-        substations: [SubstationWorkSpec(name: 'mars', root: bootRoot)],
-        resolver: _RecordingResolver(),
-        dryRun: true,
-      );
-      addTearDown(work.shutdown);
-      await work.start();
+          final work = await assembleStationWork(
+            stateStore: GridStateStore.forGridRoot(home),
+            substations: [SubstationWorkSpec(name: 'mars', root: bootRoot)],
+            resolver: _RecordingResolver(),
+            dryRun: true,
+          );
+          addTearDown(work.shutdown);
+          await work.start();
 
-      final bootStores = List<StoreConnection>.of(work.openStores);
-      expect(work.openStores.map((store) => store.name), [
-        'state',
-        'trajectory',
-        'mars',
-      ]);
+          final bootStores = List<StoreConnection>.of(work.openStores);
+          expect(work.openStores.map((store) => store.name), [
+            'state',
+            'trajectory',
+            'mars',
+          ]);
 
-      final attached = await work.roster.attach(
-        name: 'earth',
-        prefix: 'ea',
-        root: attachedRoot,
-      );
-      expect(attached, isA<RosterAttached>());
-      expect(work.ownedIdentityTokens, containsAll(<String>['earth', 'ea']));
-      expect(work.openStores.map((store) => store.name), [
-        'state',
-        'trajectory',
-        'earth',
-        'mars',
-      ]);
-      for (final connection in bootStores) {
-        expect(work.openStores, contains(same(connection)));
-      }
+          final attached = await work.roster.attach(
+            name: 'earth',
+            prefix: 'ea',
+            root: attachedRoot,
+          );
+          expect(attached, isA<RosterAttached>());
+          expect(
+            work.ownedIdentityTokens,
+            containsAll(<String>['earth', 'ea']),
+          );
+          expect(work.openStores.map((store) => store.name), [
+            'state',
+            'trajectory',
+            'earth',
+            'mars',
+          ]);
+          for (final connection in bootStores) {
+            expect(work.openStores, contains(same(connection)));
+          }
 
-      final detached = await work.roster.detach(
-        name: 'earth',
-        inFlightOf: (_) => const <String>{},
-      );
-      expect(detached, isA<RosterDetached>());
-      expect(work.ownedIdentityTokens, isNot(contains('ea')));
-      expect(work.openStores, orderedEquals(bootStores));
-    },
+          final detached = await work.roster.detach(
+            name: 'earth',
+            inFlightOf: (_) => const <String>{},
+          );
+          expect(detached, isA<RosterDetached>());
+          expect(work.ownedIdentityTokens, isNot(contains('ea')));
+          expect(work.openStores, orderedEquals(bootStores));
+          await work.shutdown();
+        },
+      ),
+    ),
   );
 
   test(
@@ -604,61 +621,269 @@ void main() {
     // by reason (not excluded) wherever bd is not on PATH.
     tags: ['integration'],
     skip: _bdMissing,
-    () async {
-      final temp = Directory.systemTemp.createTempSync('settle-guard-');
-      addTearDown(() => temp.deleteSync(recursive: true));
-      await _initializeStore('${temp.path}/home/.grid', database: 'tgstate');
-      _seedStore('${temp.path}/proj', database: 'proj');
-      _seedStore('${temp.path}/earth', database: 'earth');
-      final refusals = <String>[];
-      final git = _ThrowingDryGit();
-      final work = await assembleStationWork(
-        stateStore: GridStateStore.forGridRoot('${temp.path}/home'),
-        substations: [
-          SubstationWorkSpec(name: 'proj', root: '${temp.path}/proj'),
-        ],
-        resolver: _RecordingResolver(),
-        dryRun: true,
-        gitOverride: git,
-        onRefusal: refusals.add,
-      );
-      addTearDown(work.shutdown);
-      await work.start();
-      refusals.clear();
-      git.throwing = true;
+    // SELF-BOUNDED (tg-ejzb): see the live attach test above.
+    timeout: const Timeout(Duration(minutes: 8)),
+    () => withLiveStoreLock(
+      () => _underLiveStores(
+        prefix: 'settle-guard-',
+        // An embedded-mode init: no proxy, no pid files to fence — the census
+        // still asserts no dolt sql-server survives under the temp dir.
+        roots: (_) => const [],
+        (tempPath, roots) async {
+          final temp = Directory(tempPath);
+          await _initializeStore(
+            '${temp.path}/home/.grid',
+            database: 'tgstate',
+          );
+          _seedStore('${temp.path}/proj', database: 'proj');
+          _seedStore('${temp.path}/earth', database: 'earth');
+          final refusals = <String>[];
+          final git = _ThrowingDryGit();
+          final work = await assembleStationWork(
+            stateStore: GridStateStore.forGridRoot('${temp.path}/home'),
+            substations: [
+              SubstationWorkSpec(name: 'proj', root: '${temp.path}/proj'),
+            ],
+            resolver: _RecordingResolver(),
+            dryRun: true,
+            gitOverride: git,
+            onRefusal: refusals.add,
+          );
+          addTearDown(work.shutdown);
+          await work.start();
+          refusals.clear();
+          git.throwing = true;
 
-      // An IDLE roster: the settle must be a no-op, so the guard is not yet
-      // exercised and no refusal is emitted.
-      work.afterFlush();
-      await _pumpSettled();
-      expect(refusals, isEmpty);
-      expect(git.listings, 0);
+          // An IDLE roster: the settle must be a no-op, so the guard is not yet
+          // exercised and no refusal is emitted.
+          work.afterFlush();
+          await _pumpSettled();
+          expect(refusals, isEmpty);
+          expect(git.listings, 0);
 
-      // Now a seat that drains and immediately goes idle: the settle finalises
-      // it, decommission lists worktrees, the listing throws.
-      final attached = await work.roster.attach(
-        name: 'earth',
-        root: '${temp.path}/earth',
-      );
-      expect(attached, isA<RosterAttached>());
-      final draining = await work.roster.detach(
-        name: 'earth',
-        force: true,
-        inFlightOf: (_) => {'earth-1'},
-      );
-      expect(draining, isA<RosterDraining>());
-      work.afterFlush();
-      await _pumpUntilIo(() => refusals.isNotEmpty);
+          // Now a seat that drains and immediately goes idle: the settle finalises
+          // it, decommission lists worktrees, the listing throws.
+          final attached = await work.roster.attach(
+            name: 'earth',
+            root: '${temp.path}/earth',
+          );
+          expect(attached, isA<RosterAttached>());
+          final draining = await work.roster.detach(
+            name: 'earth',
+            force: true,
+            inFlightOf: (_) => {'earth-1'},
+          );
+          expect(draining, isA<RosterDraining>());
+          work.afterFlush();
+          await _pumpUntilIo(() => refusals.isNotEmpty);
 
-      expect(git.listings, 1);
-      expect(refusals.single, contains('roster drain settle failed'));
-      expect(refusals.single, contains('worktree listing exploded'));
+          expect(git.listings, 1);
+          expect(refusals.single, contains('roster drain settle failed'));
+          expect(refusals.single, contains('worktree listing exploded'));
 
-      // The station keeps flushing: the seat left the roster before the throw,
-      // so the next flush settles nothing, raises nothing, and adds no refusal.
-      work.afterFlush();
-      await _pumpSettled();
-      expect(refusals, hasLength(1));
-    },
+          // The station keeps flushing: the seat left the roster before the throw,
+          // so the next flush settles nothing, raises nothing, and adds no refusal.
+          work.afterFlush();
+          await _pumpSettled();
+          expect(refusals, hasLength(1));
+          await work.shutdown();
+        },
+      ),
+    ),
   );
+
+  group('awaitProxiedStoreEndpoint (tg-ejzb)', () {
+    late Directory temp;
+
+    setUp(() => temp = Directory.systemTemp.createTempSync('proxy-ready-'));
+    tearDown(() => temp.deleteSync(recursive: true));
+
+    void seedProxied(String root, {bool withPid = false}) {
+      final dolt = Directory('$root/.beads/dolt')..createSync(recursive: true);
+      File('$root/.beads/metadata.json').writeAsStringSync(
+        '{"dolt_mode":"proxied-server","dolt_database":"earth"}',
+      );
+      File('${dolt.path}/beads_dart.secret').writeAsStringSync('s3cret');
+      if (withPid) {
+        File(
+          '${dolt.path}/proxy.pid',
+        ).writeAsStringSync('{"pid":$pid,"port":65123}');
+      }
+    }
+
+    test('returns as soon as a late proxy publishes its pid', () async {
+      final root = '${temp.path}/earth';
+      seedProxied(root);
+      var discoveries = 0;
+      final delays = <Duration>[];
+      final workspace = await awaitProxiedStoreEndpoint(
+        label: 'provision "earth"',
+        root: root,
+        within: const Duration(seconds: 5),
+        discover: (start) async {
+          discoveries++;
+          return BeadsWorkspace.discover(start: start);
+        },
+        delay: (duration) async {
+          delays.add(duration);
+          // The proxy lands on disk while the second wait is pending.
+          if (delays.length == 2) seedProxied(root, withPid: true);
+        },
+      );
+      expect(workspace.endpoint?.port, 65123);
+      expect(discoveries, 1, reason: 'the warmed discovery runs exactly once');
+      expect(delays, [
+        const Duration(milliseconds: 50),
+        const Duration(milliseconds: 100),
+      ]);
+    });
+
+    test('refuses with a message naming the deadline, never a '
+        'PathNotFoundException', () async {
+      final root = '${temp.path}/earth';
+      seedProxied(root);
+      Object? caught;
+      try {
+        await awaitProxiedStoreEndpoint(
+          label: 'provision "earth"',
+          root: root,
+          within: const Duration(milliseconds: 120),
+          discover: (start) async => BeadsWorkspace.discover(start: start),
+        );
+      } on Object catch (error) {
+        caught = error;
+      }
+      expect(caught, isA<StoreRefusal>());
+      expect(
+        '$caught',
+        allOf(
+          contains(
+            'provision "earth": the proxied store at $root published '
+            'no proxy pid/endpoint within 120ms',
+          ),
+          contains('proxy.pid is missing'),
+        ),
+      );
+      expect(caught, isNot(isA<PathNotFoundException>()));
+    });
+
+    test('a non-proxied store never waits', () async {
+      final root = '${temp.path}/proj';
+      _seedStore(root, database: 'proj');
+      var delayed = false;
+      final workspace = await awaitProxiedStoreEndpoint(
+        label: 'provision "proj"',
+        root: root,
+        discover: (start) async => BeadsWorkspace.discover(start: start),
+        delay: (_) async => delayed = true,
+      );
+      expect(workspace.mode, DoltMode.direct);
+      expect(workspace.endpoint, isNull);
+      expect(delayed, isFalse);
+    });
+
+    test('an unparseable root refuses at once', () async {
+      Object? caught;
+      try {
+        await awaitProxiedStoreEndpoint(
+          label: 'provision "ghost"',
+          root: '${temp.path}/ghost',
+          discover: (_) async => null,
+        );
+      } on Object catch (error) {
+        caught = error;
+      }
+      expect('$caught', contains('could not parse the work store'));
+    });
+  });
+
+  group('withLiveStoreLock (tg-ejzb)', () {
+    test('serialises two holders in one process and releases', () async {
+      final order = <String>[];
+      final firstEntered = Completer<void>();
+      final releaseFirst = Completer<void>();
+      final first = withLiveStoreLock(() async {
+        order.add('first in');
+        firstEntered.complete();
+        await releaseFirst.future;
+        order.add('first out');
+      });
+      await firstEntered.future;
+      expect(File(liveStoreLockPath()).existsSync(), isTrue);
+      final second = withLiveStoreLock(() async => order.add('second in'));
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      expect(order, ['first in'], reason: 'the second waits on the holder');
+      releaseFirst.complete();
+      await Future.wait([first, second]);
+      expect(order, ['first in', 'first out', 'second in']);
+      expect(File(liveStoreLockPath()).existsSync(), isFalse);
+    });
+
+    test(
+      'a dead holder is stolen loudly; a live holder times out by name',
+      () async {
+        final file = File(liveStoreLockPath());
+        // A pid that cannot be alive: max pid + 1 on every platform we run.
+        file.writeAsStringSync(
+          '{"pid":2147483646,"since":"2026-09-25T00:00:00.000Z"}',
+        );
+        final lines = <String>[];
+        await withLiveStoreLock(() async {}, log: lines.add);
+        expect(lines.single, contains('STEALING stale'));
+        expect(file.existsSync(), isFalse);
+
+        // A live foreign holder: this process's parent is alive for the test's
+        // duration and is not us.
+        final parent = Process.run('sh', ['-c', r'echo $PPID']);
+        final parentPid = int.parse((await parent).stdout.toString().trim());
+        file.writeAsStringSync(
+          '{"pid":$parentPid,"since":"2026-09-25T00:00:00.000Z"}',
+        );
+        Object? caught;
+        try {
+          await withLiveStoreLock(
+            () async {},
+            within: const Duration(milliseconds: 300),
+            log: lines.add,
+          );
+        } on Object catch (error) {
+          caught = error;
+        } finally {
+          if (file.existsSync()) file.deleteSync();
+        }
+        expect(caught, isA<TimeoutException>());
+        expect('$caught', contains('still held by pid $parentPid'));
+      },
+    );
+  });
+}
+
+/// Runs [body] over a fresh temp dir and FENCES every proxied store it started
+/// before returning — under the caller's lock, so the next process never
+/// meets our dolt servers mid-teardown. The temp dir is removed by the test
+/// runner's tear-down; the fence's assertions surface only when the body
+/// itself passed, so a real failure is never masked by its own cleanup.
+Future<void> _underLiveStores(
+  Future<void> Function(String temp, List<String> roots) body, {
+  required String prefix,
+  required List<String> Function(String temp) roots,
+}) async {
+  final temp = Directory.systemTemp.createTempSync(prefix);
+  addTearDown(() => temp.deleteSync(recursive: true));
+  final storeRoots = roots(temp.path);
+  Object? failure;
+  StackTrace? failureStack;
+  try {
+    await body(temp.path, storeRoots);
+  } on Object catch (error, stackTrace) {
+    failure = error;
+    failureStack = stackTrace;
+  }
+  try {
+    await _fenceProxiedStores(storeRoots, temp.path);
+  } on Object catch (error, stackTrace) {
+    if (failure == null) Error.throwWithStackTrace(error, stackTrace);
+    stderr.writeln('live-store fence after a failed body: $error');
+  }
+  if (failure != null) Error.throwWithStackTrace(failure, failureStack!);
 }

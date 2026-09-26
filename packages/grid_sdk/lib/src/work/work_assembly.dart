@@ -25,6 +25,10 @@ import 'station_work.dart';
 
 part 'work_assembly.freezed.dart';
 
+/// Discovers (and warms) the beads workspace at a root — the attach path's
+/// discovery seam, so a test can script a proxy that publishes late.
+typedef _WorkspaceDiscovery = Future<BeadsWorkspace?> Function(String root);
+
 typedef _MemberFactory =
     Future<GridRuntimeBundle> Function(
       BeadsWorkspace workspace,
@@ -277,6 +281,7 @@ class StationWorkRuntime implements SubstationProvisioner {
     required Map<String, RootCheckout> rootsByName,
     required Map<String, SubstationWorkSpec> specsByName,
     required bool dryRun,
+    required _WorkspaceDiscovery discoverWorkspace,
     required _MemberFactory buildMember,
     required _WorkWriterFactory buildWorkWriter,
   }) : _driver = driver,
@@ -306,6 +311,7 @@ class StationWorkRuntime implements SubstationProvisioner {
        _specsByName = specsByName,
        _workStoreConnectionStart = workStoreConnectionStart,
        _dryRun = dryRun,
+       _discoverWorkspace = discoverWorkspace,
        _buildMember = buildMember,
        _buildWorkWriter = buildWorkWriter;
 
@@ -381,6 +387,7 @@ class StationWorkRuntime implements SubstationProvisioner {
       <String, DoltStoreConnection>{};
   final int _workStoreConnectionStart;
   final bool _dryRun;
+  final _WorkspaceDiscovery _discoverWorkspace;
   final _MemberFactory _buildMember;
   final _WorkWriterFactory _buildWorkWriter;
   SubstationRoster? _roster;
@@ -742,7 +749,12 @@ class StationWorkRuntime implements SubstationProvisioner {
       root: p.canonicalize(spec.root),
       substationName: spec.name,
     );
-    final workspace = BeadsWorkspace.discover(start: spec.root);
+    // The WARMED discovery (tg-ejzb): bd materialises a proxied store's proxy
+    // on the first command against it, so this gives it one bounded chance to
+    // publish before anything reads `proxy.pid`. The member factory then
+    // waits, bounded, for the endpoint to land — after the bd mode gate, so a
+    // refused bd is reported as that and never as a missing proxy.
+    final workspace = await _discoverWorkspace(spec.root);
     if (workspace == null || !_sameCanonicalRoot(workspace.root, spec.root)) {
       throw StoreRefusal(
         'provision "${spec.name}": could not parse the work store at '
@@ -2263,6 +2275,10 @@ Future<StationWorkRuntime> _acquireStationWork({
     rootsByName: rootsByName,
     specsByName: <String, SubstationWorkSpec>{},
     dryRun: dryRun,
+    discoverWorkspace: (root) => BeadsWorkspace.discoverWarmed(
+      start: root,
+      warmRunnerFactory: endpointWarmRunnerFactory,
+    ),
     buildMember: (workspace, storeName) async {
       await _requireBdModeCapability(
         storeLabel: 'attach "$storeName"',
@@ -2270,8 +2286,19 @@ Future<StationWorkRuntime> _acquireStationWork({
         endpointWarmRunnerFactory: endpointWarmRunnerFactory,
         capabilities: bdModeCapabilities,
       );
+      // A proxied store's pid/endpoint may still be landing on disk when the
+      // attach reaches this point (tg-ejzb): wait for it under a bounded
+      // deadline instead of reading proxy.pid once and falling through to a
+      // socket-less CLI member. The warmed discovery already ran in
+      // `provision`; the polls here re-read the on-disk artifacts only.
+      final ready = await awaitProxiedStoreEndpoint(
+        label: 'attach "$storeName"',
+        root: workspace.root,
+        initial: workspace,
+        discover: (root) async => BeadsWorkspace.discover(start: root),
+      );
       return GridRuntimeFactory.build(
-        workspace: workspace,
+        workspace: ready,
         preferSql: preferSql,
         syncFloorInterval: syncFloorInterval,
         lifecycleTypes: {...IssueType.coreTypes, ...GridIssueTypes.all},
@@ -2364,6 +2391,68 @@ Future<GitRunResult> ghRunner(String workDir, List<String> args) async {
 /// executing a real `git`, the restart reconcile finds no survivors, and
 /// `provisionWorktree` materializes NOTHING. Exposed for the inertness
 /// regression tests.
+/// How long an attach waits for a proxied store to publish its proxy pid and
+/// SQL endpoint before refusing (tg-ejzb). bd materialises the proxy on the
+/// first command against the store, so a freshly initialised store attached
+/// under load can be read a beat before `proxy.pid` lands on disk.
+const Duration kProxiedStoreReadyTimeout = Duration(seconds: 10);
+
+/// Discovers the work store at [root] and, for a proxied-server store, WAITS
+/// under a bounded deadline for its proxy pid/endpoint to be published
+/// (tg-ejzb). The first read is [initial] when the caller already discovered
+/// the store, otherwise one [discover] (the warmed one, giving bd a bounded
+/// chance to start the proxy); every later poll re-reads the on-disk
+/// artifacts on a doubling backoff. A store that is not proxied returns as
+/// soon as it parses — its read path never needed a proxy.
+///
+/// Throws a [StoreRefusal] naming [label] when the root does not parse, or
+/// when the deadline passes with the endpoint still unpublished; that message
+/// names the deadline and carries the resolver's own diagnostic, so the
+/// operator reads WHY instead of a `PathNotFoundException` from a one-shot
+/// read.
+Future<BeadsWorkspace> awaitProxiedStoreEndpoint({
+  required String label,
+  required String root,
+  required Future<BeadsWorkspace?> Function(String root) discover,
+  BeadsWorkspace? initial,
+  Duration within = kProxiedStoreReadyTimeout,
+  Future<void> Function(Duration) delay = Future<void>.delayed,
+}) async {
+  final elapsed = Stopwatch()..start();
+  var backoff = const Duration(milliseconds: 50);
+  var polls = 0;
+  for (;;) {
+    final workspace = switch (polls) {
+      0 when initial != null => initial,
+      0 => await discover(root),
+      _ => BeadsWorkspace.discover(start: root),
+    };
+    polls++;
+    if (workspace == null || !_sameCanonicalRoot(workspace.root, root)) {
+      throw StoreRefusal(
+        '$label: could not parse the work store at $root/.beads '
+        '(resolved: ${workspace?.root ?? 'nothing'}).',
+      );
+    }
+    if (workspace.mode != DoltMode.proxiedServer ||
+        workspace.endpoint != null) {
+      return workspace;
+    }
+    if (elapsed.elapsed >= within) {
+      throw StoreRefusal(
+        '$label: the proxied store at $root published no proxy pid/endpoint '
+        'within ${within.inMilliseconds}ms ($polls reads) — '
+        '${workspace.endpointDiagnostic ?? 'no resolver diagnostic'}',
+      );
+    }
+    await delay(backoff);
+    backoff *= 2;
+    if (backoff > const Duration(seconds: 1)) {
+      backoff = const Duration(seconds: 1);
+    }
+  }
+}
+
 /// Builds the FRESH-status land gate [assembleStationWork] injects into
 /// [StationGitService.land] (tg-b1t8): asked with the work bead's id right
 /// before the PR opens, it READS the bead from its owning store AT CALL TIME
