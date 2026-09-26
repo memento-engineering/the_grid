@@ -55,9 +55,6 @@ final class _View implements StationView {
   @override
   WedgeState get wedge => monitor.state;
   @override
-  WedgeState wedgeFor(JoinedSnapshot snapshot) =>
-      monitor.pollSnapshot(snapshot);
-  @override
   Map<String, Object?> syncStatus() => const <String, Object?>{};
   @override
   Map<String, Object?> trajectoryStatus() => _trajectory;
@@ -635,81 +632,45 @@ final class _ProjectedDiagnosticsNode extends MultiChildSeed
 }
 
 void main() {
-  test('status projection uses one snapshot', () async {
-    final fixtures = <({JoinedSnapshot snapshot, int gated, bool ripens})>[
-      (
-        snapshot: _statusSnapshot(beads: const [], readyIds: {}, sessions: {}),
-        gated: 0,
-        ripens: false,
-      ),
-      (
-        snapshot: _statusSnapshot(
-          beads: [_statusBead('earth-running')],
-          readyIds: {},
-          sessions: {
-            'earth-running': _statusSession('earth-running', StepState.running),
-          },
-        ),
-        gated: 0,
-        ripens: false,
-      ),
-      (
-        snapshot: _statusSnapshot(
-          beads: [
-            for (final id in ['earth-a', 'earth-b', 'earth-c']) _statusBead(id),
-          ],
-          readyIds: {},
-          sessions: {
-            for (final id in ['earth-a', 'earth-b', 'earth-c'])
-              id: _statusSession(id, StepState.gated),
-          },
-        ),
-        gated: 3,
-        ripens: true,
-      ),
-    ];
+  test('status projection reads the resident wedge sample', () async {
+    final snapshot = _statusSnapshot(
+      beads: [
+        for (final id in ['earth-a', 'earth-b', 'earth-c']) _statusBead(id),
+      ],
+      readyIds: {},
+      sessions: {
+        for (final id in ['earth-a', 'earth-b', 'earth-c'])
+          id: _statusSession(id, StepState.gated),
+      },
+    );
+    final monitor = WedgeMonitor(
+      latest: () => snapshot,
+      threshold: Duration.zero,
+    );
+    addTearDown(monitor.dispose);
+    final residentSample = monitor.pollSnapshot(snapshot);
+    final h = await _Harness.create(
+      holdOpen: true,
+      snapshot: snapshot,
+      monitor: monitor,
+    );
+    addTearDown(h.dispose);
+    final run = h.run(untimed: true);
+    await h.stationUp.future;
 
-    for (final fixture in fixtures) {
-      var now = DateTime.utc(2026, 8, 21);
-      final monitor = WedgeMonitor(
-        latest: () => fixture.snapshot,
-        threshold: const Duration(minutes: 10),
-        clock: () => now,
-      );
-      addTearDown(monitor.dispose);
-      final h = await _Harness.create(
-        holdOpen: true,
-        snapshot: fixture.snapshot,
-        monitor: monitor,
-      );
-      addTearDown(h.dispose);
-      final run = h.run(untimed: true);
-      await h.stationUp.future;
+    final status = h.statusView!();
+    final body = status.toJson();
+    final wedge = body['wedge'] as Map<String, Object?>;
+    final work = body['work'] as Map<String, Object?>;
+    expect(status.wedge, same(residentSample));
+    expect(wedge['live'], 3);
+    expect(wedge['live'], work['liveSessions']);
+    expect(wedge['gated'], 3);
+    expect(wedge['wedged'], isTrue);
+    expect(work['mintFailedScopes'], 0);
 
-      var body = h.statusView!().toJson();
-      var wedge = body['wedge'] as Map<String, Object?>;
-      final work = body['work'] as Map<String, Object?>;
-      expect(wedge['live'], work['liveSessions']);
-      expect(wedge['gated'], fixture.gated);
-      expect(work['mintFailedScopes'], 0);
-
-      if (fixture.ripens) {
-        now = now.add(const Duration(minutes: 10));
-        body = h.statusView!().toJson();
-        wedge = body['wedge'] as Map<String, Object?>;
-        expect(
-          wedge['live'],
-          (body['work'] as Map<String, Object?>)['liveSessions'],
-        );
-        expect(wedge['gated'], fixture.gated);
-        expect(wedge['wedged'], isTrue);
-        expect(wedge['since'], isNotNull);
-        expect(wedge['reason'], contains('parked at a gate'));
-      }
-
-      h.release.complete();
-      expect(await run, 0);
-    }
+    h.release.complete();
+    expect(await run, 0);
   });
 
   test('status projection forwards the live view admission snapshot', () async {

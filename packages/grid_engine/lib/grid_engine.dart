@@ -149,6 +149,9 @@ export 'src/domain/mount_eligibility.dart';
 // workspace/branch layout) live on the SubstationScope's ServiceBundle, not here.
 export 'src/kernel/admission_barrier.dart';
 export 'src/kernel/station_services.dart';
+// The station-wide bound on state-store lifecycle writes (tg-66w8): one
+// governor per write class, owned by StationServices, shared by every WorkList.
+export 'src/kernel/state_store_write_governor.dart';
 export 'src/kernel/station_admission_authority.dart';
 
 // Stage 1 (tg-zfek) — the ONE new ambient value (stage1-wiring §1.1): the
