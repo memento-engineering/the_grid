@@ -6,154 +6,230 @@
 // resulting `invalid connection` / missing `proxy.pid` failures. The decision
 // the_grid#hermetic-guard-is-the-live-tests-own-default puts a live test's
 // safety default IN the test: a guard an invoker can turn off is not a guard,
-// so this is neither an `integration` exclusion nor a lane scheduling rule.
+// so this is neither an `integration` exclusion nor a lane scheduling rule —
+// the live tests carry no tag and run in every default lane, serialised here.
 //
-// Modelled on `packages/grid_cli/lib/src/station_lock.dart` (exclusive-create
-// claim, pid-liveness arbitration, loud steal of a dead holder, bounded hold on
-// an unreadable record) — NOT imported: grid_cli depends on grid_sdk, and this
-// file must not invert that arc. It is test support, so it also differs where
-// a station lock must not: a record unreadable past the hold window is stolen
-// (a torn test lock has no supervisor behind it), and a live holder is WAITED
-// on up to a bounded deadline rather than refused.
+// Modelled on `packages/grid_cli/lib/src/station_lock.dart` (pid-liveness
+// arbitration, a loud line for every record it removes) — NOT imported:
+// grid_cli depends on grid_sdk, and this file must not invert that arc. It is
+// test support, so its shape differs where a station lock's must not:
+//
+// * FAIR. The lock is a FIFO QUEUE of ticket files in one directory, ordered
+//   by arrival (a zero-padded microsecond stamp, then pid, then a random
+//   suffix). A waiter holds the lock when its ticket is the oldest live one,
+//   so N lanes wait N-1 holds at most — never an unbounded, luck-of-the-
+//   backoff wait behind a lane that keeps re-acquiring first.
+// * NO TORN RECORDS. Liveness is read from the ticket's NAME (the pid is part
+//   of it), never from its contents, so a half-written record cannot stall the
+//   queue.
+// * SELF-HEALING. A ticket whose pid is dead is pruned with a loud line; a
+//   ticket older than [kLiveStoreHoldBound] — longer than any live test's own
+//   timeout, so no legitimate hold reaches it — is ABANDONED (an isolate the
+//   runner gave up on inside a process that lives on) and is pruned too.
+// * DEGRADES, NEVER FAILS. Past [kLiveStoreLockPatience] a starved waiter
+//   logs a loud line naming the holder and runs its body UNSERIALISED rather
+//   than throwing: a hard failure here would re-create the very lane block
+//   this lock exists to remove, and the product-side bounded readiness wait
+//   (`awaitProxiedStoreEndpoint`) still guards the known race.
+// * A waiter only ever deletes ITS OWN ticket, or a ticket its liveness rules
+//   PROVE stale. The unit tests run against their own temp directory
+//   ([withLiveStoreLock]'s `directory:`) and never touch the machine-wide
+//   queue a live test in another process may be holding.
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:path/path.dart' as p;
 
-/// The default bound on waiting for another process to release the lock —
-/// generous enough for a whole run of the live suite ahead of us, and the
-/// test's own `timeout:` must exceed it.
-const Duration kLiveStoreLockWait = Duration(minutes: 5);
+/// How long a waiter queues before it DEGRADES to running unserialised (with
+/// a loud line) instead of waiting on. Generous: a live-store hold measures
+/// ~25 s, so this covers a dozen lanes queued ahead.
+const Duration kLiveStoreLockPatience = Duration(minutes: 5);
 
-/// The unreadable-record hold: a claim that stays EMPTY or torn this long has
-/// no writer behind it (the claimant publishes right after the create).
-const Duration kLiveStoreLockHold = Duration(seconds: 2);
+/// The age past which a LIVE pid's ticket is presumed abandoned and pruned.
+/// It must exceed every live test's own `timeout:` (8 minutes), so no hold the
+/// runner still honours is ever pruned out from under its holder.
+const Duration kLiveStoreHoldBound = Duration(minutes: 10);
 
-/// The lock path shared by every process on this machine.
-String liveStoreLockPath() =>
-    p.join(Directory.systemTemp.path, 'grid_sdk-live-store-tests.lock');
+/// The settle a waiter re-lists through after it first sees itself at the
+/// head, so a peer whose stamp was taken a beat before ours but whose ticket
+/// landed a beat after is seen before we start.
+const Duration _kHeadSettle = Duration(milliseconds: 50);
 
-/// Runs [body] while holding the machine-wide live-store lock, so two
-/// processes never bootstrap or tear down proxied bd stores at once.
+/// The machine-wide queue directory every live proxied-store test shares.
 ///
-/// Waits up to [within] for a LIVE holder to release; a dead holder's record
-/// is stolen with a loud line; an unreadable record is re-read through
-/// [kLiveStoreLockHold] and then stolen. Throws a [TimeoutException] naming
-/// the lock and its holder when [within] passes — the test then fails loudly
-/// instead of racing.
+/// A FIXED path, deliberately NOT `Directory.systemTemp`: that follows
+/// `TMPDIR`, which differs per session, sandbox and lane runner, and two
+/// processes with different `TMPDIR`s would each queue in their own directory
+/// and never see each other — exactly the concurrent lanes this lock is for.
+/// `/tmp` is the one directory every POSIX process on the machine shares; the
+/// system temp is only the fallback where `/tmp` does not exist.
+String liveStoreLockDirectory() {
+  const shared = '/tmp';
+  final base = !Platform.isWindows && Directory(shared).existsSync()
+      ? shared
+      : Directory.systemTemp.path;
+  return p.join(base, 'grid_sdk-live-store-tests.queue');
+}
+
+/// Runs [body] while holding the live-store lock, so two holders — two
+/// processes, or two isolates of one — never bootstrap or tear down proxied bd
+/// stores at once.
+///
+/// [directory] defaults to the machine-wide [liveStoreLockDirectory]; a unit
+/// test passes its own temp directory. [patience] bounds how long this waiter
+/// queues before degrading (see the file header); [holdBound] is the age past
+/// which a live pid's ticket is pruned as abandoned. Never throws for a busy
+/// lock: a starved waiter runs its body unserialised, loudly. [log] receives
+/// every loud line (stderr by default).
 Future<T> withLiveStoreLock<T>(
   Future<T> Function() body, {
-  Duration within = kLiveStoreLockWait,
+  String? directory,
+  Duration patience = kLiveStoreLockPatience,
+  Duration holdBound = kLiveStoreHoldBound,
   void Function(String line)? log,
 }) async {
-  final file = File(liveStoreLockPath());
+  final queue = Directory(directory ?? liveStoreLockDirectory());
   final void Function(String) out = log ?? stderr.writeln;
-  await _acquire(file, within: within, log: out);
+  final ticket = await _enqueue(queue);
   try {
+    await _awaitHead(
+      queue,
+      ticket,
+      patience: patience,
+      holdBound: holdBound,
+      log: out,
+    );
     return await body();
   } finally {
-    await _release(file);
+    _deleteQuietly(ticket);
   }
 }
 
-Future<void> _acquire(
-  File file, {
-  required Duration within,
+final Random _random = Random();
+
+/// Creates this waiter's ticket at the tail of [queue].
+Future<File> _enqueue(Directory queue) async {
+  await queue.create(recursive: true);
+  for (;;) {
+    final stamp = DateTime.now().microsecondsSinceEpoch.toString().padLeft(
+      20,
+      '0',
+    );
+    final suffix = _random.nextInt(1 << 32).toRadixString(16).padLeft(8, '0');
+    final ticket = File(p.join(queue.path, '$stamp-$pid-$suffix.ticket'));
+    try {
+      await ticket.create(exclusive: true);
+      return ticket;
+    } on PathExistsException {
+      // A same-microsecond, same-suffix collision: draw again.
+    }
+  }
+}
+
+/// Waits until [ticket] is the oldest live ticket in [queue], pruning dead and
+/// abandoned tickets on the way, or until [patience] elapses — then returns
+/// anyway, after a loud line naming who is still ahead.
+Future<void> _awaitHead(
+  Directory queue,
+  File ticket, {
+  required Duration patience,
+  required Duration holdBound,
   required void Function(String) log,
 }) async {
+  final mine = p.basename(ticket.path);
   final waited = Stopwatch()..start();
-  var backoff = const Duration(milliseconds: 100);
-  var unreadableSince = Stopwatch();
+  var backoff = const Duration(milliseconds: 50);
+  var settled = false;
   for (;;) {
-    try {
-      await file.create(exclusive: true);
-    } on PathExistsException {
-      final holder = _readHolder(file);
-      if (holder == null) {
-        if (!file.existsSync()) continue; // released under us; retry at once
-        if (!unreadableSince.isRunning) unreadableSince.start();
-        if (unreadableSince.elapsed >= kLiveStoreLockHold) {
-          log(
-            'live-store lock: STEALING unreadable ${file.path} (stayed '
-            'unreadable for ${unreadableSince.elapsedMilliseconds}ms — a torn '
-            'test lock has no writer behind it)',
-          );
-          _deleteQuietly(file);
-          unreadableSince = Stopwatch();
-        }
-      } else {
-        unreadableSince = Stopwatch();
-        // A holder in THIS process is a live holder too: `dart test` runs
-        // suites as isolates of one process, so two live files in one run
-        // share a pid and must still take turns.
-        if (!_pidAlive(holder.pid)) {
-          log(
-            'live-store lock: STEALING stale ${file.path} (pid ${holder.pid} '
-            'dead — the previous test process exited without releasing)',
-          );
-          _deleteQuietly(file);
-          continue;
-        }
-        if (waited.elapsed >= within) {
-          throw TimeoutException(
-            'live-store lock: ${file.path} is still held by pid '
-            '${holder.pid} (since ${holder.since.toIso8601String()}) after '
-            'waiting ${waited.elapsed.inSeconds}s — refusing to start a '
-            'second live proxied-store test beside it',
-            within,
-          );
-        }
-      }
-      await Future<void>.delayed(backoff);
-      backoff *= 2;
-      if (backoff > const Duration(seconds: 1)) {
-        backoff = const Duration(seconds: 1);
-      }
+    final ahead = _liveTicketsAhead(
+      queue,
+      mine,
+      holdBound: holdBound,
+      log: log,
+    );
+    if (ahead.isEmpty) {
+      if (settled) return;
+      settled = true;
+      await Future<void>.delayed(_kHeadSettle);
       continue;
     }
-    // The claim is ours: publish who holds it, at once.
-    file.writeAsStringSync(
-      jsonEncode({'pid': pid, 'since': DateTime.now().toIso8601String()}),
-    );
-    return;
-  }
-}
-
-Future<void> _release(File file) async {
-  final holder = _readHolder(file);
-  if (holder != null && holder.pid != pid) {
-    // Never a same-process check beyond the pid: two isolates of one process
-    // cannot both hold the claim, so a same-pid record is ours.
-    stderr.writeln(
-      'live-store lock: NOT releasing ${file.path} — held by pid '
-      '${holder.pid}, not this process ($pid)',
-    );
-    return;
-  }
-  _deleteQuietly(file);
-}
-
-({int pid, DateTime since})? _readHolder(File file) {
-  try {
-    final decoded = jsonDecode(file.readAsStringSync());
-    if (decoded case {
-      'pid': final int holderPid,
-      'since': final String since,
-    } when holderPid > 0) {
-      return (pid: holderPid, since: DateTime.parse(since));
+    settled = false;
+    if (waited.elapsed >= patience) {
+      log(
+        'live-store lock: DEGRADED after waiting ${waited.elapsed.inSeconds}s '
+        'in ${queue.path} — ${ahead.length} ticket(s) still ahead, the head '
+        'held by pid ${_pidOf(ahead.first)} (${ahead.first}); running '
+        'UNSERIALISED rather than failing the lane',
+      );
+      return;
     }
-  } on Object {
-    // Absent, empty, or mid-write: the caller decides how long to hold.
+    await Future<void>.delayed(backoff);
+    backoff *= 2;
+    if (backoff > const Duration(milliseconds: 500)) {
+      backoff = const Duration(milliseconds: 500);
+    }
   }
-  return null;
+}
+
+/// The live tickets that sort before [mine], oldest first. Prunes — loudly —
+/// a ticket whose pid is dead, or one older than [holdBound].
+List<String> _liveTicketsAhead(
+  Directory queue,
+  String mine, {
+  required Duration holdBound,
+  required void Function(String) log,
+}) {
+  final names = <String>[
+    for (final entity in queue.listSync())
+      if (entity is File && entity.path.endsWith('.ticket'))
+        p.basename(entity.path),
+  ]..sort();
+  final ahead = <String>[];
+  final now = DateTime.now().microsecondsSinceEpoch;
+  for (final name in names) {
+    if (name.compareTo(mine) >= 0) break;
+    final holder = _pidOf(name);
+    final stamp = _stampOf(name);
+    if (holder == null || stamp == null) {
+      // Not a ticket this code wrote; never ours to judge or delete.
+      continue;
+    }
+    if (holder != pid && !_pidAlive(holder)) {
+      log(
+        'live-store lock: PRUNING stale ticket $name in ${queue.path} (pid '
+        '$holder is dead — its process exited without releasing)',
+      );
+      _deleteQuietly(File(p.join(queue.path, name)));
+      continue;
+    }
+    final age = Duration(microseconds: now - stamp);
+    if (age > holdBound) {
+      log(
+        'live-store lock: PRUNING abandoned ticket $name in ${queue.path} '
+        '(pid $holder alive but the ticket is ${age.inSeconds}s old, past the '
+        '${holdBound.inSeconds}s hold bound no live test reaches)',
+      );
+      _deleteQuietly(File(p.join(queue.path, name)));
+      continue;
+    }
+    ahead.add(name);
+  }
+  return ahead;
+}
+
+int? _stampOf(String name) => int.tryParse(name.split('-').first);
+
+int? _pidOf(String name) {
+  final parts = name.split('-');
+  return parts.length < 3 ? null : int.tryParse(parts[1]);
 }
 
 void _deleteQuietly(File file) {
   try {
     file.deleteSync();
   } on Object {
-    // Already gone — another waiter stole or the holder released.
+    // Already gone — a peer pruned it, or it was never created.
   }
 }
 

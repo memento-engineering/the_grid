@@ -543,11 +543,12 @@ void main() {
 
   test(
     'live attached Dolt store joins and leaves the shell close list',
-    tags: ['integration'],
-    skip: _bdMissing,
-    // SELF-BOUNDED (tg-ejzb): the body runs under the machine-wide live-store
-    // lock so a second lane's instance waits instead of racing our bd proxies,
-    // and the timeout covers that wait plus the run.
+    // NOT tagged integration (tg-ejzb, ruled 2026-09-22): the test runs in
+    // every default lane and SELF-BOUNDS — the body runs under the machine-
+    // wide live-store queue, so a second lane's instance waits its turn
+    // instead of racing our bd proxies. The timeout covers the queue's
+    // patience plus the run; a starved waiter degrades, never fails. Where bd
+    // is absent (the offline CI runner) it skips BY REASON, not exclusion.
     timeout: const Timeout(Duration(minutes: 8)),
     () => withLiveStoreLock(
       () => _underLiveStores(
@@ -616,10 +617,9 @@ void main() {
 
   test(
     'a throwing drain settle is reported LOUD and flushing continues',
-    // Integration tier: assembleStationWork needs a REAL state store, so this
-    // shells out to `bd init` — absent on the unit-tier CI runner, and skipped
-    // by reason (not excluded) wherever bd is not on PATH.
-    tags: ['integration'],
+    // assembleStationWork needs a REAL state store, so this shells out to
+    // `bd init` — skipped BY REASON wherever bd is not on PATH (the offline CI
+    // runner), never excluded by tag (tg-ejzb: the live tests self-bound).
     skip: _bdMissing,
     // SELF-BOUNDED (tg-ejzb): see the live attach test above.
     timeout: const Timeout(Duration(minutes: 8)),
@@ -798,63 +798,123 @@ void main() {
   });
 
   group('withLiveStoreLock (tg-ejzb)', () {
-    test('serialises two holders in one process and releases', () async {
+    // Every case runs against ITS OWN temp queue: the machine-wide queue may be
+    // held by a live test in another lane, and a unit test that wrote into or
+    // deleted from it would break that lane's mutual exclusion (review HIGH).
+    late Directory queue;
+    setUp(() => queue = Directory.systemTemp.createTempSync('live-lock-'));
+    tearDown(() => queue.deleteSync(recursive: true));
+
+    List<String> tickets() => [
+      for (final entity in queue.listSync())
+        if (entity.path.endsWith('.ticket')) entity.uri.pathSegments.last,
+    ]..sort();
+
+    File foreignTicket({required int holderPid, DateTime? at}) {
+      final stamp = (at ?? DateTime.now()).microsecondsSinceEpoch
+          .toString()
+          .padLeft(20, '0');
+      return File('${queue.path}/$stamp-$holderPid-deadbeef.ticket')
+        ..createSync();
+    }
+
+    Future<int> livePeerPid() async {
+      final result = await Process.run('sh', ['-c', r'echo $PPID']);
+      return int.parse(result.stdout.toString().trim());
+    }
+
+    test('three holders in one process take turns in ARRIVAL order and '
+        'leave the queue empty', () async {
       final order = <String>[];
       final firstEntered = Completer<void>();
       final releaseFirst = Completer<void>();
-      final first = withLiveStoreLock(() async {
+      final first = withLiveStoreLock(directory: queue.path, () async {
         order.add('first in');
         firstEntered.complete();
         await releaseFirst.future;
         order.add('first out');
       });
       await firstEntered.future;
-      expect(File(liveStoreLockPath()).existsSync(), isTrue);
-      final second = withLiveStoreLock(() async => order.add('second in'));
+      final second = withLiveStoreLock(
+        directory: queue.path,
+        () async => order.add('second'),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      final third = withLiveStoreLock(
+        directory: queue.path,
+        () async => order.add('third'),
+      );
       await Future<void>.delayed(const Duration(milliseconds: 250));
-      expect(order, ['first in'], reason: 'the second waits on the holder');
+      expect(order, ['first in'], reason: 'the others queue on the holder');
+      expect(tickets(), hasLength(3));
       releaseFirst.complete();
-      await Future.wait([first, second]);
-      expect(order, ['first in', 'first out', 'second in']);
-      expect(File(liveStoreLockPath()).existsSync(), isFalse);
+      await Future.wait([first, second, third]);
+      expect(order, ['first in', 'first out', 'second', 'third']);
+      expect(tickets(), isEmpty, reason: 'each holder removed its own');
     });
 
-    test(
-      'a dead holder is stolen loudly; a live holder times out by name',
-      () async {
-        final file = File(liveStoreLockPath());
-        // A pid that cannot be alive: max pid + 1 on every platform we run.
-        file.writeAsStringSync(
-          '{"pid":2147483646,"since":"2026-09-25T00:00:00.000Z"}',
-        );
-        final lines = <String>[];
-        await withLiveStoreLock(() async {}, log: lines.add);
-        expect(lines.single, contains('STEALING stale'));
-        expect(file.existsSync(), isFalse);
+    test('a DEAD holder ticket is pruned loudly and never blocks', () async {
+      // A pid that cannot be alive: past every platform's pid range.
+      foreignTicket(holderPid: 2147483646);
+      final lines = <String>[];
+      var ran = false;
+      await withLiveStoreLock(
+        directory: queue.path,
+        () async => ran = true,
+        log: lines.add,
+      ).timeout(const Duration(seconds: 5));
+      expect(ran, isTrue);
+      expect(lines.single, contains('PRUNING stale ticket'));
+      expect(tickets(), isEmpty);
+    });
 
-        // A live foreign holder: this process's parent is alive for the test's
-        // duration and is not us.
-        final parent = Process.run('sh', ['-c', r'echo $PPID']);
-        final parentPid = int.parse((await parent).stdout.toString().trim());
-        file.writeAsStringSync(
-          '{"pid":$parentPid,"since":"2026-09-25T00:00:00.000Z"}',
+    test('an ABANDONED ticket of a live pid, older than the hold bound, is '
+        'pruned loudly', () async {
+      final parent = await livePeerPid();
+      foreignTicket(
+        holderPid: parent,
+        at: DateTime.now().subtract(const Duration(hours: 1)),
+      );
+      final lines = <String>[];
+      await withLiveStoreLock(
+        directory: queue.path,
+        () async {},
+        log: lines.add,
+      ).timeout(const Duration(seconds: 5));
+      expect(lines.single, contains('PRUNING abandoned ticket'));
+      expect(tickets(), isEmpty);
+    });
+
+    test('a STARVED waiter DEGRADES — it runs its body with a loud line '
+        'naming the holder, never throws, and never deletes the live '
+        "holder's ticket", () async {
+      final parent = await livePeerPid();
+      final held = foreignTicket(holderPid: parent);
+      final lines = <String>[];
+      var ran = false;
+      await withLiveStoreLock(
+        directory: queue.path,
+        patience: const Duration(milliseconds: 300),
+        () async => ran = true,
+        log: lines.add,
+      ).timeout(const Duration(seconds: 5));
+      expect(ran, isTrue);
+      expect(lines.single, contains('DEGRADED'));
+      expect(lines.single, contains('held by pid $parent'));
+      expect(held.existsSync(), isTrue, reason: 'only its own is removed');
+      expect(tickets(), [held.uri.pathSegments.last]);
+    });
+
+    test('the unit cases never touch the machine-wide queue, and that queue '
+        'is one fixed path, not a per-TMPDIR one', () {
+      expect(queue.path, isNot(liveStoreLockDirectory()));
+      if (!Platform.isWindows && Directory('/tmp').existsSync()) {
+        expect(
+          liveStoreLockDirectory(),
+          '/tmp/grid_sdk-live-store-tests.queue',
         );
-        Object? caught;
-        try {
-          await withLiveStoreLock(
-            () async {},
-            within: const Duration(milliseconds: 300),
-            log: lines.add,
-          );
-        } on Object catch (error) {
-          caught = error;
-        } finally {
-          if (file.existsSync()) file.deleteSync();
-        }
-        expect(caught, isA<TimeoutException>());
-        expect('$caught', contains('still held by pid $parentPid'));
-      },
-    );
+      }
+    });
   });
 }
 
