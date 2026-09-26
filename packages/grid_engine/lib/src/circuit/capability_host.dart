@@ -876,14 +876,19 @@ class CapabilityHostState extends State<CapabilityHost>
   /// A clean completion — the terminal `state=complete` merged with the optional
   /// result [payload] into ONE chokepoint update (the grade/pr_url lands
   /// atomically alongside the cursor advance — A1/D-5).
-  Future<void> _persistComplete(Map<String, String>? payload) async {
+  Future<void> _persistComplete(
+    Map<String, String>? payload, {
+    Map<String, String>? preparedResultMetadata,
+  }) async {
     if (!_guardPersist('complete')) return;
     final timing = _terminalTiming();
     await _ctx!.writer.update(
       _stepBeadId,
       metadata: {
         ..._moleculeMetadata(StepState.complete, timing: timing),
-        ...nodeResultMetadata(_nodePath, payload),
+        ...?preparedResultMetadata,
+        if (preparedResultMetadata == null)
+          ...nodeResultMetadata(_nodePath, payload),
       },
     );
     // The result keys the legacy write merged atomically ride the record's
@@ -1159,11 +1164,19 @@ class CapabilityHostState extends State<CapabilityHost>
     required Map<String, String> completionPayload,
     required Map<String, String> advanceBasis,
   }) async {
+    // Validate the A42 result family before the first possible transition
+    // write. This only reorders preparation: the wave-2 KEPT carriers
+    // (complete, failed, gated, ready) and their sole-carrier payloads remain
+    // unchanged (`wave-2-kept-set-includes-gated-and-ready`).
+    final resultMetadata = nodeResultMetadata(_nodePath, completionPayload);
     final receipts = await _ctx!.writer.closeOpenGatesForNodeAdvance(
       sessionId: _sessionId,
       nodePath: _nodePath,
     );
-    await _persistComplete(completionPayload);
+    await _persistComplete(
+      completionPayload,
+      preparedResultMetadata: resultMetadata,
+    );
     for (final receipt in receipts) {
       if (receipt.cause != GateCloseCause.supersededByAdvance) continue;
       _emitFlare('gate.supersededByAdvance', {

@@ -257,10 +257,10 @@ void main() {
       'joins successor-incarnation verdicts independently of rewindCount',
       () async {
         final verdicts = [
-          {'lane': 'plan-completeness', 'grade': 'A', 'round': '2'},
+          {'lane': 'plan_completeness', 'grade': 'A', 'round': '2'},
           {'lane': 'coherence', 'grade': 'B', 'round': '2'},
-          {'lane': 'adr-alignment', 'grade': 'A', 'round': '2'},
-          {'lane': 'acceptance-testability', 'grade': 'A', 'round': '2'},
+          {'lane': 'adr_alignment', 'grade': 'A', 'round': '2'},
+          {'lane': 'acceptance_testability', 'grade': 'A', 'round': '2'},
         ];
         final seenRounds = <String?>[];
 

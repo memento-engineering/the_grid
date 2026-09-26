@@ -39,11 +39,17 @@ jobs:
         # integration tier needs bd on PATH, which this job does not install;
         # tg-nx0o's ready-sort divergence lives inside that excluded tier.
         run: |
-          for pkg in grid_diagnostics_contract grid_runtime grid_exploration grid_engine grid_cli; do
+          for pkg in grid_diagnostics_contract grid_runtime grid_exploration grid_cli; do
             echo "::group::$pkg"
             (cd packages/$pkg && dart test)
             echo "::endgroup::"
           done
+          # grid_engine grew an integration tier (test/integration/, tg-ymcd) that
+          # shells out to bd; this job installs no bd, so the offline tier runs
+          # here with the tag excluded, matching the packages below.
+          echo "::group::grid_engine"
+          (cd packages/grid_engine && dart test -x integration)
+          echo "::endgroup::"
           echo "::group::beads_dart"
           (cd packages/beads_dart && dart test -x integration)
           echo "::endgroup::"
