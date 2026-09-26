@@ -780,6 +780,7 @@ Fakes buildFakes({
   WorkSignalProbe? workSignal,
   List<String>? eventLog,
   int maxConcurrentWork = kDefaultMaxConcurrentWork,
+  WorkBeadLandGate? deliveryGate,
 }) {
   final runner = RecordingBdRunner(createdId: createdId, eventLog: eventLog);
   final provider = FakeRuntimeProvider();
@@ -803,6 +804,8 @@ Fakes buildFakes({
       // The COMPLETION FENCE's probe — null (the default) leaves the fence inert,
       // so every existing test is unchanged.
       workSignal: workSignal,
+      // The fresh-status delivery gate (tg-b1t8) — null leaves it inert.
+      deliveryGate: deliveryGate,
     ),
     runner: runner,
     provider: provider,

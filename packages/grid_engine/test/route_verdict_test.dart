@@ -10,6 +10,7 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/src/molecule/bead_path_key.dart';
 import 'package:grid_engine/src/molecule/inherited_circuit.dart';
+import 'package:grid_runtime/grid_runtime.dart' show LandGateDecision;
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
@@ -593,6 +594,126 @@ void main() {
         expect(write.contains('complete'), isFalse);
       }
     });
+  });
+
+  group('tg-b1t8 — the FRESH-status delivery gate on the PRODUCTION delivery '
+      'path (CapabilityHost terminal advance → DeliveryMethod.deliver)', () {
+    test('a bead OPEN at mount and DEFERRED at push time is refused: the '
+        'bound method (push + PR) is never called, the refusal names the bead '
+        'and the status, and the step routes to supervision', () async {
+      final asked = <String>[];
+      // The ambient work bead the route mounted under is OPEN (the mount-time
+      // snapshot); the gate's fresh read finds it DEFERRED now.
+      final fakes = buildFakes(
+        deliveryGate: (beadId) async {
+          asked.add(beadId);
+          return const LandGateDecision.refused(
+            status: 'deferred',
+            reason: 'only an open bead lands; tg-1 reads deferred',
+          );
+        },
+      );
+      addTearDown(fakes.provider.close);
+      final method = RecordingDeliveryMethod();
+      final transport = RecordingExplorationTransport();
+      await _drive(
+        const FixedRouteCapability(Advance({'grade': 'A'})),
+        services: ServiceBundle(delivery: method, transport: transport),
+        fakes: fakes,
+      );
+
+      expect(asked, ['tg-1'], reason: 'asked once, at push time');
+      expect(method.requests, isEmpty, reason: 'no push, no PR');
+      final meta = fakes.runner.metadataOfUpdate(0);
+      expect(meta['grid.step.state'], 'failed');
+      expect(
+        meta['grid.step.failureReason'],
+        allOf(
+          contains('fake-delivery'),
+          contains('work bead tg-1 is deferred at push time'),
+          contains('no PR opened'),
+        ),
+      );
+      for (final write in _allWrites(fakes.runner)) {
+        expect(write.contains('complete'), isFalse);
+        expect(write.contains('pr_url'), isFalse);
+      }
+      final refused = transport.named('deliver.refused').single;
+      expect(refused.data, containsPair('bead', 'tg-1'));
+      expect(refused.data, containsPair('status', 'deferred'));
+    });
+
+    test(
+      'an OPEN, driveable bead still delivers exactly as before (AC-4)',
+      () async {
+        final asked = <String>[];
+        final fakes = buildFakes(
+          deliveryGate: (beadId) async {
+            asked.add(beadId);
+            return const LandGateDecision.open();
+          },
+        );
+        addTearDown(fakes.provider.close);
+        final method = RecordingDeliveryMethod();
+        await _drive(
+          const FixedRouteCapability(Advance({'grade': 'A'})),
+          services: ServiceBundle(delivery: method),
+          fakes: fakes,
+        );
+
+        expect(asked, ['tg-1']);
+        expect(method.requests.single.bead.id, 'tg-1');
+        final meta = fakes.runner.metadataOfUpdate(0);
+        expect(meta['grid.step.state'], 'complete');
+        expect(
+          meta[ResultKeys.keyFor('tg-1/route', 'pr_url')],
+          'https://example.test/pr/1',
+        );
+      },
+    );
+
+    test('a gate that THROWS fails CLOSED — nothing delivered, the step '
+        'fails naming the unreadable status', () async {
+      final fakes = buildFakes(
+        deliveryGate: (_) async => throw StateError('store unreachable'),
+      );
+      addTearDown(fakes.provider.close);
+      final method = RecordingDeliveryMethod();
+      await _drive(
+        const FixedRouteCapability(Advance()),
+        services: ServiceBundle(delivery: method),
+        fakes: fakes,
+      );
+
+      expect(method.requests, isEmpty);
+      final meta = fakes.runner.metadataOfUpdate(0);
+      expect(meta['grid.step.state'], 'failed');
+      expect(
+        meta['grid.step.failureReason'],
+        allOf(
+          contains('work bead tg-1 status could not be read at push time'),
+          contains('store unreachable'),
+          contains('failing closed'),
+        ),
+      );
+    });
+
+    test(
+      'a COMMIT-ONLY advance (no method bound) never consults the gate',
+      () async {
+        final asked = <String>[];
+        final fakes = buildFakes(
+          deliveryGate: (beadId) async {
+            asked.add(beadId);
+            return const LandGateDecision.refused(status: 'x', reason: 'x');
+          },
+        );
+        addTearDown(fakes.provider.close);
+        await _drive(const FixedRouteCapability(Advance()), fakes: fakes);
+        expect(asked, isEmpty);
+        expect(fakes.runner.metadataOfUpdate(0)['grid.step.state'], 'complete');
+      },
+    );
   });
 
   group('tg-6gn — ESCALATE: the engine RAISES, the bound handler DECIDES', () {

@@ -132,6 +132,48 @@ void main() {
     });
   });
 
+  group('workBeadReaderFor — the production routing the resident gate reads '
+      'through (tg-b1t8 review)', () {
+    final first = _MutableReader(const []);
+    final second = _MutableReader(const []);
+    final state = _MutableReader(const []);
+    BeadProbeReader? route(String beadId) => workBeadReaderFor(
+      beadId,
+      workStores: const {
+        'first': 'first',
+        'fst': 'first',
+        'second': 'second',
+        'second-x': 'second',
+      },
+      readers: {'first': first, 'second': second},
+      stateSubstation: 'tranquility',
+      stateReader: state,
+    );
+
+    test('a work bead reads from ITS store, by name or by prefix', () {
+      expect(route('first-1'), same(first));
+      expect(route('fst-9'), same(first));
+      expect(route('second-2'), same(second));
+      expect(route('second-x-3'), same(second), reason: 'longest prefix');
+    });
+
+    test('a state-partition bead reads from the state store', () {
+      expect(route('tranquility-abc'), same(state));
+    });
+
+    test('a bead NOTHING attached owns is unowned — it is never routed to the '
+        'state store to read absent', () async {
+      expect(route('zz-1'), isNull);
+      expect(route('lenny-1'), isNull);
+      expect(route('first'), isNull, reason: 'a bare prefix is no bead id');
+
+      final gate = buildWorkBeadLandGate(readerFor: route);
+      final unowned = await gate('zz-1') as LandGateRefused;
+      expect(unowned.status, 'unowned');
+      expect(state.reads, isEmpty, reason: 'the state store was never asked');
+    });
+  });
+
   group('StationGitService.land with the injected gate', () {
     test('a bead open at mount and deferred at push time is committed and '
         'pushed but FakePrOpener.open is never called', () async {

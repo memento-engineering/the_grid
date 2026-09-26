@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_runtime/grid_runtime.dart'
+    show LandGateOpen, LandGateRefused;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:grid_trajectory/grid_trajectory.dart'
     show SqlResult, TrajectoryDb, projSessionHeadCutColumns;
@@ -31,6 +33,31 @@ final class _EmptyBeadProbeReader implements BeadProbeReader {
   @override
   Future<Bead?> beadById(String id, {required Set<IssueType> types}) async =>
       null;
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) async => const [];
+
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) async => const [];
+}
+
+/// A probe reader over a mutable map, recording every id it is asked for.
+final class _ScriptedProbeReader implements BeadProbeReader {
+  _ScriptedProbeReader(Map<String, Bead> beads) : beads = {...beads};
+
+  final Map<String, Bead> beads;
+  final List<String> reads = [];
+
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) async {
+    reads.add(id);
+    final bead = beads[id];
+    return bead != null && types.contains(bead.issueType) ? bead : null;
+  }
 
   @override
   Future<List<Bead>> openBeads({
@@ -2190,6 +2217,68 @@ void main() {
       expect(kUnwindDeadline, lessThan(const Duration(seconds: 10)));
       expect(kUnwindStepBudget, lessThanOrEqualTo(kUnwindDeadline));
       expect(kStoreCloseTimeout, lessThanOrEqualTo(kUnwindDeadline));
+    });
+
+    test('the PRODUCTION assembly injects the fresh-status delivery gate into '
+        'StationServices, routed to the owning store and read at call time '
+        '(tg-b1t8 review)', () async {
+      final events = <String>[];
+      final work = _ScriptedProbeReader({
+        'first-1': const Bead(id: 'first-1', issueType: IssueType.task),
+      });
+      final state = _ScriptedProbeReader(const {});
+      final workSource = _GatedGridControllerRuntime(
+        label: 'work',
+        events: events,
+      );
+      final stateSource = _GatedGridControllerRuntime(
+        label: 'state',
+        events: events,
+      );
+      final provider = _RecordingProvider(events);
+      final trajectory = await _recordingTrajectory(events);
+      final federated = _RecordingFederatedSource(events);
+      final bridge = _RecordingJoinBridge(events);
+      final runtime = await assembleRecordingRuntime(
+        workBundle: _controllerBundle(
+          runtime: workSource,
+          events: events,
+          shutdownEvent: 'work bundle shutdown (first)',
+          probeReader: work,
+        ),
+        stateBundle: _controllerBundle(
+          runtime: stateSource,
+          events: events,
+          shutdownEvent: 'state bundle shutdown',
+          probeReader: state,
+        ),
+        provider: provider,
+        trajectory: trajectory,
+        federated: federated,
+        bridge: bridge,
+        driverBuilder: ({required buildDefault}) =>
+            _RecordingStartDriver(bridge: bridge, events: events),
+      );
+      addTearDown(runtime.shutdown);
+
+      final gate = runtime.wiring.services.deliveryGate;
+      expect(gate, isNotNull, reason: 'the resident wires the gate');
+      // Open at mount …
+      expect(await gate!('first-1'), isA<LandGateOpen>());
+      // … parked before push: the SAME gate, asked again, reads it fresh.
+      work.beads['first-1'] = const Bead(
+        id: 'first-1',
+        issueType: IssueType.task,
+        status: BeadStatus.deferred,
+      );
+      final deferred = await gate('first-1') as LandGateRefused;
+      expect(deferred.status, 'deferred');
+      expect(work.reads, ['first-1', 'first-1']);
+      // An unmatched prefix is UNOWNED, and the state store is never read
+      // for it.
+      final unowned = await gate('zz-1') as LandGateRefused;
+      expect(unowned.status, 'unowned');
+      expect(state.reads, isEmpty);
     });
 
     test(

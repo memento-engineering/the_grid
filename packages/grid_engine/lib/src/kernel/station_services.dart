@@ -34,6 +34,7 @@ class StationServices {
     required this.stateSubstation,
     this.liveness,
     this.workSignal,
+    this.deliveryGate,
     this.trajectoryAdmissionHalt,
     this.admissionBarrier,
     this.g2EmissionMode = G2EmissionMode.off,
@@ -99,6 +100,24 @@ class StationServices {
   /// safe to arm ALONE: it can only WITHHOLD an unproven completion, never
   /// double-run anything.
   final WorkSignalProbe? workSignal;
+
+  /// The FRESH-status delivery gate (tg-b1t8) — the root circuit's terminal
+  /// advance asks it with the WORK bead's id IMMEDIATELY before it actuates
+  /// the substation's bound [DeliveryMethod] (the push + pull request), and
+  /// refuses the delivery when the bead is no longer open and driveable. The
+  /// ambient `Bead` a route holds is the MOUNT-TIME snapshot; the zombie this
+  /// exists to stop (genesis-xc2, PR #9) was open when its round started, so
+  /// only a read performed at call time can see it was parked. Asking the
+  /// gate IS that read.
+  ///
+  /// INJECTED, like [workSignal]: the live composer (grid_sdk's
+  /// `assembleStationWork`) builds it over the store readers it holds; the
+  /// engine owns no store-routing opinion. Null (the default) ⇒ the gate is
+  /// INERT and delivery runs exactly as before. A gate that THROWS fails
+  /// CLOSED — the delivery does not happen and the failure routes to
+  /// supervision, whose bounded restart re-asks (a transient store error is
+  /// retried, never silently delivered past).
+  final WorkBeadLandGate? deliveryGate;
 
   /// The concurrency governor's fresh-authority boot value (tg-42f,
   /// declare-and-check — ADR-0008 D8 defers the general per-leaf

@@ -1984,22 +1984,29 @@ Future<StationWorkRuntime> _acquireStationWork({
   // polls it.
   // The FRESH-status land gate (tg-b1t8): grid_sdk is the one package that
   // sees both the store readers and the driveability rule, so the predicate is
-  // built HERE and injected into the git service — grid_runtime gains no
-  // grid_engine dependency (ADR-0002's arc stays one-way). It reads the WORK
-  // bead's owning store at call time through the same name/prefix binding the
-  // command handler uses; `workCommandStores` and `bundles` are the live maps
-  // the roster attach/detach path mutates, so an attached seat is covered.
-  BeadProbeReader? landGateReaderFor(String beadId) {
-    final ownedPrefix = BeadOwnershipPredicate.ownedPrefixOf(
+  // built HERE and injected into BOTH production-shaped seams that can open a
+  // pull request — the engine's terminal delivery (`StationServices
+  // .deliveryGate`, asked by the CapabilityHost right before it actuates the
+  // bound DeliveryMethod — the path live PRs actually take) and
+  // `StationGitService.land`. grid_runtime gains no grid_engine dependency
+  // (ADR-0002's arc stays one-way). The gate reads the WORK bead's owning
+  // store at call time through the same name/prefix binding the command
+  // handler uses; `workCommandStores` and `bundles` are the live maps the
+  // roster attach/detach path mutates, so an attached seat is covered.
+  final landGate = buildWorkBeadLandGate(
+    readerFor: (beadId) => workBeadReaderFor(
       beadId,
-      workCommandStores.keys,
-    );
-    final binding = ownedPrefix == null ? null : workCommandStores[ownedPrefix];
-    if (binding != null) return bundles[binding.substation]?.probeReader;
-    // The state store's own beads (a self-substation) read off the state
-    // bundle — the same fallback `writerForOwnedBead` takes for writes.
-    return stateBundle.probeReader;
-  }
+      workStores: {
+        for (final entry in workCommandStores.entries)
+          entry.key: entry.value.substation,
+      },
+      readers: {
+        for (final entry in bundles.entries) entry.key: entry.value.probeReader,
+      },
+      stateSubstation: stateSubstation,
+      stateReader: stateBundle.probeReader,
+    ),
+  );
 
   git =
       gitOverride ??
@@ -2012,7 +2019,7 @@ Future<StationWorkRuntime> _acquireStationWork({
               // (stage1-wiring §2.3, r2 blocker 3) — the only place that holds
               // `preexisting`, the branch, and the base sha at one instant.
               recorder: recorder,
-              landGate: buildWorkBeadLandGate(readerFor: landGateReaderFor),
+              landGate: landGate,
             ));
 
   // --- the registered roots. Dry-run registers nothing (the inert service
@@ -2071,6 +2078,10 @@ Future<StationWorkRuntime> _acquireStationWork({
     // the inert git service (its no-op runner returns empty output ⇒ every probe
     // `clear`), so a dry run is unchanged.
     workSignal: stationWorkSignal(git),
+    // THE FRESH-STATUS DELIVERY GATE (tg-b1t8): the terminal advance asks it
+    // right before the bound DeliveryMethod pushes and opens the PR. Wired in
+    // every posture — it only READS the owning store.
+    deliveryGate: landGate,
   );
   attemptLivenessRecovery = StationAttemptLivenessRecovery(
     services: () => services,
@@ -2502,6 +2513,35 @@ Future<BeadsWorkspace> awaitProxiedStoreEndpoint({
       backoff = const Duration(seconds: 1);
     }
   }
+}
+
+/// Routes work bead [beadId] to the probe reader of the store that OWNS it,
+/// for the fresh-status land gate (tg-b1t8), or null when no attached store
+/// does.
+///
+/// [workStores] maps every work store's name AND prefix to its substation (the
+/// command handler's binding); [readers] maps a substation to its reader. The
+/// owning prefix is the LONGEST that matches, over the work prefixes and
+/// [stateSubstation] together: a work-store bead reads from its own store, a
+/// bead of the state partition reads from [stateReader], and a bead whose
+/// prefix NOTHING attached owns is `null` — the gate reports it as `unowned`.
+/// It is never read from a store that does not own it: the first round's
+/// fallback sent every unmatched bead to the state store, where it read
+/// `absent` and suppressed its PR on a wrong-store answer.
+BeadProbeReader? workBeadReaderFor(
+  String beadId, {
+  required Map<String, String> workStores,
+  required Map<String, BeadProbeReader> readers,
+  required String stateSubstation,
+  required BeadProbeReader stateReader,
+}) {
+  final owned = BeadOwnershipPredicate.ownedPrefixOf(beadId, {
+    ...workStores.keys,
+    stateSubstation,
+  });
+  if (owned == null) return null;
+  if (workStores[owned] case final substation?) return readers[substation];
+  return stateReader;
 }
 
 /// Builds the FRESH-status land gate [assembleStationWork] injects into
