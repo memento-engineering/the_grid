@@ -1672,7 +1672,198 @@ void main() {
     }
   });
 
+  group('dolt-mode capability', () {
+    test('capability, not version, decides proxied support', () async {
+      final capable = _ProgrammedProcessBdRunner(
+        executable: '/tmp/bd-v0.9.0',
+        reply: (args) {
+          expect(args, ['types', '--json']);
+          return const BdResult(
+            exitCode: 0,
+            stdout:
+                '{"schema_version":1,"data":{"core_types":{},'
+                '"custom_types":{}}}',
+            stderr: '',
+          );
+        },
+      );
+      final capableService = BdCliService(
+        capable,
+        doltMode: DoltMode.proxiedServer,
+      );
+
+      await capableService.ensureDoltModeSupported(storePath: '/stores/old');
+      await capableService.ensureDoltModeSupported(storePath: '/stores/old');
+
+      expect(capableService.resolvedExecutable, '/tmp/bd-v0.9.0');
+      expect(capable.calls, [
+        ['types', '--json'],
+      ]);
+
+      final incapable = _ProgrammedProcessBdRunner(
+        executable: '/tmp/bd-v9.9.9',
+        reply: (args) => switch (args) {
+          ['types', '--json'] => const BdResult(
+            exitCode: 1,
+            stdout: '',
+            stderr:
+                'failed to open database: proxy server store should be uow '
+                'provider',
+          ),
+          ['version'] => const BdResult(
+            exitCode: 0,
+            stdout: 'bd version 9.9.9 (future-build)\nmore detail',
+            stderr: '',
+          ),
+          _ => throw StateError('unexpected call: $args'),
+        },
+      );
+
+      await expectLater(
+        BdCliService(
+          incapable,
+          doltMode: DoltMode.proxiedServer,
+        ).ensureDoltModeSupported(storePath: '/stores/future'),
+        throwsA(
+          isA<BdGuardrailRefused>()
+              .having(
+                (error) => error.message,
+                'message',
+                contains('/tmp/bd-v9.9.9'),
+              )
+              .having(
+                (error) => error.message,
+                'message',
+                contains('bd version 9.9.9 (future-build)'),
+              )
+              .having(
+                (error) => error.message,
+                'message',
+                contains('/stores/future'),
+              )
+              .having(
+                (error) => error.message,
+                'message',
+                contains('proxied-server'),
+              )
+              .having(
+                (error) => error.message,
+                'message',
+                contains('stock v1.3.0 or newer'),
+              ),
+        ),
+      );
+      expect(incapable.calls, [
+        ['types', '--json'],
+        ['version'],
+      ]);
+    });
+
+    test('direct and unknown modes need no probe', () async {
+      for (final mode in [DoltMode.direct, DoltMode.unknown]) {
+        final runner = _ProgrammedProcessBdRunner(
+          executable: '/tmp/bd-unused',
+          reply: (args) => throw StateError('unexpected call: $args'),
+        );
+
+        await BdCliService(
+          runner,
+          doltMode: mode,
+        ).ensureDoltModeSupported(storePath: '/stores/direct');
+
+        expect(runner.calls, isEmpty);
+      }
+    });
+
+    test('failed version diagnostics remain explicit', () async {
+      final runner = _ProgrammedProcessBdRunner(
+        executable: '/tmp/bd-unidentified',
+        reply: (args) => switch (args) {
+          ['types', '--json'] => const BdResult(
+            exitCode: 0,
+            stdout: '{"schema_version":1,"data":[]}',
+            stderr: '',
+          ),
+          ['version'] => const BdResult(
+            exitCode: 2,
+            stdout: '',
+            stderr: 'version unavailable',
+          ),
+          _ => throw StateError('unexpected call: $args'),
+        },
+      );
+
+      await expectLater(
+        BdCliService(
+          runner,
+          doltMode: DoltMode.proxiedServer,
+        ).ensureDoltModeSupported(storePath: '/stores/proxy'),
+        throwsA(
+          isA<BdGuardrailRefused>().having(
+            (error) => error.message,
+            'message',
+            contains('<unavailable: version exited 2: version unavailable>'),
+          ),
+        ),
+      );
+    });
+
+    test(
+      'guarded writes and dolt mode share one capability probe mechanism',
+      () {
+        final source = File(
+          'lib/src/services/bd_cli_service.dart',
+        ).readAsStringSync();
+
+        expect(
+          RegExp(
+            r'Future<_CapabilityProbe> _probeCapability\(',
+          ).allMatches(source),
+          hasLength(1),
+        );
+        expect(RegExp(r'_probeCapability\(').allMatches(source), hasLength(3));
+        expect(RegExp(r'_runner\.run\(').allMatches(source), hasLength(1));
+      },
+    );
+  });
+
   group('ProcessBdRunner contract (no real bd spawned)', () {
+    test('resolvedExecutable searches the explicit PATH without spawning', () {
+      final root = Directory.systemTemp.createTempSync('bd-path-');
+      addTearDown(() => root.deleteSync(recursive: true));
+      final first = Directory('${root.path}/first')..createSync();
+      final second = Directory('${root.path}/second')..createSync();
+      final executable = File('${second.path}/bd-test')..createSync();
+      final runner = ProcessBdRunner(
+        workspaceRoot: root.path,
+        executable: 'bd-test',
+        environment: {
+          'PATH': [
+            first.path,
+            second.path,
+          ].join(Platform.isWindows ? ';' : ':'),
+        },
+      );
+
+      expect(runner.resolvedExecutable, executable.absolute.path);
+      expect(
+        ProcessBdRunner(
+          workspaceRoot: root.path,
+          executable: '/configured/bd',
+          environment: const {'PATH': ''},
+        ).resolvedExecutable,
+        '/configured/bd',
+      );
+      expect(
+        ProcessBdRunner(
+          workspaceRoot: root.path,
+          executable: 'missing-bd',
+          environment: const {'PATH': ''},
+        ).resolvedExecutable,
+        'missing-bd',
+      );
+    });
+
     test('environment forces service-mode variables over the base env', () {
       final runner = ProcessBdRunner(
         workspaceRoot: Directory.systemTemp.path,
@@ -1875,6 +2066,27 @@ class _InspectingRunner implements BdRunner {
     calls.add(args);
     stdins.add(stdin);
     return reply(args, stdin);
+  }
+}
+
+final class _ProgrammedProcessBdRunner extends ProcessBdRunner {
+  _ProgrammedProcessBdRunner({required super.executable, required this.reply})
+    : super(
+        workspaceRoot: Directory.systemTemp.path,
+        environment: const {'PATH': ''},
+      );
+
+  final BdResult Function(List<String> args) reply;
+  final calls = <List<String>>[];
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    calls.add(List<String>.unmodifiable(args));
+    return reply(args);
   }
 }
 

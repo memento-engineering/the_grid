@@ -18,7 +18,15 @@ import '../ready/ready_work_sort.dart';
 import 'bd_runner.dart';
 import 'beads_workspace.dart';
 
-enum _GuardedWriteSupport { supported, unsupported, indeterminate }
+enum _CapabilitySupport { supported, unsupported, indeterminate }
+
+@immutable
+final class _CapabilityProbe {
+  const _CapabilityProbe(this.support, this.detail);
+
+  final _CapabilitySupport support;
+  final String detail;
+}
 
 /// Counts returned by bd after pruning old closed records in one bulk call.
 typedef BdPruneReceipt = ({int beadsRemoved, int dependencyRowsRemoved});
@@ -71,7 +79,7 @@ class BdCliService {
   /// and is never re-issued.
   static const Duration pourTimeout = Duration(seconds: 60);
 
-  static Future<_GuardedWriteSupport>? _guardedWriteSupport;
+  static Future<_CapabilitySupport>? _guardedWriteSupport;
   static bool _guardedWriteReceiptEmitted = false;
 
   static const _guardedWriteDegradedData = <String, String>{
@@ -89,6 +97,40 @@ class BdCliService {
 
   final BdRunner _runner;
   final DoltMode _doltMode;
+  Future<_CapabilityProbe>? _doltModeCapability;
+
+  /// The executable identity used in operator-facing diagnostics and assembly
+  /// capability-cache keys.
+  String get resolvedExecutable => switch (_runner) {
+    ProcessBdRunner runner => runner.resolvedExecutable,
+    _ => 'bd',
+  };
+
+  /// Refuses a proxied-server store when this service's bd cannot open it.
+  ///
+  /// Capability is decided only by the `types --json` result shape. `bd
+  /// version` is collected after failure for diagnostics and is never parsed
+  /// or compared against the compatibility floor.
+  Future<void> ensureDoltModeSupported({required String storePath}) async {
+    if (_doltMode != DoltMode.proxiedServer) return;
+    final probe = await (_doltModeCapability ??= _probeCapability(const [
+      'types',
+      '--json',
+    ], inspect: _inspectDoltModeCapability));
+    if (probe.support == _CapabilitySupport.supported) return;
+
+    final version = await _versionDiagnostic();
+    throw BdGuardrailRefused(
+      call: [resolvedExecutable, 'types', '--json'],
+      reason:
+          'bd binary "$resolvedExecutable" reports "$version"; store '
+          '"$storePath" uses dolt_mode "proxied-server", but the capability '
+          'probe failed: ${probe.detail}.',
+      remedy:
+          'Use a bd binary with proxied-server store support '
+          '(stock v1.3.0 or newer).',
+    );
+  }
 
   // ---------------------------------------------------------------------------
   // READS
@@ -340,11 +382,13 @@ class BdCliService {
   /// [setMetadata] is written by an **unconditional follow-up [update]** —
   /// one `bd create`, then one `bd update <id> --set-metadata k=v …` — never
   /// by `bd create --metadata <json>`, whose whole-object semantics replace
-  /// keys other writers own on the same bead. There is no capability probe
-  /// and no second code path: the sequence is identical on every bd from the
-  /// 1.0.5 floor up, at the cost of one extra spawn per metadata-bearing
-  /// create (`the_grid#bd-create-metadata-rides-a-follow-up-update`). An
-  /// empty map writes nothing and spawns nothing.
+  /// keys other writers own on the same bead. The create write path has no
+  /// create-specific capability branch or fallback: its sequence is identical
+  /// on every supported bd, independently of the separate assembly-time
+  /// dolt-mode capability probe. This preserves
+  /// `the_grid#bd-create-metadata-rides-a-follow-up-update`, at the cost of one
+  /// extra spawn per metadata-bearing create. An empty map writes nothing and
+  /// spawns nothing.
   ///
   /// If the follow-up fails, the created bead survives WITHOUT its metadata
   /// and the id is not returned — but the foreign identity rides the create
@@ -523,9 +567,9 @@ class BdCliService {
       final requestedGuard = ifAssignee != null || ifStatus != null;
       final capability = requestedGuard
           ? await _guardedWriteCapability()
-          : _GuardedWriteSupport.supported;
+          : _CapabilitySupport.supported;
       final guarded =
-          requestedGuard && capability != _GuardedWriteSupport.unsupported;
+          requestedGuard && capability != _CapabilitySupport.unsupported;
       if (requestedGuard && !guarded) {
         _emitGuardedWriteDegraded(onGuardDegraded);
       }
@@ -558,8 +602,8 @@ class BdCliService {
         await runUpdate(guarded: guarded);
       } on BdCommandFailed catch (error) {
         if (!guarded || !_isUnknownGuardFlag(error)) rethrow;
-        _guardedWriteSupport = Future<_GuardedWriteSupport>.value(
-          _GuardedWriteSupport.unsupported,
+        _guardedWriteSupport = Future<_CapabilitySupport>.value(
+          _CapabilitySupport.unsupported,
         );
         _emitGuardedWriteDegraded(onGuardDegraded);
         await runUpdate(guarded: false);
@@ -597,40 +641,105 @@ class BdCliService {
     }
   }
 
-  Future<_GuardedWriteSupport> _guardedWriteCapability() async {
+  Future<_CapabilitySupport> _guardedWriteCapability() async {
     final cached = _guardedWriteSupport;
     if (cached != null) return await cached;
-    final probe = _probeGuardedWrites();
+    final probe = _probeCapability(
+      const ['update', '--help'],
+      inspect: _inspectGuardedWriteCapability,
+    ).then((result) => result.support);
     _guardedWriteSupport = probe;
     return await probe;
   }
 
-  Future<_GuardedWriteSupport> _probeGuardedWrites() async {
+  Future<_CapabilityProbe> _probeCapability(
+    List<String> args, {
+    required _CapabilityProbe Function(BdResult result) inspect,
+  }) async {
     try {
-      final result = await _runner.run(const ['update', '--help']);
-      if (!result.ok) return _GuardedWriteSupport.indeterminate;
-      return _parseGuardedWriteHelp('${result.stdout}\n${result.stderr}');
-    } on Object {
-      return _GuardedWriteSupport.indeterminate;
+      return inspect(await _run(args));
+    } on Object catch (error) {
+      return _CapabilityProbe(
+        _CapabilitySupport.indeterminate,
+        '${args.join(' ')} threw $error',
+      );
     }
   }
 
-  _GuardedWriteSupport _parseGuardedWriteHelp(String text) {
+  _CapabilityProbe _inspectGuardedWriteCapability(BdResult result) {
+    if (!result.ok) {
+      return _CapabilityProbe(
+        _CapabilitySupport.indeterminate,
+        _failedProbeDetail(const ['update', '--help'], result),
+      );
+    }
+    final support = _parseGuardedWriteHelp(
+      '${result.stdout}\n${result.stderr}',
+    );
+    return _CapabilityProbe(support, 'update --help returned exit 0');
+  }
+
+  _CapabilitySupport _parseGuardedWriteHelp(String text) {
     final lines = text.split('\n');
     if (!lines.any((line) => line.trim() == 'Flags:')) {
-      return _GuardedWriteSupport.indeterminate;
+      return _CapabilitySupport.indeterminate;
     }
     final longFlag = RegExp(r'^(?:-\w,\s*)?--[a-z0-9][a-z0-9-]*(?:\s|$)');
     final flagRows = lines
         .map((line) => line.trimLeft())
         .where(longFlag.hasMatch)
         .toList(growable: false);
-    if (flagRows.isEmpty) return _GuardedWriteSupport.indeterminate;
+    if (flagRows.isEmpty) return _CapabilitySupport.indeterminate;
     final assignee = RegExp(r'^(?:-\w,\s*)?--if-assignee(?:\s|$)');
     final status = RegExp(r'^(?:-\w,\s*)?--if-status(?:\s|$)');
     return flagRows.any(assignee.hasMatch) && flagRows.any(status.hasMatch)
-        ? _GuardedWriteSupport.supported
-        : _GuardedWriteSupport.unsupported;
+        ? _CapabilitySupport.supported
+        : _CapabilitySupport.unsupported;
+  }
+
+  _CapabilityProbe _inspectDoltModeCapability(BdResult result) {
+    if (!result.ok) {
+      return _CapabilityProbe(
+        _CapabilitySupport.unsupported,
+        _failedProbeDetail(const ['types', '--json'], result),
+      );
+    }
+    try {
+      BdEnvelope.parse(result.stdout).dataMap;
+      return const _CapabilityProbe(
+        _CapabilitySupport.supported,
+        'types --json returned an object envelope',
+      );
+    } on Object catch (error) {
+      return _CapabilityProbe(
+        _CapabilitySupport.indeterminate,
+        'types --json exited 0 but did not return an object envelope: $error',
+      );
+    }
+  }
+
+  String _failedProbeDetail(List<String> args, BdResult result) {
+    final output = <String>[result.stderr, result.stdout]
+        .map((value) => value.trim())
+        .firstWhere((value) => value.isNotEmpty, orElse: () => '<no output>');
+    return '${args.join(' ')} exited ${result.exitCode}: $output';
+  }
+
+  Future<String> _versionDiagnostic() async {
+    try {
+      final result = await _run(const ['version']);
+      if (result.ok) {
+        final line = '${result.stdout}\n${result.stderr}'
+            .split('\n')
+            .map((value) => value.trim())
+            .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+        if (line.isNotEmpty) return line;
+        return '<unavailable: bd version returned no output>';
+      }
+      return '<unavailable: ${_failedProbeDetail(const ['version'], result)}>';
+    } on Object catch (error) {
+      return '<unavailable: bd version threw $error>';
+    }
   }
 
   void _emitGuardedWriteDegraded(

@@ -105,10 +105,11 @@ void main() {
       _graph([for (var i = 1; i <= 7; i++) bead('work-$i')]),
     );
     final state = FakeSnapshotSource(_graph(const []));
-    final bridge = StationJoinBridge(work: work, state: state);
+    final bridge = StationJoinBridge(work: work, state: state)..start();
     final transport = RecordingExplorationTransport();
     final driver = StationDriver(
       bridge: bridge,
+      clock: () => _now,
       transport: transport,
       wedgeThreshold: Duration.zero,
       scheduleTimer: (_, _) => _FakeTimer(),

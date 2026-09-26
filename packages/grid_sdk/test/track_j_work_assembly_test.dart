@@ -47,6 +47,28 @@ final class _RecordingBdRunner implements BdRunner {
   }
 }
 
+final class _ProgrammedProcessBdRunner extends ProcessBdRunner {
+  _ProgrammedProcessBdRunner({
+    required super.workspaceRoot,
+    required super.executable,
+    required this.calls,
+    required this.reply,
+  }) : super(environment: const {'PATH': ''});
+
+  final List<List<String>> calls;
+  final BdResult Function(List<String> args) reply;
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    calls.add(List<String>.unmodifiable(args));
+    return reply(args);
+  }
+}
+
 BdRunner _fastEndpointWarmRunner(String _) => _RecordingBdRunner();
 
 final class _RecordingDryGit extends DryStationGitService {
@@ -431,6 +453,217 @@ void main() {
       expect(report.isClean, isTrue);
       expect(report.settled, isTrue);
       expect(work.stateSubstation, 'tgstate');
+    });
+  });
+
+  group('dolt-mode capability', () {
+    BdResult incompatibleReply(List<String> args) => switch (args) {
+      ['query', ...] => const BdResult(
+        exitCode: 0,
+        stdout: '{"schema_version":1,"data":[]}',
+        stderr: '',
+      ),
+      ['types', '--json'] => const BdResult(
+        exitCode: 1,
+        stdout: '',
+        stderr:
+            'failed to open database: proxy server store should be uow '
+            'provider',
+      ),
+      ['version'] => const BdResult(
+        exitCode: 0,
+        stdout: 'bd version 1.2.2 (old-build)',
+        stderr: '',
+      ),
+      _ => throw StateError('unexpected call: $args'),
+    };
+
+    for (final target in ['work', 'state']) {
+      test('dolt-mode capability refusal is StoreRefusal before acquisition '
+          '($target)', () async {
+        final workRoot = '${tmp.path}/proj';
+        final stateRoot = '${tmp.path}/home/.grid';
+        if (target == 'work') {
+          _seedProxiedStore(workRoot, database: 'pow');
+          _seedStore(stateRoot, database: 'tgstate');
+        } else {
+          _seedStore(workRoot, database: 'pow');
+          _seedProxiedStore(stateRoot, database: 'tgstate');
+        }
+        final executable = '${tmp.path}/bin/bd-1.2.2';
+        final calls = <List<String>>[];
+        var bundleAcquisitions = 0;
+
+        await expectLater(
+          assembleStationWork(
+            stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
+            substations: [SubstationWorkSpec(name: 'proj', root: workRoot)],
+            resolver: const _NullResolver(),
+            dryRun: true,
+            endpointWarmRunnerFactory: (workspaceRoot) =>
+                _ProgrammedProcessBdRunner(
+                  workspaceRoot: workspaceRoot,
+                  executable: executable,
+                  calls: calls,
+                  reply: incompatibleReply,
+                ),
+            bundleBuilder:
+                ({
+                  required storeName,
+                  required workspace,
+                  required buildDefault,
+                }) async {
+                  bundleAcquisitions++;
+                  return buildDefault();
+                },
+          ),
+          throwsA(
+            isA<StoreRefusal>()
+                .having(
+                  (refusal) => refusal.message,
+                  'message',
+                  contains(executable),
+                )
+                .having(
+                  (refusal) => refusal.message,
+                  'message',
+                  contains('bd version 1.2.2 (old-build)'),
+                )
+                .having(
+                  (refusal) => refusal.message,
+                  'message',
+                  contains(target == 'work' ? workRoot : stateRoot),
+                )
+                .having(
+                  (refusal) => refusal.message,
+                  'message',
+                  contains('proxied-server'),
+                )
+                .having(
+                  (refusal) => refusal.message,
+                  'message',
+                  contains('stock v1.3.0 or newer'),
+                ),
+          ),
+        );
+
+        expect(bundleAcquisitions, 0);
+        expect(calls.where((call) => call.first == 'types'), hasLength(1));
+        expect(calls.where((call) => call.first == 'version'), hasLength(1));
+      });
+    }
+
+    test('capable proxied binary probes once across stores', () async {
+      final workRoot = '${tmp.path}/proj';
+      final stateRoot = '${tmp.path}/home/.grid';
+      _seedProxiedStore(workRoot, database: 'pow');
+      _seedProxiedStore(stateRoot, database: 'tgstate');
+      final calls = <List<String>>[];
+      final executable = '${tmp.path}/bin/bd-capable';
+
+      final runtime = await assembleStationWork(
+        stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
+        substations: [SubstationWorkSpec(name: 'proj', root: workRoot)],
+        resolver: const _NullResolver(),
+        dryRun: true,
+        preferSql: false,
+        endpointWarmRunnerFactory: (workspaceRoot) =>
+            _ProgrammedProcessBdRunner(
+              workspaceRoot: workspaceRoot,
+              executable: executable,
+              calls: calls,
+              reply: (args) => switch (args) {
+                ['query', ...] => const BdResult(
+                  exitCode: 0,
+                  stdout: '{"schema_version":1,"data":[]}',
+                  stderr: '',
+                ),
+                ['types', '--json'] => const BdResult(
+                  exitCode: 0,
+                  stdout:
+                      '{"schema_version":1,"data":{"core_types":{},'
+                      '"custom_types":{}}}',
+                  stderr: '',
+                ),
+                _ => throw StateError('unexpected call: $args'),
+              },
+            ),
+      );
+      addTearDown(runtime.shutdown);
+
+      expect(calls.where((call) => call.first == 'types'), hasLength(1));
+      expect(calls.where((call) => call.first == 'version'), isEmpty);
+    });
+
+    test('direct stores do not construct a probe runner', () async {
+      _seedStore('${tmp.path}/proj', database: 'pow');
+      _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
+      var factoryCalls = 0;
+
+      final runtime = await assembleStationWork(
+        stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
+        substations: [
+          SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj'),
+        ],
+        resolver: const _NullResolver(),
+        dryRun: true,
+        endpointWarmRunnerFactory: (workspaceRoot) {
+          factoryCalls++;
+          return _RecordingBdRunner();
+        },
+      );
+      addTearDown(runtime.shutdown);
+
+      expect(factoryCalls, 0);
+    });
+
+    test('runtime roster attachment cannot bypass the mode gate', () async {
+      _seedStore('${tmp.path}/proj', database: 'pow');
+      _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
+      final attachedRoot = '${tmp.path}/attached';
+      _seedProxiedStore(attachedRoot, database: 'attached');
+      final calls = <List<String>>[];
+      final executable = '${tmp.path}/bin/bd-1.2.2';
+
+      final runtime = await assembleStationWork(
+        stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
+        substations: [
+          SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj'),
+        ],
+        resolver: const _NullResolver(),
+        dryRun: true,
+        endpointWarmRunnerFactory: (workspaceRoot) =>
+            _ProgrammedProcessBdRunner(
+              workspaceRoot: workspaceRoot,
+              executable: executable,
+              calls: calls,
+              reply: incompatibleReply,
+            ),
+      );
+      addTearDown(runtime.shutdown);
+
+      final outcome = await runtime.roster.attach(
+        name: 'attached',
+        root: attachedRoot,
+      );
+
+      expect(
+        outcome,
+        isA<RosterRefused>()
+            .having((refusal) => refusal.code, 'code', 'provision_failed')
+            .having(
+              (refusal) => refusal.message,
+              'message',
+              contains(executable),
+            )
+            .having(
+              (refusal) => refusal.message,
+              'message',
+              contains(attachedRoot),
+            ),
+      );
+      expect(calls.where((call) => call.first == 'types'), hasLength(1));
+      expect(calls.where((call) => call.first == 'version'), hasLength(1));
     });
   });
 
