@@ -1,3 +1,13 @@
+## 0.4.0-dev.8
+
+ - **FIX**(sdk,runtime): land the zombie-PR guard on the production path, bound the unwind tail, self-bound the live attach test (tg-b1t8, tg-supq, tg-ejzb) (#517).
+ - **FIX**(runtime): bind teardown reads to writer store (#513).
+ - **FIX**(engine): classify cut-retired step-bead lag as legacyStepCarrierRetired, not unexplained (tg-ul2v) (#516).
+ - **FIX**(status): serve the resident wedge sample (#514).
+ - **FIX**(sdk): refuse incompatible bd store modes (#512).
+ - **FEAT**(cli,sdk,engine): session void, the ungated operator exit (tg-5snt) (#518).
+ - **FEAT**(trajectory): report G2 shadow diagnostics (#511).
+
 ## 0.4.0-dev.7
 
  - **FIX**(maintenance): restore proxied stores after flatten (tg-l5qd) (#508).

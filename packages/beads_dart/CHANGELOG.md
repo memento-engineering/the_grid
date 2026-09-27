@@ -1,3 +1,7 @@
+## 0.3.0-dev.7
+
+ - **FIX**(sdk): refuse incompatible bd store modes (#512).
+
 ## 0.3.0-dev.6
 
  - **FIX**: warm stores and report SQL boot fallbacks (#505).
