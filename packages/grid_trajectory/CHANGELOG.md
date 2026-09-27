@@ -1,3 +1,8 @@
+## 0.2.1-dev.7
+
+ - **FIX**(engine): classify cut-retired step-bead lag as legacyStepCarrierRetired, not unexplained (tg-ul2v) (#516).
+ - **FEAT**(trajectory): report G2 shadow diagnostics (#511).
+
 ## 0.2.1-dev.6
 
  - **FIX**(trajectory): close voided prespawn session heads (#502).
