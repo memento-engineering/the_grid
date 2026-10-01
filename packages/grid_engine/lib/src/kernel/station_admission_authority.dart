@@ -386,6 +386,13 @@ final class StationAdmissionAuthority {
   /// clause in its observe form, which changes eligibility for nothing.
   final AdmissionBarrier? _admissionBarrier;
 
+  /// Whether the last armed eligibility read was DEGRADED (tg-6n18): the P6
+  /// tick stalled, so the worktree-outstanding clause judged the join over the
+  /// post-ACK rows and the bd ledger instead of refusing every candidate. The
+  /// latch makes `work.mountEligibilityDegraded` fire ONCE per episode; a
+  /// healthy read re-arms it for the next one.
+  bool _eligibilityReadDegraded = false;
+
   // Per-substation branch and status state is unavailable to one-scope calls.
   final Map<_ScopeKey, _AdmissionScopeState> _scopes =
       <_ScopeKey, _AdmissionScopeState>{};
@@ -1057,6 +1064,7 @@ final class StationAdmissionAuthority {
     ServiceBundle services,
     Bead bead,
   ) {
+    _noteEligibilityReadMode(services, snapshot.worktreeOutstanding);
     final predicate = composeMountEligibility([
       trajectoryAdmissionHaltedClause(
         halted: _trajectoryAdmissionHalt?.halted ?? false,
@@ -1844,6 +1852,31 @@ final class StationAdmissionAuthority {
         ...stateStoreDeadlineMetadata(error),
       });
     }
+  }
+
+  /// Flares the worktree-outstanding read's DEGRADED mode once per episode
+  /// (tg-6n18). Only the ARMED barrier reports it: under the observe form the
+  /// clause changes eligibility for nothing, so its read mode decides nothing.
+  void _noteEligibilityReadMode(
+    ServiceBundle services,
+    WorktreeOutstandingRead read,
+  ) {
+    if (_admissionBarrier?.observeForm ?? true) return;
+    final degraded = read.isDegradedAt(_clock());
+    if (degraded == _eligibilityReadDegraded) return;
+    _eligibilityReadDegraded = degraded;
+    if (!degraded) return;
+    final beat = read.heartbeatAt;
+    _flare(services, 'work.mountEligibilityDegraded', {
+      'clause': kWorktreeOutstandingClause,
+      'lastBeat': beat == null ? 'never' : beat.toUtc().toIso8601String(),
+      'staleAfter': '${read.staleAfter.inSeconds}',
+      'health': read.health?.name ?? 'unknown',
+      'fallback': 'p6-post-ack-rows+bd-ledger',
+      'effect':
+          'the P6 tick is stalled; mounts are judged on the maintained rows '
+          'instead of refusing every bead',
+    });
   }
 
   void _noteEligibilityRefusal(

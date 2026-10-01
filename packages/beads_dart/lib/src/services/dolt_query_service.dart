@@ -88,6 +88,24 @@ class DoltQueryService {
   bool _closed = false;
   DoltSchemaShape? _shape;
 
+  /// Reads that died on [queryTimeout] since this service was built — a
+  /// plain process-lifetime counter (tg-6n18). The station's boot summary
+  /// prints it beside the deadline, so a boot burst that times the store out
+  /// carries its own numbers instead of needing a log dig. Counts a
+  /// `TimeoutException` from a select or a read transaction (connect
+  /// included); never reset.
+  int get timedOutReads => _timedOutReads;
+  int _timedOutReads = 0;
+
+  Future<T> _countingTimeouts<T>(Future<T> Function() read) async {
+    try {
+      return await read();
+    } on TimeoutException {
+      _timedOutReads += 1;
+      rethrow;
+    }
+  }
+
   /// The probed schema shape. Throws [StateError] before [connect] has run —
   /// a caller reading the shape without connecting has a bug, and returning a
   /// default would let unverified SQL reach the server.
@@ -251,6 +269,10 @@ class DoltQueryService {
   /// connection (mid-transaction reaping surfaces as a query error and
   /// propagates — a partially-read snapshot must not be silently stitched).
   Future<T> runReadTransaction<T>(
+    Future<T> Function(SelectRunner select) body,
+  ) => _countingTimeouts(() => _runReadTransaction(body));
+
+  Future<T> _runReadTransaction<T>(
     Future<T> Function(SelectRunner select) body,
   ) async {
     await _ensureShapeProbed();
@@ -490,7 +512,10 @@ class DoltQueryService {
 
   /// Rejects any non-SELECT statement, then runs it with one transparent
   /// reconnect retry if the connection was reaped/closed mid-flight.
-  Future<List<Map<String, Object?>>> _runSelect(String sql) async {
+  Future<List<Map<String, Object?>>> _runSelect(String sql) =>
+      _countingTimeouts(() => _runSelectOnce(sql));
+
+  Future<List<Map<String, Object?>>> _runSelectOnce(String sql) async {
     assertSelectOnly(sql);
     if (_closed) {
       throw const BdParseException(

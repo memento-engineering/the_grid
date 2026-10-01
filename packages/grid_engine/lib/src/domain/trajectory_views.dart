@@ -262,6 +262,18 @@ abstract interface class TrajectoryProcessIdentitySnapshot {
   /// Published only after a Stage-1 tick pass actually ran.
   DateTime? get lastTickAt;
 
+  /// True while the tick supervisor — and NOTHING else — holds this mirror
+  /// compromised (tg-6n18): the heartbeat stopped (a stale or dead tick) while
+  /// the harness stayed `live`, so every post-ACK delta kept applying and the
+  /// rows are current for every appended fact. Only the tick-driven repairs
+  /// (the worktree reap, the reaped backfill) are stalled, and a stalled reap
+  /// leaves MORE `live` rows, never fewer.
+  ///
+  /// False under any other compromise — append loss, fence-out, halt,
+  /// degrade, a failed reseed — because each of those freezes or doubts the
+  /// fold itself, and false whenever the beat is healthy.
+  bool get tickStalled;
+
   Iterable<ProcessIdentityView> get rows;
   Iterable<ProcessIdentityView> bySessionId(String sessionId);
 }

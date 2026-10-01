@@ -32,6 +32,22 @@
 /// rule: a harness that leaves `live` stops beating, so a compromised mirror
 /// reaches the same wedged refusal by the same grace rather than disarming the
 /// barrier it is the reason for.
+///
+/// **A dead TICK is not a frozen FOLD (tg-6n18).** The wedged refusal exists
+/// for a harness that has stopped maintaining the mirror. But the heartbeat is
+/// published by the tick, and the rows by the writer loop's post-ACK apply —
+/// two different engines. When the tick supervisor alone has stalled
+/// ([TrajectoryProcessIdentitySnapshot.tickStalled]: the harness is still
+/// `live`, no append was lost, nothing fenced it out) the rows are as current
+/// as ever for every appended fact; only the tick-driven reap and backfill have
+/// stopped, and a stalled reap errs toward MORE `live` rows. Refusing every
+/// candidate there is not fail-closed, it is a station-wide outage: on the
+/// lunar resident it refused 710 mounts and restored none. So a stalled tick
+/// DEGRADES the read rather than wedging it: the clause evaluates the same
+/// P6 → P1 join (unioned with the bd ledger's terminality, which is read off
+/// the state store and needs no tick at all) and marks the finding
+/// [WorktreeOutstandingFinding.degraded], so the station flares the mode. Any
+/// other compromise keeps the wedged refusal exactly as before.
 library;
 
 import 'package:grid_runtime/grid_runtime.dart' show kWorktreeOutstandingClause;
@@ -123,6 +139,13 @@ final class WorktreeOutstandingRead {
   /// `noteTickAt` (grid_sdk `trajectory_harness.dart`, the mode latch in
   /// `_onTickPass`), so the beat freezes and the read goes wedged after three
   /// tick intervals — fail-CLOSED, after the same grace the heal uses.
+  ///
+  /// The one narrowing is the SUPERVISOR-OWNED stall
+  /// ([TrajectoryProcessIdentitySnapshot.tickStalled], tg-6n18): a harness
+  /// still `live` whose tick alone stopped degrades to the row join instead of
+  /// wedging. That is not a disarm either — a real outstanding row still
+  /// refuses — and the latches above clear the flag, so a harness that leaves
+  /// `live` wedges exactly as before.
   factory WorktreeOutstandingRead({
     TrajectoryProcessIdentitySnapshot? processIdentities,
     TrajectoryHeadSnapshot? heads,
@@ -140,6 +163,7 @@ final class WorktreeOutstandingRead {
     return WorktreeOutstandingRead._(
       processIdentities: processIdentities,
       headsByWorkBead: headsByWorkBead,
+      tickStalled: processIdentities.tickStalled,
       // Published only after a tick pass actually RAN — a skipped pass (busy,
       // fenced out, halted, disposed) publishes no beat, which is why three
       // skipped intervals fail closed rather than pretending the fold is
@@ -154,6 +178,7 @@ final class WorktreeOutstandingRead {
   const WorktreeOutstandingRead._({
     required TrajectoryProcessIdentitySnapshot? processIdentities,
     required Map<String, List<SessionHeadView>> headsByWorkBead,
+    required this.tickStalled,
     required this.heartbeatAt,
     required this.health,
     required this.staleAfter,
@@ -166,6 +191,7 @@ final class WorktreeOutstandingRead {
     : this._(
         processIdentities: null,
         headsByWorkBead: const <String, List<SessionHeadView>>{},
+        tickStalled: false,
         heartbeatAt: null,
         health: null,
         staleAfter: kWorktreeOutstandingStaleAfter,
@@ -184,6 +210,10 @@ final class WorktreeOutstandingRead {
 
   /// How long without a beat before the clause calls the harness wedged.
   final Duration staleAfter;
+
+  /// The P6 snapshot's [TrajectoryProcessIdentitySnapshot.tickStalled]: the
+  /// tick supervisor, and nothing else, holds the mirror compromised.
+  final bool tickStalled;
 
   /// Whether the barrier has a fold to read at all.
   bool get armed => _processIdentities != null;
@@ -218,6 +248,11 @@ final class WorktreeOutstandingRead {
     if (beat == null) return true;
     return now.toUtc().difference(beat.toUtc()) > staleAfter;
   }
+
+  /// Whether the read is DEGRADED at [now]: the heartbeat is past the grace,
+  /// but only because the tick stalled — the rows are still maintained, so the
+  /// clause evaluates the join instead of refusing every candidate.
+  bool isDegradedAt(DateTime now) => tickStalled && isWedgedAt(now);
 }
 
 /// What the barrier found for one candidate — the value both the eligibility
@@ -230,6 +265,7 @@ final class WorktreeOutstandingFinding {
     this.detail,
     this.snapshotRev,
     this.wedged = false,
+    this.degraded = false,
     this.outstanding = const <OutstandingWorktree>[],
   });
 
@@ -237,7 +273,13 @@ final class WorktreeOutstandingFinding {
   const WorktreeOutstandingFinding.clear(
     String workBeadId, {
     String? snapshotRev,
-  }) : this(workBeadId: workBeadId, refuse: false, snapshotRev: snapshotRev);
+    bool degraded = false,
+  }) : this(
+         workBeadId: workBeadId,
+         refuse: false,
+         snapshotRev: snapshotRev,
+         degraded: degraded,
+       );
 
   final String workBeadId;
 
@@ -255,6 +297,12 @@ final class WorktreeOutstandingFinding {
 
   /// The refusal came from the wedged-harness rule, not from a real row.
   final bool wedged;
+
+  /// The finding was made on the DEGRADED read (tg-6n18): the heartbeat is
+  /// past the grace because the tick stalled, so the verdict is the join over
+  /// the post-ACK-maintained rows and the bd ledger rather than the blanket
+  /// wedged refusal.
+  final bool degraded;
 
   /// The (session, worktree) pairs that made the finding, sorted.
   final List<OutstandingWorktree> outstanding;
@@ -278,7 +326,8 @@ WorktreeOutstandingFinding evaluateWorktreeOutstanding({
       snapshotRev: snapshotRev,
     );
   }
-  if (read.isWedgedAt(now)) {
+  final degraded = read.isDegradedAt(now);
+  if (!degraded && read.isWedgedAt(now)) {
     final beat = read.heartbeatAt;
     return WorktreeOutstandingFinding(
       workBeadId: workBeadId,
@@ -325,6 +374,7 @@ WorktreeOutstandingFinding evaluateWorktreeOutstanding({
     return WorktreeOutstandingFinding.clear(
       workBeadId,
       snapshotRev: snapshotRev,
+      degraded: degraded,
     );
   }
   outstanding.sort((left, right) {
@@ -336,11 +386,13 @@ WorktreeOutstandingFinding evaluateWorktreeOutstanding({
     workBeadId: workBeadId,
     refuse: true,
     snapshotRev: snapshotRev,
+    degraded: degraded,
     outstanding: List<OutstandingWorktree>.unmodifiable(outstanding),
     detail:
         '$kWorktreeOutstandingClause: session ${first.sessionId} is terminal '
         '(${first.basis.wire}) and still holds worktree ${first.worktree}'
-        '${outstanding.length > 1 ? ' (+${outstanding.length - 1} more)' : ''}',
+        '${outstanding.length > 1 ? ' (+${outstanding.length - 1} more)' : ''}'
+        '${degraded ? ' (degraded read: the P6 tick is stalled)' : ''}',
   );
 }
 

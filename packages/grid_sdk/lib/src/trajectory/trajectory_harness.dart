@@ -61,7 +61,8 @@ import 'package:grid_engine/grid_engine.dart'
         TrajectoryHeadSnapshot,
         TrajectoryProcessIdentitySnapshot,
         TrajectoryStepSnapshot,
-        kWorktreeOutstandingStaleAfter;
+        kWorktreeOutstandingStaleAfter,
+        kWorktreeOutstandingStaleTicks;
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:meta/meta.dart';
 import 'package:state_notifier/state_notifier.dart' show RemoveListener;
@@ -262,6 +263,21 @@ class TrajectoryHarness {
     maxRestarts: 3,
     backoff: Backoff.standard,
     onExhaustion: ExhaustionBehavior.latchFailed,
+  );
+
+  /// The RE-ARM schedule after `trajectory.tickDead` (tg-6n18): 30 s, then
+  /// doubling, capped at 5 min, for as long as the harness stays `live`.
+  ///
+  /// The three restarts above are HANG detection — each gets one tick
+  /// interval. Exhausting them used to latch P6 dead for the process lifetime,
+  /// and the worktree-outstanding barrier then refused every mount until an
+  /// operator bounced the station: a boot burst that slowed three passes past
+  /// 30 s became a permanent outage. Death is now an episode, never a state:
+  /// a probe keeps asking at a bounded cadence, and the first one that beats
+  /// restores the mirror with `trajectory.tickRecovered`.
+  static const Backoff _kTickRearmBackoff = Backoff(
+    min: Duration(seconds: 30),
+    max: Duration(minutes: 5),
   );
 
   TrajectoryHarness._({
@@ -498,6 +514,13 @@ class TrajectoryHarness {
   Timer? _tickAttemptDeadlineTimer;
   _TickStaleEpisode? _tickStaleEpisode;
   bool _tickRestartDead = false;
+
+  /// Re-arm probes scheduled since the episode went dead (tg-6n18).
+  int _tickRearmProbes = 0;
+
+  /// When the current episode was declared dead — the anchor of the
+  /// recovery flare's `deadFor`.
+  DateTime? _tickDeadAt;
   Timer? _gcTimer;
 
   /// The gc POSTURE latch (tg-3o6b): set when the server refuses `DOLT_GC` on
@@ -1215,7 +1238,10 @@ class TrajectoryHarness {
     // an honest reflection of the outage, never a second staleness predicate.
     _tick?.dispose();
     _currentTickGeneration = -1;
-    final ownsCompromise = _processIdentities.latchCompromised();
+    // SUPERVISOR-OWNED (tg-6n18): the snapshot says the TICK stalled while the
+    // fold kept applying, which is what lets the barrier degrade to the row
+    // join instead of refusing every bead. Any other latch takes it over.
+    final ownsCompromise = _processIdentities.latchTickStalled();
     final episode = _TickStaleEpisode(
       lastBeat: lastBeat?.toUtc(),
       detectedAt: now,
@@ -1255,26 +1281,31 @@ class TrajectoryHarness {
     });
   }
 
-  Future<void> _startTickRestart(int attempt) async {
+  /// Starts one replacement generation. Callers gate on the episode phase:
+  /// the restart backoff refuses once the episode is dead, the re-arm backoff
+  /// refuses until it is.
+  ///
+  /// [deadline] is the attempt's budget: one tick interval for a restart (hang
+  /// detection), the barrier's whole three-interval grace for a re-arm probe —
+  /// a pass that completes inside the grace the barrier itself allows IS a
+  /// beat, and a probe held to one interval would keep failing on exactly the
+  /// slow-but-alive pass that killed the episode.
+  Future<void> _startTickRestart(int attempt, {Duration? deadline}) async {
     final episode = _tickStaleEpisode;
     final appender = _appender;
-    if (_isShutdown ||
-        _tickRestartDead ||
-        episode == null ||
-        appender == null) {
-      return;
-    }
+    if (_isShutdown || episode == null || appender == null) return;
+    final budget = deadline ?? config.tickInterval;
     episode.attempts = attempt;
     final generation = ++_nextTickGeneration;
     _currentTickGeneration = generation;
     final replacement = _createTick(appender: appender, generation: generation);
     _tick = replacement;
     _tickAttemptDeadlineTimer?.cancel();
-    _tickAttemptDeadlineTimer = _scheduleTimer(config.tickInterval, () {
+    _tickAttemptDeadlineTimer = _scheduleTimer(budget, () {
       _tickAttemptDeadlineTimer = null;
       _failTickRestart(
         generation: generation,
-        reason: 'timeout after ${config.tickInterval.inMilliseconds}ms',
+        reason: 'timeout after ${budget.inMilliseconds}ms',
       );
     });
 
@@ -1298,7 +1329,6 @@ class TrajectoryHarness {
   void _failTickRestart({required int generation, required String reason}) {
     final episode = _tickStaleEpisode;
     if (_isShutdown ||
-        _tickRestartDead ||
         episode == null ||
         generation != _currentTickGeneration) {
       return;
@@ -1308,6 +1338,23 @@ class TrajectoryHarness {
     _tick?.dispose();
     _currentTickGeneration = -1;
 
+    final now = _clock().toUtc();
+    if (_tickRestartDead) {
+      // A re-arm PROBE failed: back off further, bounded. One flare per
+      // probe, and probes are at most one per backoff step.
+      final rearmIn = _scheduleTickRearm();
+      _flare('trajectory.tickRearmFailed', {
+        'pass': 'P6',
+        'kind': _kTickStaleKind,
+        'lastBeat': _renderTickBeat(episode.lastBeat),
+        'staleFor': '${_tickStaleForSeconds(episode, now)}',
+        'attempts': '${episode.attempts}',
+        'reason': reason,
+        'rearmIn': rearmIn == null ? 'never' : '${rearmIn.inSeconds}',
+      });
+      return;
+    }
+
     final maxRestarts = _kTickRestartPolicy.maxRestarts ?? 0;
     if (episode.attempts < maxRestarts) {
       _scheduleTickRestart(episode.attempts + 1);
@@ -1315,7 +1362,8 @@ class TrajectoryHarness {
     }
 
     _tickRestartDead = true;
-    final now = _clock().toUtc();
+    _tickDeadAt = now;
+    final rearmIn = _scheduleTickRearm();
     _flare('trajectory.tickDead', {
       'pass': 'P6',
       'kind': _kTickStaleKind,
@@ -1323,7 +1371,42 @@ class TrajectoryHarness {
       'staleFor': '${_tickStaleForSeconds(episode, now)}',
       'attempts': '${episode.attempts}',
       'reason': reason,
+      'rearmIn': rearmIn == null ? 'never' : '${rearmIn.inSeconds}',
     });
+  }
+
+  /// Schedules the next re-arm probe of a DEAD episode on
+  /// [_kTickRearmBackoff] and returns its delay, or null when no probe is
+  /// owed (shut down, no longer live, or the episode already ended).
+  ///
+  /// A harness that has left `live` is not re-armed: its mirror is frozen by
+  /// the mode latch, and the barrier's wedged refusal is the honest reading
+  /// until a bounce.
+  Duration? _scheduleTickRearm() {
+    final episode = _tickStaleEpisode;
+    if (_isShutdown ||
+        !_tickRestartDead ||
+        episode == null ||
+        _mode != TrajectoryHarnessMode.live) {
+      return null;
+    }
+    final delay = _kTickRearmBackoff.delayFor(++_tickRearmProbes);
+    _tickRestartBackoffTimer?.cancel();
+    _tickRestartBackoffTimer = _scheduleTimer(delay, () {
+      _tickRestartBackoffTimer = null;
+      if (_isShutdown ||
+          !_tickRestartDead ||
+          !identical(_tickStaleEpisode, episode)) {
+        return;
+      }
+      unawaited(
+        _startTickRestart(
+          episode.attempts + 1,
+          deadline: config.tickInterval * kWorktreeOutstandingStaleTicks,
+        ),
+      );
+    });
+    return delay;
   }
 
   void _resumeTickPass(
@@ -1338,14 +1421,36 @@ class TrajectoryHarness {
     } else {
       _processIdentities.noteTickAt(resumedAt);
     }
-    _flare('trajectory.tickResumed', {
-      'pass': 'P6',
-      'kind': _kTickStaleKind,
-      'lastBeat': _renderTickBeat(episode.lastBeat),
-      'resumedAt': resumedAt.toIso8601String(),
-      'staleFor': '${_tickStaleForSeconds(episode, resumedAt)}',
-      'attempts': '${episode.attempts}',
-    });
+    final deadAt = _tickDeadAt;
+    if (_tickRestartDead) {
+      // THE RECOVERY (tg-6n18): a dead episode beat again. Named apart from
+      // `tickResumed` so an operator can grep the outage's end by the same
+      // word that announced it.
+      _flare('trajectory.tickRecovered', {
+        'pass': 'P6',
+        'kind': _kTickStaleKind,
+        'lastBeat': _renderTickBeat(episode.lastBeat),
+        'resumedAt': resumedAt.toIso8601String(),
+        'staleFor': '${_tickStaleForSeconds(episode, resumedAt)}',
+        'deadFor': deadAt == null
+            ? '0'
+            : '${resumedAt.difference(deadAt).inSeconds}',
+        'attempts': '${episode.attempts}',
+        'rearmProbes': '$_tickRearmProbes',
+      });
+    } else {
+      _flare('trajectory.tickResumed', {
+        'pass': 'P6',
+        'kind': _kTickStaleKind,
+        'lastBeat': _renderTickBeat(episode.lastBeat),
+        'resumedAt': resumedAt.toIso8601String(),
+        'staleFor': '${_tickStaleForSeconds(episode, resumedAt)}',
+        'attempts': '${episode.attempts}',
+      });
+    }
+    _tickRestartDead = false;
+    _tickRearmProbes = 0;
+    _tickDeadAt = null;
     _tickStaleEpisode = null;
     _accountant.observe(pass);
     _runTickMirrorGuards();

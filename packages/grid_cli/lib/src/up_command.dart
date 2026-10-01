@@ -58,6 +58,7 @@ import 'package:grid_sdk/grid_sdk.dart'
         SubstationWorkSpec,
         TreeProjector,
         closeStoreConnections,
+        describeStoreDeadlines,
         kNotWedged,
         runGrid,
         settle;
@@ -682,6 +683,10 @@ class UpCommand extends Command<int> {
             : 'stores: read-path {${view.readPathName}}  ·  state partition: '
                   '${view.stateSubstation}',
       )
+      // The deadline the read path applied and the reads that died on it
+      // during boot (tg-6n18) — the numbers a slow-store boot needs, in the
+      // summary rather than a log dig.
+      ..writeln(describeStoreDeadlines(live.openStores))
       ..writeln(
         'control: ${control.url}  ·  token: (see ${stationLock.path}, 0600)',
       );

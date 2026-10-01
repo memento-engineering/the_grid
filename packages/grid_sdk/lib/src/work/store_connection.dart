@@ -69,8 +69,36 @@ final class DoltStoreConnection implements StoreConnection {
   /// The pooled service's `host:port/database`.
   String get endpoint => describeDoltEndpoint(_service.endpoint);
 
+  /// Reads on this store that died on [DoltQueryService.queryTimeout] so far.
+  int get timedOutReads => _service.timedOutReads;
+
   @override
   Future<void> close() => _service.close();
+}
+
+/// The boot summary's store-deadline line (tg-6n18): the deadline the
+/// station's SQL read path applies, and how many reads have died on it so
+/// far, per pooled store — so a boot burst that times the store out carries
+/// its own numbers in the banner instead of needing a log dig.
+///
+/// Only a pooled [DoltStoreConnection] has a SQL read deadline; a station on
+/// the bd CLI read path renders that absence rather than a fabricated zero.
+String describeStoreDeadlines(Iterable<StoreConnection> stores) {
+  final counts = <(String, int)>[
+    for (final store in stores)
+      if (store case DoltStoreConnection(:final name, :final timedOutReads))
+        (name, timedOutReads),
+  ];
+  final deadline =
+      'store query deadline: '
+      '${DoltQueryService.queryTimeout.inMilliseconds}ms '
+      '(DoltQueryService.queryTimeout)';
+  if (counts.isEmpty) {
+    return '$deadline  ·  timed-out reads: n/a (no SQL read path open)';
+  }
+  final total = counts.fold<int>(0, (sum, count) => sum + count.$2);
+  return '$deadline  ·  timed-out reads: $total '
+      '(${[for (final (name, n) in counts) '$name $n'].join(', ')})';
 }
 
 /// The [StoreConnection] over a [TrajectoryHarness]'s own sessions.

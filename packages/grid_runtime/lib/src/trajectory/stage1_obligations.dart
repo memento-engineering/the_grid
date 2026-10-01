@@ -308,30 +308,58 @@ final class AdmissionRestorationObligation extends ObligationQuery {
     'clause': clause,
   };
 
+  /// The standing refusals this station still owes a restoration, oldest
+  /// first.
+  ///
+  /// **Bounded by construction (tg-6n18).** The earlier form evaluated three
+  /// CORRELATED `NOT EXISTS` subqueries per candidate refusal, two of them
+  /// re-running `JSON_EXTRACT` over every sibling refusal's payload, so its
+  /// cost grew with the square of the refusal count — and a dead P6 heartbeat
+  /// mints a refusal per bead per window, which made the obligation slower on
+  /// exactly the boot it had to clear (2.2 s for one clause on the live store;
+  /// 3.5 s warm on a synthetic 150k-row log). This form computes each
+  /// exclusion ONCE, as an uncorrelated derived table, and joins:
+  ///
+  ///   * `latest` — the newest refusal per bead on this clause, from ANY
+  ///     station. "Not superseded by a later refusal of the same bead on the
+  ///     same clause" is exactly "is that bead's MAX(seq) refusal", so the
+  ///     clause is extracted once per refusal row, never per pair;
+  ///   * `restored` — every refusal id an `admission.restored` already
+  ///     resolves (not already cleared);
+  ///   * `outstanding` — every bead that still has a live worktree under any of
+  ///     its sessions (THE EXTERNAL STATE; P6 carries no work-bead column, so
+  ///     this is the same P6 → P1 → work_bead_id join the clause evaluates in
+  ///     memory).
+  ///
+  /// The station filter applies to the LATEST refusal, which is what the old
+  /// form's "this station's refusal, not superseded by any later one" meant.
   @override
   String get sql =>
       'SELECT r.record_id AS record_id, r.work_bead_id AS work_bead_id '
-      'FROM trajectory r '
+      'FROM (SELECT c.work_bead_id AS work_bead_id, MAX(c.seq) AS latest_seq '
+      'FROM trajectory c '
+      "WHERE c.record_type = 'admission.refused' "
+      'AND c.work_bead_id IS NOT NULL '
+      "AND JSON_UNQUOTE(JSON_EXTRACT(c.payload, '\$.clause')) = :clause "
+      'GROUP BY c.work_bead_id) latest '
+      'JOIN trajectory r ON r.seq = latest.latest_seq '
+      // Not already cleared.
+      'LEFT JOIN (SELECT DISTINCT s.resolves_record_id AS refusal_record_id '
+      'FROM trajectory s '
+      "WHERE s.record_type = 'admission.restored' "
+      'AND s.resolves_record_id IS NOT NULL) restored '
+      'ON restored.refusal_record_id = r.record_id '
+      // THE EXTERNAL STATE: no live worktree left under any session of the
+      // bead.
+      'LEFT JOIN (SELECT DISTINCT h.work_bead_id AS work_bead_id '
+      'FROM proj_process_identity p '
+      'JOIN proj_session_head h ON h.session_id = p.session_id '
+      "WHERE p.worktree_state = 'live' AND p.worktree IS NOT NULL) outstanding "
+      'ON outstanding.work_bead_id = r.work_bead_id '
       "WHERE r.record_type = 'admission.refused' "
       'AND r.station = :station '
-      'AND r.work_bead_id IS NOT NULL '
-      "AND JSON_UNQUOTE(JSON_EXTRACT(r.payload, '\$.clause')) = :clause "
-      // Not already cleared.
-      'AND NOT EXISTS (SELECT 1 FROM trajectory s '
-      "WHERE s.record_type = 'admission.restored' "
-      'AND s.resolves_record_id = r.record_id) '
-      // Not superseded by a later refusal of the same bead on the same clause.
-      'AND NOT EXISTS (SELECT 1 FROM trajectory n '
-      "WHERE n.record_type = 'admission.refused' "
-      'AND n.work_bead_id = r.work_bead_id AND n.seq > r.seq '
-      "AND JSON_UNQUOTE(JSON_EXTRACT(n.payload, '\$.clause')) = :clause) "
-      // THE EXTERNAL STATE: no live worktree left under any session of the
-      // bead. P6 carries no work-bead column, so this is the same
-      // P6 → P1 → work_bead_id join the clause evaluates in memory.
-      'AND NOT EXISTS (SELECT 1 FROM proj_process_identity p '
-      'JOIN proj_session_head h ON h.session_id = p.session_id '
-      'WHERE h.work_bead_id = r.work_bead_id '
-      "AND p.worktree_state = 'live' AND p.worktree IS NOT NULL) "
+      'AND restored.refusal_record_id IS NULL '
+      'AND outstanding.work_bead_id IS NULL '
       'ORDER BY r.seq LIMIT $batch';
 
   @override

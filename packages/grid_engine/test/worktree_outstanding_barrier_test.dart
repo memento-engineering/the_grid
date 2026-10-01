@@ -132,6 +132,7 @@ final class _Identities implements TrajectoryProcessIdentitySnapshot {
     this.rows, {
     this.lastTickAt,
     this.health = TrajectorySnapshotHealth.live,
+    this.tickStalled = false,
   });
 
   @override
@@ -140,6 +141,8 @@ final class _Identities implements TrajectoryProcessIdentitySnapshot {
   final DateTime? lastTickAt;
   @override
   final TrajectorySnapshotHealth health;
+  @override
+  final bool tickStalled;
 
   @override
   int get version => 1;
@@ -209,13 +212,20 @@ WorktreeOutstandingRead _read({
   List<_Head> heads = const [],
   DateTime? lastTickAt,
   TrajectorySnapshotHealth health = TrajectorySnapshotHealth.live,
+  bool tickStalled = false,
 }) => WorktreeOutstandingRead(
   processIdentities: _Identities(
     identities,
     lastTickAt: lastTickAt ?? _now,
     health: health,
+    tickStalled: tickStalled,
   ),
   heads: _Heads(heads),
+);
+
+/// A beat older than the three-tick grace — the P6 tick has stopped.
+final _staleBeat = _now.subtract(
+  kWorktreeOutstandingStaleAfter + const Duration(seconds: 1),
 );
 
 MountEligibilityDecision _evaluate(
@@ -944,6 +954,195 @@ void main() {
       );
     });
   });
+
+  group(
+    'a stalled P6 tick DEGRADES the read instead of wedging it (tg-6n18)',
+    () {
+      test('a bead with no outstanding worktree is ADMITTED on the degraded '
+          'read', () {
+        final findings = <WorktreeOutstandingFinding>[];
+        final decision = _evaluate(
+          _read(
+            // Another bead's stranded worktree, so the join has rows to read.
+            identities: [_Identity(sessionId: 's9', worktree: '/w/tg-9')],
+            heads: [_Head(sessionId: 's9', workBeadId: 'tg-9', isOpen: false)],
+            lastTickAt: _staleBeat,
+            health: TrajectorySnapshotHealth.compromised,
+            tickStalled: true,
+          ),
+          onFinding: findings.add,
+        );
+
+        expect(decision, isA<MountEligible>());
+        expect(findings.single.refuse, isFalse);
+        expect(findings.single.wedged, isFalse);
+        expect(findings.single.degraded, isTrue);
+      });
+
+      test('a REAL outstanding worktree still refuses on the degraded read — '
+          'the join, not the heartbeat', () {
+        final findings = <WorktreeOutstandingFinding>[];
+        final decision = _evaluate(
+          _read(
+            identities: [_Identity(sessionId: 's1', worktree: '/w/tg-1')],
+            heads: [
+              _Head(sessionId: 's1', workBeadId: _workBead, isOpen: false),
+            ],
+            lastTickAt: _staleBeat,
+            health: TrajectorySnapshotHealth.compromised,
+            tickStalled: true,
+          ),
+          onFinding: findings.add,
+        );
+
+        expect(decision, isA<MountRefused>());
+        final clause = (decision as MountRefused).clause;
+        expect(clause, contains('/w/tg-1'));
+        expect(clause, contains('degraded read'));
+        expect(clause, isNot(contains('has not beaten')));
+        expect(findings.single.degraded, isTrue);
+        expect(findings.single.wedged, isFalse);
+      });
+
+      test('the bd LEDGER half still refuses on the degraded read', () {
+        // P1 still says open (the tick that would heal it is stalled), but the
+        // state store's session bead is closed: the ledger half needs no tick.
+        final decision = _evaluate(
+          _read(
+            identities: [_Identity(sessionId: 's1', worktree: '/w/tg-1')],
+            heads: [_Head(sessionId: 's1', workBeadId: _workBead)],
+            lastTickAt: _staleBeat,
+            health: TrajectorySnapshotHealth.compromised,
+            tickStalled: true,
+          ),
+          linked: const [
+            SessionProjection(
+              workBeadId: _workBead,
+              sessionId: 's1',
+              isTerminal: true,
+            ),
+          ],
+        );
+
+        expect(decision, isA<MountRefused>());
+        expect((decision as MountRefused).clause, contains('ledger-terminal'));
+      });
+
+      test(
+        'any OTHER compromise still wedges — only the supervisor-owned stall '
+        'degrades',
+        () {
+          for (final health in TrajectorySnapshotHealth.values) {
+            final decision = _evaluate(
+              _read(lastTickAt: _staleBeat, health: health),
+            );
+
+            expect(
+              decision,
+              isA<MountRefused>(),
+              reason: '${health.name} wedges',
+            );
+            expect(
+              (decision as MountRefused).clause,
+              contains('has not beaten'),
+            );
+          }
+        },
+      );
+
+      test('inside the grace a stalled flag changes nothing', () {
+        final read = _read(
+          lastTickAt: _now.subtract(const Duration(seconds: 30)),
+          tickStalled: true,
+        );
+
+        expect(read.isDegradedAt(_now), isFalse);
+        expect(
+          evaluateWorktreeOutstanding(
+            read: read,
+            workBeadId: _workBead,
+            linkedSessions: const [],
+            now: _now,
+          ).degraded,
+          isFalse,
+        );
+      });
+
+      test('the AUTHORITY admits through the degraded read and flares the mode '
+          'ONCE per episode', () {
+        final transport = RecordingExplorationTransport();
+        final services = StationServices(
+          provider: FakeRuntimeProvider(),
+          writer: StationBeadWriter(
+            bd: BdCliService(RecordingBdRunner()),
+            reader: RecordingBdRunner(),
+            ownership: BeadOwnershipPredicate(const {'tg'}),
+          ),
+          stateSubstation: 'tg',
+          maxConcurrentWork: 4,
+          clock: () => _now,
+          admissionBarrier: AdmissionBarrier(
+            recorder: StationTrajectoryRecorder(sink: _CapturingSink()),
+            cut: true,
+            clock: () => _now,
+          ),
+        );
+        addTearDown(services.dispose);
+
+        StationAdmissionBatch admit(WorktreeOutstandingRead read, String id) {
+          final bead = _task(id);
+          return services.admission.admitPending(
+            JoinedSnapshot(
+              graph: GraphSnapshot.fromParts(
+                beads: [bead],
+                dependencies: const [],
+                readyIds: {bead.id},
+                capturedAt: _now,
+              ),
+              worktreeOutstanding: read,
+            ),
+            const SubstationConfig(
+              substationId: 'tg',
+              ownedSubstations: {'tg'},
+              maxConcurrentWork: 4,
+            ),
+            ServiceBundle(transport: transport),
+            [StationAdmissionCandidate(bead: bead, session: null)],
+          );
+        }
+
+        WorktreeOutstandingRead stalled({bool tickStalled = true}) => _read(
+          lastTickAt: _staleBeat,
+          health: TrajectorySnapshotHealth.compromised,
+          tickStalled: tickStalled,
+        );
+
+        // CONTROL: the same dead beat WITHOUT the supervisor-owned stall is the
+        // pre-tg-6n18 posture — every bead refused as wedged, nothing flared.
+        final wedged = admit(stalled(tickStalled: false), 'tg-0');
+        expect(wedged.admitted, isEmpty);
+        expect(wedged.refused.single.detail, contains('has not beaten'));
+        expect(transport.named('work.mountEligibilityDegraded'), isEmpty);
+
+        final first = admit(stalled(), 'tg-1');
+        final second = admit(stalled(), 'tg-2');
+
+        for (final batch in [first, second]) {
+          expect(batch.refused, isEmpty);
+          expect(batch.admitted, hasLength(1));
+        }
+        final flare = transport.named('work.mountEligibilityDegraded').single;
+        expect(flare.data['clause'], kWorktreeOutstandingClause);
+        expect(flare.data['lastBeat'], _staleBeat.toIso8601String());
+        expect(flare.data['fallback'], 'p6-post-ack-rows+bd-ledger');
+
+        // RECOVERY: a fresh beat re-arms the latch, so the NEXT episode flares.
+        admit(_read(), 'tg-3');
+        admit(stalled(), 'tg-4');
+        expect(transport.named('work.mountEligibilityDegraded'), hasLength(2));
+      });
+    },
+  );
 }
 
 final class _IdleResolver implements SessionResolver {

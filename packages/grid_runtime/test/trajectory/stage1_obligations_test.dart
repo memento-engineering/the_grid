@@ -1361,9 +1361,30 @@ void main() {
       expect(query.sql, contains("p.worktree_state = 'live'"));
       // Already-cleared and superseded refusals are excluded.
       expect(query.sql, contains("s.record_type = 'admission.restored'"));
-      expect(query.sql, contains('n.seq > r.seq'));
+      expect(query.sql, contains('MAX(c.seq) AS latest_seq'));
+      expect(query.sql, contains('r.seq = latest.latest_seq'));
       expect(query.parameters['clause'], kWorktreeOutstandingClause);
       expect(query.parameters['station'], 'tg');
+    });
+
+    test('is BOUNDED: no correlated subquery, and the clause is extracted '
+        'once per refusal row, never per pair (tg-6n18)', () {
+      final sql = build().sql;
+
+      // The old shape ran `NOT EXISTS (… JSON_EXTRACT(n.payload …) …)` per
+      // candidate — quadratic in the refusals a dead heartbeat mints.
+      expect(sql, isNot(contains('NOT EXISTS')));
+      expect(sql, isNot(contains('r.seq <')));
+      expect(sql, isNot(contains('n.seq > r.seq')));
+      expect(
+        RegExp('JSON_EXTRACT').allMatches(sql),
+        hasLength(1),
+        reason: 'one extraction, in the uncorrelated latest-refusal table',
+      );
+      expect(sql, contains("JSON_EXTRACT(c.payload, '\$.clause')"));
+      // The station filter rides the LATEST refusal; the batch bound holds.
+      expect(sql, contains('AND r.station = :station'));
+      expect(sql, endsWith('ORDER BY r.seq LIMIT $kObligationBatchSize'));
     });
 
     test('appends admission.restored on the RATIFIED key', () async {
