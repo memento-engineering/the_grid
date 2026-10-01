@@ -167,8 +167,22 @@ class TrajectoryTick {
     var deduped = 0;
     final refusals = <TickRefusal>[];
 
+    var abandoned = false;
+
     obligations:
     for (final query in _queries) {
+      // A DISPOSED tick abandons its in-flight pass at the next OBLIGATION
+      // boundary — before the next query runs, never between the appends of a
+      // repair list already computed (tg-6n18). The owner disposes a tick it
+      // has given up on — a supervisor's timed-out replacement — and a pass
+      // that kept running its remaining obligations would hold the owner's
+      // shared serial lane and its external I/O under the NEXT generation's
+      // feet. Repairs already paid for land, and so does the cadence commit:
+      // discarding them would only make the replacement re-run the query.
+      if (_disposed) {
+        abandoned = true;
+        break;
+      }
       // Re-checked per query: the fence can change hands mid-pass, and a
       // fenced-out service must stop repairing at that instant.
       if (_appender.isInert || _appender.isHalted) break;
@@ -265,7 +279,10 @@ class TrajectoryTick {
 
     return TrajectoryTickPass(
       startedAt: startedAt,
-      disposition: TickPassDisposition.ran,
+      // An abandoned pass is no heartbeat: it did not run the whole set.
+      disposition: abandoned
+          ? TickPassDisposition.skippedDisposed
+          : TickPassDisposition.ran,
       queriesRun: queriesRun,
       recordsAppended: appended,
       recordsDeduped: deduped,

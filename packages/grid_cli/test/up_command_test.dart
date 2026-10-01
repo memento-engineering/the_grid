@@ -1227,6 +1227,10 @@ void main() {
         'lock.release',
       ]);
       expect(h.stdoutText, contains('lunar up — resident station (runGrid)'));
+      // tg-6n18: the boot summary names the read deadline it applied and the
+      // reads that died on it.
+      expect(h.stdoutText, contains('store query deadline: 10000ms'));
+      expect(h.stdoutText, contains('timed-out reads:'));
       // The SHELL-owned projector reaches BOTH consumers as one instance …
       expect(h.gridProjector, isNotNull);
       expect(h.controlProjector, same(h.gridProjector));

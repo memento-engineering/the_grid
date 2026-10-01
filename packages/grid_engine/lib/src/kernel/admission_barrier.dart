@@ -113,6 +113,7 @@ final class AdmissionBarrier {
       snapshotRev: snapshotRev,
       detail: <String, Object?>{
         if (finding.wedged) 'wedged': true,
+        if (finding.degraded) 'degraded': true,
         if (finding.outstanding.isNotEmpty) ...<String, Object?>{
           'sessions': <String>[
             for (final row in finding.outstanding) row.sessionId,

@@ -70,6 +70,9 @@ void main() {
     required int epochSeq,
     required String recordType,
     String? resolvesRecordId,
+    String station = _station,
+    String bead = _bead,
+    String clause = kWorktreeOutstandingClause,
   }) => db.execute(
     'INSERT INTO trajectory (boot_epoch, epoch_seq, record_id, idem_key, '
     'idem_key_text, family, record_type, occurred_at, recorded_at, station, '
@@ -85,13 +88,13 @@ void main() {
       // CHAR(64), and UNIQUE — the digest's VALUE is irrelevant here, its
       // distinctness is not.
       'idem_key': recordId.padRight(64, '0'),
-      'idem_key_text': '$recordType:$_bead:$kWorktreeOutstandingClause',
+      'idem_key_text': '$recordType:$bead:$clause',
       'record_type': recordType,
-      'station': _station,
-      'bead': _bead,
+      'station': station,
+      'bead': bead,
       'attempt': _attemptId,
       'resolves': resolvesRecordId,
-      'clause': kWorktreeOutstandingClause,
+      'clause': clause,
     },
   );
 
@@ -174,5 +177,157 @@ void main() {
       resolvesRecordId: _refusalId,
     );
     expect(await standing(), isEmpty);
+  });
+
+  test('only the LATEST refusal per bead and clause stands — from any '
+      'station, and only on this clause (tg-6n18 bounded form)', () async {
+    // The bounded query replaced three correlated NOT EXISTS subqueries with
+    // uncorrelated derived tables; this pins the supersession semantics the
+    // correlated form had, against dolt itself.
+    const bead = 'tg-sup';
+    Future<List<String>> ids() async => [
+      for (final row in await standing())
+        if (row['work_bead_id'] == bead) row['record_id']!,
+    ];
+
+    await append(
+      recordId: '01J8ZR0000000000000000001A',
+      epochSeq: 10,
+      recordType: 'admission.refused',
+      bead: bead,
+    );
+    expect(await ids(), ['01J8ZR0000000000000000001A']);
+
+    // A later refusal on ANOTHER clause supersedes nothing.
+    await append(
+      recordId: '01J8ZR0000000000000000001B',
+      epochSeq: 11,
+      recordType: 'admission.refused',
+      bead: bead,
+      clause: 'some-other-clause',
+    );
+    expect(await ids(), ['01J8ZR0000000000000000001A']);
+
+    // A later refusal on THIS clause from ANOTHER station supersedes it, and
+    // is not this station's to restore.
+    await append(
+      recordId: '01J8ZR0000000000000000001C',
+      epochSeq: 1,
+      recordType: 'admission.refused',
+      bead: bead,
+      station: 'other-station',
+    );
+    expect(await ids(), isEmpty);
+
+    // A later one of this station's own is the one that stands.
+    await append(
+      recordId: '01J8ZR0000000000000000001D',
+      epochSeq: 12,
+      recordType: 'admission.refused',
+      bead: bead,
+    );
+    expect(await ids(), ['01J8ZR0000000000000000001D']);
+
+    // …until it is restored.
+    await append(
+      recordId: '01J8ZR0000000000000000001E',
+      epochSeq: 13,
+      recordType: 'admission.restored',
+      bead: bead,
+      resolvesRecordId: '01J8ZR0000000000000000001D',
+    );
+    expect(await ids(), isEmpty);
+  });
+
+  test('the WINDOW floor rises past restored and superseded rows and answers '
+      'exactly what the unwindowed query answers (tg-6n18 review)', () async {
+    Future<int> seqOf(String recordId) async => int.parse(
+      (await db.execute('SELECT seq FROM trajectory WHERE record_id = :id', {
+        'id': recordId,
+      })).rows.single['seq']!,
+    );
+    Future<List<String>> answer(AdmissionRestorationObligation query) async => [
+      for (final row in (await db.execute(query.sql, query.parameters)).rows)
+        row['record_id']!,
+    ];
+
+    // Below-the-floor history: a restored refusal, and a superseded one.
+    await append(
+      recordId: '01J8ZR0000000000000000002A',
+      epochSeq: 20,
+      recordType: 'admission.refused',
+      bead: 'tg-w1',
+    );
+    await append(
+      recordId: '01J8ZR0000000000000000002B',
+      epochSeq: 21,
+      recordType: 'admission.restored',
+      bead: 'tg-w1',
+      resolvesRecordId: '01J8ZR0000000000000000002A',
+    );
+    await append(
+      recordId: '01J8ZR0000000000000000002C',
+      epochSeq: 22,
+      recordType: 'admission.refused',
+      bead: 'tg-w2',
+    );
+    // The standing ones.
+    await append(
+      recordId: '01J8ZR0000000000000000002D',
+      epochSeq: 23,
+      recordType: 'admission.refused',
+      bead: 'tg-w2',
+    );
+    await append(
+      recordId: '01J8ZR0000000000000000002E',
+      epochSeq: 24,
+      recordType: 'admission.refused',
+      bead: 'tg-w3',
+    );
+
+    final windowed = AdmissionRestorationObligation(
+      recorder: StationTrajectoryRecorder(
+        sink: _InertSink(),
+        substationPrefixes: const {'tg'},
+      ),
+      station: _station,
+      db: db,
+    );
+    final first = await answer(windowed);
+    expect(
+      first,
+      await answer(obligation()),
+      reason: 'floor 0 is the old query',
+    );
+    await windowed.repair(
+      (await db.execute(windowed.sql, windowed.parameters)).rows,
+    );
+
+    // The floor rose to the oldest standing refusal: the restored pair and the
+    // superseded refusal now sit BELOW it and are never scanned again.
+    expect(windowed.floor, await seqOf('01J8ZR0000000000000000002D'));
+    expect(await seqOf('01J8ZR0000000000000000002C'), lessThan(windowed.floor));
+    expect(await seqOf('01J8ZR0000000000000000002B'), lessThan(windowed.floor));
+    expect(await answer(windowed), await answer(obligation()));
+    expect(
+      await answer(windowed),
+      containsAll(<String>[
+        '01J8ZR0000000000000000002D',
+        '01J8ZR0000000000000000002E',
+      ]),
+    );
+
+    // The tick lands one restoration; the windowed and unwindowed answers
+    // still agree, and the floor follows the remaining standing refusal.
+    await append(
+      recordId: '01J8ZR0000000000000000002F',
+      epochSeq: 25,
+      recordType: 'admission.restored',
+      bead: 'tg-w2',
+      resolvesRecordId: '01J8ZR0000000000000000002D',
+    );
+    await windowed.repair(const []);
+    expect(windowed.floor, await seqOf('01J8ZR0000000000000000002E'));
+    expect(await answer(windowed), await answer(obligation()));
   });
 }

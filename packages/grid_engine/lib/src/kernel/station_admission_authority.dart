@@ -386,6 +386,14 @@ final class StationAdmissionAuthority {
   /// clause in its observe form, which changes eligibility for nothing.
   final AdmissionBarrier? _admissionBarrier;
 
+  /// Whether the last armed admission pass read DEGRADED (tg-6n18): the P6
+  /// tick stalled, so the worktree-outstanding clause judged the join over the
+  /// post-ACK rows and the bd ledger instead of refusing every candidate. The
+  /// latch makes `work.mountEligibilityDegraded` fire ONCE per episode and
+  /// `work.mountEligibilityRestoredFromDegraded` once at its end; it is judged
+  /// on every [admitPending] pass, with or without candidates.
+  bool _eligibilityReadDegraded = false;
+
   // Per-substation branch and status state is unavailable to one-scope calls.
   final Map<_ScopeKey, _AdmissionScopeState> _scopes =
       <_ScopeKey, _AdmissionScopeState>{};
@@ -527,6 +535,10 @@ final class StationAdmissionAuthority {
       );
     }
 
+    // The read mode is judged on EVERY pass, candidates or not, so a recovery
+    // that lands while nothing is pending still closes the episode (and
+    // re-arms the next one's flare).
+    _noteEligibilityReadMode(services, snapshot.worktreeOutstanding);
     _reconcileMountAttemptWrites(snapshot);
     _blockedUntilFreshReady.removeWhere(
       (beadId) => !snapshot.graph.beadsById.containsKey(beadId),
@@ -1844,6 +1856,38 @@ final class StationAdmissionAuthority {
         ...stateStoreDeadlineMetadata(error),
       });
     }
+  }
+
+  /// Flares the worktree-outstanding read's DEGRADED mode once per episode,
+  /// and its end once (tg-6n18). Only the ARMED barrier reports it: under the
+  /// observe form the clause changes eligibility for nothing, so its read mode
+  /// decides nothing.
+  void _noteEligibilityReadMode(
+    ServiceBundle services,
+    WorktreeOutstandingRead read,
+  ) {
+    if (_admissionBarrier?.observeForm ?? true) return;
+    final degraded = read.isDegradedAt(_clock());
+    if (degraded == _eligibilityReadDegraded) return;
+    _eligibilityReadDegraded = degraded;
+    final beat = read.heartbeatAt;
+    final data = <String, String>{
+      'clause': kWorktreeOutstandingClause,
+      'lastBeat': beat == null ? 'never' : beat.toUtc().toIso8601String(),
+      'health': read.health?.name ?? 'unknown',
+    };
+    if (!degraded) {
+      _flare(services, 'work.mountEligibilityRestoredFromDegraded', data);
+      return;
+    }
+    _flare(services, 'work.mountEligibilityDegraded', {
+      ...data,
+      'staleAfter': '${read.staleAfter.inSeconds}',
+      'fallback': 'p6-post-ack-rows+bd-ledger',
+      'effect':
+          'the P6 tick is stalled; mounts are judged on the maintained rows '
+          'instead of refusing every bead',
+    });
   }
 
   void _noteEligibilityRefusal(

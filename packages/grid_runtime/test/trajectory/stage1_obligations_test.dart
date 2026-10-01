@@ -29,6 +29,15 @@ final class _FakeDb implements TrajectoryDb {
   Future<void> close() async {}
 }
 
+final class _ThrowingDb implements TrajectoryDb {
+  @override
+  Future<SqlResult> execute(String sql, [Map<String, dynamic>? params]) =>
+      Future<SqlResult>.error(StateError('floor read failed'));
+
+  @override
+  Future<void> close() async {}
+}
+
 final class _FakeProcesses implements ProcessGroupController {
   _FakeProcesses(this.alive);
 
@@ -1361,9 +1370,30 @@ void main() {
       expect(query.sql, contains("p.worktree_state = 'live'"));
       // Already-cleared and superseded refusals are excluded.
       expect(query.sql, contains("s.record_type = 'admission.restored'"));
-      expect(query.sql, contains('n.seq > r.seq'));
+      expect(query.sql, contains('MAX(c.seq) AS latest_seq'));
+      expect(query.sql, contains('r.seq = latest.latest_seq'));
       expect(query.parameters['clause'], kWorktreeOutstandingClause);
       expect(query.parameters['station'], 'tg');
+    });
+
+    test('is BOUNDED: no correlated subquery, and the clause is extracted '
+        'once per refusal row, never per pair (tg-6n18)', () {
+      final sql = build().sql;
+
+      // The old shape ran `NOT EXISTS (… JSON_EXTRACT(n.payload …) …)` per
+      // candidate — quadratic in the refusals a dead heartbeat mints.
+      expect(sql, isNot(contains('NOT EXISTS')));
+      expect(sql, isNot(contains('r.seq <')));
+      expect(sql, isNot(contains('n.seq > r.seq')));
+      expect(
+        RegExp('JSON_EXTRACT').allMatches(sql),
+        hasLength(1),
+        reason: 'one extraction, in the uncorrelated latest-refusal table',
+      );
+      expect(sql, contains("JSON_EXTRACT(c.payload, '\$.clause')"));
+      // The station filter rides the LATEST refusal; the batch bound holds.
+      expect(sql, contains('AND r.station = :station'));
+      expect(sql, endsWith('ORDER BY r.seq LIMIT $kObligationBatchSize'));
     });
 
     test('appends admission.restored on the RATIFIED key', () async {
@@ -1400,6 +1430,122 @@ void main() {
 
     test('no rows is the fixpoint signal', () async {
       expect(await build().repair(const []), isEmpty);
+    });
+
+    group('the WINDOW floor (tg-6n18 review)', () {
+      test('both exclusion tables are floored; a bare obligation stays '
+          'unwindowed', () async {
+        final query = build();
+        expect(query.sql, contains('AND c.seq >= :floor'));
+        expect(query.sql, contains('AND s.seq >= :floor'));
+        expect(query.parameters['floor'], 0);
+        await query.repair(const []);
+        expect(query.floor, 0, reason: 'no db, no advance — the old query');
+      });
+
+      test('rises to the oldest STANDING refusal after a pass, and never '
+          'falls', () async {
+        final db = _FakeDb()
+          ..next = const SqlResult(
+            rows: [
+              {'standing_floor': '120', 'window_head': '400'},
+            ],
+          );
+        final query = AdmissionRestorationObligation(
+          recorder: _recorder(),
+          station: 'tg',
+          db: db,
+        );
+
+        await query.repair(const []);
+        expect(query.floor, 120);
+        expect(db.statements.single.sql, query.floorSql);
+        expect(db.statements.single.params?['floor'], 0);
+        expect(query.parameters['floor'], 120);
+
+        db.next = const SqlResult(
+          rows: [
+            {'standing_floor': '90', 'window_head': '400'},
+          ],
+        );
+        await query.repair([
+          {'record_id': 'R1', 'work_bead_id': 'tg-abc'},
+        ]);
+        expect(db.statements, hasLength(2));
+        expect(query.floor, 120, reason: 'monotone');
+      });
+
+      test('a run of EMPTY passes skips the floor round trip; a restoring '
+          'pass and the one after it pay it', () async {
+        final db = _FakeDb()
+          ..next = const SqlResult(
+            rows: [
+              {'standing_floor': '120', 'window_head': '400'},
+            ],
+          );
+        final query = AdmissionRestorationObligation(
+          recorder: _recorder(),
+          station: 'tg',
+          db: db,
+        );
+
+        await query.repair(const []);
+        expect(db.statements, hasLength(1), reason: 'the boot pass reads it');
+        await query.repair(const []);
+        await query.repair(const []);
+        expect(db.statements, hasLength(1), reason: 'steady state: none');
+
+        await query.repair([
+          {'record_id': 'R1', 'work_bead_id': 'tg-abc'},
+        ]);
+        expect(db.statements, hasLength(2), reason: 'about to restore');
+        await query.repair(const []);
+        expect(
+          db.statements,
+          hasLength(3),
+          reason: 'the restorations have landed: the floor can rise now',
+        );
+        await query.repair(const []);
+        expect(db.statements, hasLength(3));
+      });
+
+      test('nothing standing moves the floor past the window head', () async {
+        final db = _FakeDb()
+          ..next = const SqlResult(
+            rows: [
+              {'standing_floor': null, 'window_head': '400'},
+            ],
+          );
+        final query = AdmissionRestorationObligation(
+          recorder: _recorder(),
+          station: 'tg',
+          db: db,
+        );
+
+        await query.repair(const []);
+        expect(query.floor, 401);
+      });
+
+      test('a failed floor read keeps the floor and still repairs', () async {
+        final query = AdmissionRestorationObligation(
+          recorder: _recorder(),
+          station: 'tg',
+          db: _ThrowingDb(),
+        );
+
+        final appends = await query.repair([
+          {'record_id': 'R1', 'work_bead_id': 'tg-abc'},
+        ]);
+        expect(appends, hasLength(1));
+        expect(query.floor, 0);
+      });
+
+      test('the floor query counts standing refusals BLOCKED by a live '
+          'worktree too', () {
+        final floorSql = build().floorSql;
+        expect(floorSql, isNot(contains('proj_process_identity')));
+        expect(floorSql, contains('r.station = :station'));
+      });
     });
   });
 }

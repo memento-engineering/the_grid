@@ -259,7 +259,11 @@ List<ObligationQuery> buildStage1ObligationQueries({
     // no refusal, so there is nothing for this query to clear and it stays out
     // of the set entirely.
     if (admissionRefusalsArmed)
-      AdmissionRestorationObligation(recorder: recorder, station: station),
+      AdmissionRestorationObligation(
+        recorder: recorder,
+        station: station,
+        db: db,
+      ),
   ];
 }
 
@@ -286,13 +290,43 @@ final class AdmissionRestorationObligation extends ObligationQuery {
   AdmissionRestorationObligation({
     required StationTrajectoryRecorder recorder,
     required String station,
+    TrajectoryDb? db,
     this.clause = kWorktreeOutstandingClause,
     this.batch = kObligationBatchSize,
   }) : _recorder = recorder,
-       _station = station;
+       _station = station,
+       _db = db;
 
   final StationTrajectoryRecorder _recorder;
   final String _station;
+
+  /// The read path the WINDOW advances through; null (a bare obligation)
+  /// keeps the floor at 0, which is the unwindowed query.
+  final TrajectoryDb? _db;
+
+  /// THE WINDOW FLOOR (tg-6n18 review): every `admission.refused` /
+  /// `admission.restored` row below this seq is provably irrelevant to this
+  /// station's restoration, so the derived tables never scan it.
+  ///
+  /// The invariant: no STANDING refusal of this station — latest for its bead
+  /// on the clause, not yet restored, blocked or not — sits below the floor.
+  /// Dropping rows below it changes no answer: a bead whose latest refusal is
+  /// at or above the floor keeps the same `MAX(seq)`; a bead whose rows are
+  /// all below it had nothing standing here; and a restoration always has a
+  /// higher seq than the refusal it resolves. The floor starts at 0 (one full
+  /// scan per process) and only ever rises, after a pass that owes it, to the oldest
+  /// standing refusal — or past the window head when nothing stands.
+  int _floor = 0;
+
+  /// The current window floor — diagnostics and tests.
+  int get floor => _floor;
+
+  /// Whether the next pass owes a floor read (tg-6n18 review). The floor can
+  /// only rise once a restoration lands, so the extra round trip runs on the
+  /// first pass of a process, on a pass that is about to restore, and on the
+  /// pass AFTER one (when its restorations have landed) — never on a run of
+  /// empty passes, which is the steady state.
+  bool _floorOwed = true;
 
   /// The refusal clause this obligation clears — the barrier's, never the
   /// authority's Stage-3 clause family.
@@ -306,32 +340,77 @@ final class AdmissionRestorationObligation extends ObligationQuery {
   Map<String, Object?> get parameters => {
     'station': _station,
     'clause': clause,
+    'floor': _floor,
   };
 
+  /// The two windowed exclusion tables both queries share.
+  static const String _latestSql =
+      '(SELECT c.work_bead_id AS work_bead_id, MAX(c.seq) AS latest_seq '
+      'FROM trajectory c '
+      "WHERE c.record_type = 'admission.refused' "
+      'AND c.seq >= :floor '
+      'AND c.work_bead_id IS NOT NULL '
+      "AND JSON_UNQUOTE(JSON_EXTRACT(c.payload, '\$.clause')) = :clause "
+      'GROUP BY c.work_bead_id) latest '
+      'JOIN trajectory r ON r.seq = latest.latest_seq ';
+  static const String _restoredSql =
+      'LEFT JOIN (SELECT DISTINCT s.resolves_record_id AS refusal_record_id '
+      'FROM trajectory s '
+      "WHERE s.record_type = 'admission.restored' "
+      'AND s.seq >= :floor '
+      'AND s.resolves_record_id IS NOT NULL) restored '
+      'ON restored.refusal_record_id = r.record_id ';
+
+  /// The window's next floor: the oldest STANDING refusal of this station
+  /// (blocked by a live worktree or not), and the window's newest latest
+  /// refusal, for the nothing-stands case.
+  String get floorSql =>
+      'SELECT MIN(CASE WHEN restored.refusal_record_id IS NULL '
+      'THEN r.seq END) AS standing_floor, MAX(r.seq) AS window_head '
+      'FROM $_latestSql$_restoredSql'
+      "WHERE r.record_type = 'admission.refused' "
+      'AND r.station = :station';
+
+  /// The standing refusals this station still owes a restoration, oldest
+  /// first.
+  ///
+  /// **Bounded by construction (tg-6n18).** The earlier form evaluated three
+  /// CORRELATED `NOT EXISTS` subqueries per candidate refusal, two of them
+  /// re-running `JSON_EXTRACT` over every sibling refusal's payload, so its
+  /// cost grew with the square of the refusal count — and a dead P6 heartbeat
+  /// mints a refusal per bead per window, which made the obligation slower on
+  /// exactly the boot it had to clear (2.2 s for one clause on the live store;
+  /// 3.5 s warm on a synthetic 150k-row log). This form computes each
+  /// exclusion ONCE, as an uncorrelated derived table, and joins:
+  ///
+  ///   * `latest` — the newest refusal per bead on this clause, from ANY
+  ///     station. "Not superseded by a later refusal of the same bead on the
+  ///     same clause" is exactly "is that bead's MAX(seq) refusal", so the
+  ///     clause is extracted once per refusal row, never per pair;
+  ///   * `restored` — every refusal id an `admission.restored` already
+  ///     resolves (not already cleared);
+  ///   * `outstanding` — every bead that still has a live worktree under any of
+  ///     its sessions (THE EXTERNAL STATE; P6 carries no work-bead column, so
+  ///     this is the same P6 → P1 → work_bead_id join the clause evaluates in
+  ///     memory).
+  ///
+  /// The station filter applies to the LATEST refusal, which is what the old
+  /// form's "this station's refusal, not superseded by any later one" meant.
   @override
   String get sql =>
       'SELECT r.record_id AS record_id, r.work_bead_id AS work_bead_id '
-      'FROM trajectory r '
+      'FROM $_latestSql$_restoredSql'
+      // THE EXTERNAL STATE: no live worktree left under any session of the
+      // bead.
+      'LEFT JOIN (SELECT DISTINCT h.work_bead_id AS work_bead_id '
+      'FROM proj_process_identity p '
+      'JOIN proj_session_head h ON h.session_id = p.session_id '
+      "WHERE p.worktree_state = 'live' AND p.worktree IS NOT NULL) outstanding "
+      'ON outstanding.work_bead_id = r.work_bead_id '
       "WHERE r.record_type = 'admission.refused' "
       'AND r.station = :station '
-      'AND r.work_bead_id IS NOT NULL '
-      "AND JSON_UNQUOTE(JSON_EXTRACT(r.payload, '\$.clause')) = :clause "
-      // Not already cleared.
-      'AND NOT EXISTS (SELECT 1 FROM trajectory s '
-      "WHERE s.record_type = 'admission.restored' "
-      'AND s.resolves_record_id = r.record_id) '
-      // Not superseded by a later refusal of the same bead on the same clause.
-      'AND NOT EXISTS (SELECT 1 FROM trajectory n '
-      "WHERE n.record_type = 'admission.refused' "
-      'AND n.work_bead_id = r.work_bead_id AND n.seq > r.seq '
-      "AND JSON_UNQUOTE(JSON_EXTRACT(n.payload, '\$.clause')) = :clause) "
-      // THE EXTERNAL STATE: no live worktree left under any session of the
-      // bead. P6 carries no work-bead column, so this is the same
-      // P6 → P1 → work_bead_id join the clause evaluates in memory.
-      'AND NOT EXISTS (SELECT 1 FROM proj_process_identity p '
-      'JOIN proj_session_head h ON h.session_id = p.session_id '
-      'WHERE h.work_bead_id = r.work_bead_id '
-      "AND p.worktree_state = 'live' AND p.worktree IS NOT NULL) "
+      'AND restored.refusal_record_id IS NULL '
+      'AND outstanding.work_bead_id IS NULL '
       'ORDER BY r.seq LIMIT $batch';
 
   @override
@@ -352,7 +431,30 @@ final class AdmissionRestorationObligation extends ObligationQuery {
         ObligationAppend(derived.record, substation: derived.substation),
       );
     }
+    final restoring = appends.isNotEmpty;
+    if (restoring || _floorOwed) await _advanceFloor();
+    _floorOwed = restoring;
     return appends;
+  }
+
+  /// Raises the window floor after a pass that owes it ([_floorOwed]). Runs BEFORE this pass's
+  /// restorations land, so the refusals they clear still count as standing:
+  /// the floor lags by one pass, never leads. A failed read keeps the floor —
+  /// a wider window is only slower, never wrong.
+  Future<void> _advanceFloor() async {
+    final db = _db;
+    if (db == null) return;
+    try {
+      final result = await db.execute(floorSql, parameters);
+      if (result.rows.isEmpty) return;
+      final row = result.rows.first;
+      final standing = int.tryParse(row['standing_floor'] ?? '');
+      final head = int.tryParse(row['window_head'] ?? '');
+      final next = standing ?? (head == null ? null : head + 1);
+      if (next != null && next > _floor) _floor = next;
+    } on Object {
+      // Keep the floor; the next pass re-reads.
+    }
   }
 }
 

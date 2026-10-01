@@ -144,9 +144,10 @@ void main() {
     final changed = <TrajectoryProcessIdentitySnapshot>[];
     mirror.addListener(changed.add, fireImmediately: false);
 
-    expect(mirror.latchCompromised(), isTrue);
-    expect(mirror.latchCompromised(), isFalse);
+    expect(mirror.latchTickStalled(), isTrue);
+    expect(mirror.latchTickStalled(), isFalse);
     expect(mirror.snapshot.health, TrajectorySnapshotHealth.compromised);
+    expect(mirror.snapshot.tickStalled, isTrue);
 
     final ordinaryAt = DateTime.utc(2026, 9, 13, 1);
     mirror.noteTickAt(ordinaryAt);
@@ -157,11 +158,55 @@ void main() {
     expect(mirror.noteResumedTickAt(resumedAt), isTrue);
     expect(mirror.snapshot.lastTickAt, resumedAt);
     expect(mirror.snapshot.health, TrajectorySnapshotHealth.live);
+    expect(mirror.snapshot.tickStalled, isFalse);
 
     final secondResumedAt = DateTime.utc(2026, 9, 13, 3);
     expect(mirror.noteResumedTickAt(secondResumedAt), isFalse);
     expect(mirror.snapshot.lastTickAt, secondResumedAt);
     expect(mirror.snapshot.health, TrajectorySnapshotHealth.live);
     expect(changed, hasLength(4));
+  });
+
+  test('a FOREIGN compromise during a tick stall takes ownership — the read '
+      'wedges again and a resumed beat never launders it (tg-6n18)', () {
+    final mirror = ProcessIdentityMirror();
+    mirror.seed(
+      rows: const [],
+      seededAt: DateTime.utc(2026, 9, 13),
+      stale: false,
+      foldHeadSeq: 0,
+    );
+
+    expect(mirror.latchTickStalled(), isTrue);
+    expect(mirror.snapshot.tickStalled, isTrue);
+
+    // An append loss (or a fence-out, halt, degrade) lands mid-stall.
+    expect(
+      mirror.latchCompromised(),
+      isTrue,
+      reason: 'the cause changed hands, which is news',
+    );
+    expect(mirror.snapshot.tickStalled, isFalse);
+    expect(mirror.snapshot.health, TrajectorySnapshotHealth.compromised);
+    expect(mirror.latchCompromised(), isFalse);
+
+    expect(mirror.noteResumedTickAt(DateTime.utc(2026, 9, 13, 2)), isFalse);
+    expect(mirror.snapshot.health, TrajectorySnapshotHealth.compromised);
+    expect(mirror.snapshot.tickStalled, isFalse);
+  });
+
+  test('a mirror that is not live cannot be stalled by the supervisor', () {
+    final mirror = ProcessIdentityMirror();
+    expect(mirror.latchTickStalled(), isFalse, reason: 'never seeded');
+    expect(mirror.snapshot.tickStalled, isFalse);
+    mirror.seed(
+      rows: const [],
+      seededAt: DateTime.utc(2026, 9, 13),
+      stale: false,
+      foldHeadSeq: 0,
+    );
+    mirror.latchCompromised();
+    expect(mirror.latchTickStalled(), isFalse);
+    expect(mirror.snapshot.tickStalled, isFalse);
   });
 }

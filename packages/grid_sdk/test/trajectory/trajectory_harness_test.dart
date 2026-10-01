@@ -25,6 +25,7 @@ import 'package:grid_engine/grid_engine.dart'
         TerminalReconcileOutcome,
         TerminalReconcileRequest,
         TrajectorySnapshotHealth,
+        WorktreeOutstandingFinding,
         evaluateWorktreeOutstanding,
         kWorktreeOutstandingStaleAfter;
 import 'package:grid_runtime/grid_runtime.dart';
@@ -171,6 +172,25 @@ final class _ProbeQuery extends ObligationQuery {
   Future<List<ObligationAppend>> repair(
     List<Map<String, String?>> rows,
   ) async => const [];
+}
+
+/// A query whose REPAIR blocks on [gate] while one is set — repair runs off
+/// the serial lane, so the writer can land appends while this pass is still in
+/// flight.
+final class _GatedQuery extends ObligationQuery {
+  Completer<void>? gate;
+
+  @override
+  String get name => 'gated';
+
+  @override
+  String get sql => 'SELECT 1 AS one';
+
+  @override
+  Future<List<ObligationAppend>> repair(List<Map<String, String?>> rows) async {
+    await gate?.future;
+    return const [];
+  }
 }
 
 /// A named no-op query that records each pass it joins.
@@ -3500,6 +3520,18 @@ void main() {
         (timer) => timer.$1 == duration && timer.$3.isActive,
       );
 
+      /// Every active SUPERVISION timer — the gc cadence (armed once at boot,
+      /// the first timer of its duration) is not the supervisor's.
+      List<_ScheduledTimer> supervision(TrajectoryHarness h) {
+        final gc = timers.firstWhere(
+          (timer) => timer.$1 == h.config.gcInterval,
+        );
+        return [
+          for (final timer in timers)
+            if (timer.$3.isActive && !identical(timer, gc)) timer,
+        ];
+      }
+
       test(
         'stale P6 heartbeat restarts once and resumes on observed beat',
         () async {
@@ -3586,7 +3618,12 @@ void main() {
           final wedgedRevision = wedgedSnapshot.eligibilityBasisRevisionOf(
             workBeadId,
           );
-          expect(wedged.wedged, isTrue);
+          // A supervisor-owned stall DEGRADES the read (tg-6n18): the bead is
+          // still refused, but on its real P6 row rather than the heartbeat.
+          expect(wedged.wedged, isFalse);
+          expect(wedged.degraded, isTrue);
+          expect(wedged.refuse, isTrue);
+          expect(wedged.outstanding, hasLength(1));
           final stale = flares.singleWhere(
             (flare) => flare.$1 == 'trajectory.tickStale',
           );
@@ -3651,54 +3688,67 @@ void main() {
         },
       );
 
-      test(
-        'three failed restarts emit one terminal tickDead and stop retrying',
-        () async {
-          final h = await startLiveHarness();
-          appender.commitError = StateError('replacement commit failed');
-          makeHeartbeatStale(h);
+      test('three failed restarts emit one tickDead and arm ONE bounded re-arm '
+          'probe (tg-6n18)', () async {
+        final h = await startLiveHarness();
+        appender.commitError = StateError('replacement commit failed');
+        makeHeartbeatStale(h);
 
-          for (final delay in const [
-            Duration(seconds: 1),
-            Duration(seconds: 2),
-            Duration(seconds: 4),
-          ]) {
-            _fireFakeTimer(activeTimer(delay));
-            await pumpEventQueue();
-          }
+        for (final delay in const [
+          Duration(seconds: 1),
+          Duration(seconds: 2),
+          Duration(seconds: 4),
+        ]) {
+          _fireFakeTimer(activeTimer(delay));
+          await pumpEventQueue();
+        }
 
-          final dead = flares.singleWhere(
-            (flare) => flare.$1 == 'trajectory.tickDead',
-          );
-          expect(dead.$2['pass'], 'P6');
-          expect(dead.$2['kind'], 'tickStale');
-          expect(dead.$2['attempts'], '3');
-          expect(dead.$2['reason'], contains('threw:'));
-          expect(dead.$2['reason'], contains('replacement commit failed'));
-          expect(h.mode, TrajectoryHarnessMode.live);
-          expect(
-            h.processIdentities.health,
-            TrajectorySnapshotHealth.compromised,
-          );
-          expect(
-            appender.calls.where((call) => call == 'commit'),
-            hasLength(4),
-            reason: 'the boot pass plus exactly three replacements',
-          );
-          expect(
-            timers.where(
-              (timer) =>
-                  timer.$3.isActive &&
-                  (timer.$1 == h.config.tickInterval ||
-                      timer.$1 == const Duration(seconds: 1) ||
-                      timer.$1 == const Duration(seconds: 2) ||
-                      timer.$1 == const Duration(seconds: 4)),
-            ),
-            isEmpty,
-            reason: 'no watchdog, attempt deadline, or fourth backoff remains',
-          );
-        },
-      );
+        final dead = flares.singleWhere(
+          (flare) => flare.$1 == 'trajectory.tickDead',
+        );
+        expect(dead.$2['pass'], 'P6');
+        expect(dead.$2['kind'], 'tickStale');
+        expect(dead.$2['attempts'], '3');
+        expect(dead.$2['reason'], contains('threw:'));
+        expect(dead.$2['reason'], contains('replacement commit failed'));
+        expect(dead.$2['rearmIn'], '30');
+        expect(h.mode, TrajectoryHarnessMode.live);
+        expect(h.processIdentities.tickStalled, isTrue);
+        expect(
+          h.processIdentities.health,
+          TrajectorySnapshotHealth.compromised,
+        );
+        expect(
+          appender.calls.where((call) => call == 'commit'),
+          hasLength(4),
+          reason: 'the boot pass plus exactly three replacements',
+        );
+        expect(
+          timers.where(
+            (timer) =>
+                timer.$3.isActive &&
+                (timer.$1 == const Duration(seconds: 1) ||
+                    timer.$1 == const Duration(seconds: 2) ||
+                    timer.$1 == const Duration(seconds: 4)),
+          ),
+          isEmpty,
+          reason: 'no fourth restart backoff remains',
+        );
+        // Exactly ONE timer is left, and it is the re-arm probe — not a
+        // watchdog, not an attempt deadline (death is an episode, never a
+        // permanent state).
+        final armed = supervision(h);
+        expect(armed, hasLength(1));
+        expect(armed.single.$1, const Duration(seconds: 30));
+        final tickBefore = h.tick;
+        _fireFakeTimer(armed.single);
+        await pumpEventQueue();
+        expect(
+          h.tick,
+          isNot(same(tickBefore)),
+          reason: 'the re-arm timer starts a fresh probe generation',
+        );
+      });
 
       test(
         'wedged restart attempts time out and name the live-mode outage',
@@ -3718,7 +3768,7 @@ void main() {
             _fireFakeTimer(activeTimer(delay));
             await pumpEventQueue();
             generations.add(h.tick!);
-            _fireFakeTimer(activeTimer(h.config.tickInterval));
+            _fireFakeTimer(activeTimer(kWorktreeOutstandingStaleAfter));
             await pumpEventQueue();
           }
 
@@ -3728,7 +3778,7 @@ void main() {
           expect(dead.$2['attempts'], '3');
           expect(
             dead.$2['reason'],
-            'timeout after ${h.config.tickInterval.inMilliseconds}ms',
+            'timeout after ${kWorktreeOutstandingStaleAfter.inMilliseconds}ms',
           );
           expect(generations.toSet(), hasLength(3));
           expect(h.mode, TrajectoryHarnessMode.live);
@@ -3737,15 +3787,9 @@ void main() {
             TrajectorySnapshotHealth.compromised,
           );
           expect(
-            timers.where(
-              (timer) =>
-                  timer.$3.isActive &&
-                  (timer.$1 == h.config.tickInterval ||
-                      timer.$1 == const Duration(seconds: 1) ||
-                      timer.$1 == const Duration(seconds: 2) ||
-                      timer.$1 == const Duration(seconds: 4)),
-            ),
-            isEmpty,
+            supervision(h).map((t) => t.$1),
+            [const Duration(seconds: 30)],
+            reason: 'only the re-arm probe remains armed',
           );
 
           // All three disposed generations are still queued behind the first
@@ -3768,6 +3812,353 @@ void main() {
           );
         },
       );
+
+      test(
+        'THE RE-ARM (tg-6n18): three timed-out restarts, then a probe that '
+        'beats restores P6 with tickRecovered — and the eligibility read '
+        'degrades while dead and resumes after, with no station restart',
+        () async {
+          const clearBead = 'tg-clear';
+          const strandedBead = 'tg-stranded';
+          const strandedSession = 'tranquility-stranded';
+          dbScript = seedScript(
+            processes: [
+              processRow(
+                attemptId: 'stranded-attempt',
+                sessionId: strandedSession,
+              ),
+            ],
+            heads: [
+              headRow(sessionId: strandedSession, workBeadId: strandedBead),
+            ],
+          );
+          final h = await harness(tickQueries: [_ProbeQuery()]);
+          await h.start();
+          final lastBeat = h.processIdentities.lastTickAt!;
+          final bridge = StationJoinBridge(
+            work: _StaticSnapshotSource(
+              GraphSnapshot.fromParts(
+                beads: const [
+                  Bead(
+                    id: clearBead,
+                    issueType: IssueType.task,
+                    status: BeadStatus.open,
+                  ),
+                  Bead(
+                    id: strandedBead,
+                    issueType: IssueType.task,
+                    status: BeadStatus.open,
+                  ),
+                ],
+                dependencies: const [],
+                readyIds: const [clearBead, strandedBead],
+                capturedAt: now,
+              ),
+            ),
+            state: const _StaticSnapshotSource(null),
+            headSnapshot: () => h.sessionHeads,
+            processIdentitySnapshot: () => h.processIdentities,
+            onProcessIdentityChanges: (listener) =>
+                h.onProcessIdentitiesChanged(listener, fireImmediately: false),
+          )..start();
+          addTearDown(bridge.dispose);
+
+          WorktreeOutstandingFinding read(String bead) {
+            final snapshot = bridge.latest;
+            return evaluateWorktreeOutstanding(
+              read: snapshot.worktreeOutstanding,
+              workBeadId: bead,
+              linkedSessions: snapshot.linkedSessions(bead),
+              now: now,
+            );
+          }
+
+          // THE FAKE THAT TIMES OUT THREE TIMES: every replacement pass
+          // blocks in its cadence commit past its one-interval deadline.
+          final blocked = Completer<void>();
+          appender.commitCompleter = blocked;
+          makeHeartbeatStale(h);
+          for (final delay in const [
+            Duration(seconds: 1),
+            Duration(seconds: 2),
+            Duration(seconds: 4),
+          ]) {
+            _fireFakeTimer(activeTimer(delay));
+            await pumpEventQueue();
+            _fireFakeTimer(activeTimer(kWorktreeOutstandingStaleAfter));
+            await pumpEventQueue();
+          }
+          final dead = flares.singleWhere(
+            (flare) => flare.$1 == 'trajectory.tickDead',
+          );
+          expect(dead.$2['attempts'], '3');
+          expect(dead.$2['reason'], 'timeout after 90000ms');
+
+          // DEAD, but DEGRADED rather than wedged: the clean bead is admitted
+          // on the join, the stranded one is still refused on its real row.
+          expect(h.processIdentities.tickStalled, isTrue);
+          final clearWhileDead = read(clearBead);
+          expect(clearWhileDead.degraded, isTrue);
+          expect(clearWhileDead.wedged, isFalse);
+          expect(clearWhileDead.refuse, isFalse);
+          final strandedWhileDead = read(strandedBead);
+          expect(strandedWhileDead.degraded, isTrue);
+          expect(strandedWhileDead.refuse, isTrue);
+          expect(
+            strandedWhileDead.outstanding.single.sessionId,
+            strandedSession,
+          );
+
+          // The store recovers: the wedged commits drain (their generations
+          // are rejected), and the re-arm probe's pass beats.
+          appender.commitCompleter = null;
+          blocked.complete();
+          await pumpEventQueue();
+          expect(
+            flares.where((flare) => flare.$1 == 'trajectory.tickRecovered'),
+            isEmpty,
+            reason: 'a timed-out generation never counts as the recovery',
+          );
+          _fireFakeTimer(activeTimer(const Duration(seconds: 30)));
+          await pumpEventQueue();
+
+          final recovered = flares.singleWhere(
+            (flare) => flare.$1 == 'trajectory.tickRecovered',
+          );
+          expect(recovered.$2['pass'], 'P6');
+          expect(recovered.$2['lastBeat'], lastBeat.toIso8601String());
+          expect(recovered.$2['resumedAt'], now.toIso8601String());
+          expect(recovered.$2['attempts'], '4');
+          expect(recovered.$2['rearmProbes'], '1');
+          expect(
+            flares.where((flare) => flare.$1 == 'trajectory.tickResumed'),
+            isEmpty,
+            reason: 'a dead episode ends with tickRecovered, not tickResumed',
+          );
+          expect(h.processIdentities.health, TrajectorySnapshotHealth.live);
+          expect(h.processIdentities.tickStalled, isFalse);
+          expect(h.processIdentities.lastTickAt, now);
+
+          final clearAfter = read(clearBead);
+          expect(clearAfter.degraded, isFalse);
+          expect(clearAfter.wedged, isFalse);
+          expect(clearAfter.refuse, isFalse);
+          expect(read(strandedBead).refuse, isTrue);
+
+          // The watchdog is armed again: a LATER stall starts a new episode.
+          now = now.add(
+            kWorktreeOutstandingStaleAfter + const Duration(seconds: 1),
+          );
+          // The watchdog was armed BEFORE the probe tick's own interval.
+          _fireFakeTimer(
+            timers.firstWhere(
+              (timer) => timer.$1 == h.config.tickInterval && timer.$3.isActive,
+            ),
+          );
+          expect(
+            flares.where((flare) => flare.$1 == 'trajectory.tickStale'),
+            hasLength(2),
+          );
+        },
+      );
+
+      test('a probe whose pass finishes AFTER the harness left live is '
+          'DISCARDED: no beat, no tickRecovered, the episode stays open '
+          '(tg-6n18 review)', () async {
+        final gated = _GatedQuery();
+        dbScript = seedScript();
+        final h = await harness(tickQueries: [gated]);
+        await h.start();
+        final lastBeat = h.processIdentities.lastTickAt!;
+        appender.commitError = StateError('store saturated');
+        makeHeartbeatStale(h);
+        for (final delay in const [
+          Duration(seconds: 1),
+          Duration(seconds: 2),
+          Duration(seconds: 4),
+        ]) {
+          _fireFakeTimer(activeTimer(delay));
+          await pumpEventQueue();
+        }
+        expect(flareNames(), contains('trajectory.tickDead'));
+
+        // The probe starts and parks in its repair (off the serial lane)…
+        appender.commitError = null;
+        final gate = gated.gate = Completer<void>();
+        _fireFakeTimer(activeTimer(const Duration(seconds: 30)));
+        await pumpEventQueue();
+        // …while the writer lands a fenced-out append: the harness leaves live.
+        appender.appendOutcomes.add(const AppendFencedOut(reason: 'cas-zero'));
+        h.enqueue(_note(1));
+        await pumpEventQueue();
+        expect(h.mode, TrajectoryHarnessMode.fencedOut);
+
+        gate.complete();
+        await pumpEventQueue();
+
+        expect(h.processIdentities.lastTickAt, lastBeat, reason: 'no beat');
+        expect(flareNames(), isNot(contains('trajectory.tickRecovered')));
+        expect(flareNames(), isNot(contains('trajectory.tickResumed')));
+        final discarded = flares.singleWhere(
+          (flare) => flare.$1 == 'trajectory.tickPassDiscarded',
+        );
+        expect(discarded.$2['reason'], 'harness mode fencedOut');
+        expect(
+          h.processIdentities.health,
+          TrajectorySnapshotHealth.compromised,
+        );
+        expect(
+          h.processIdentities.tickStalled,
+          isFalse,
+          reason: 'the fence-out took the compromise over: the read wedges',
+        );
+        expect(
+          supervision(h),
+          isEmpty,
+          reason: 'the episode stays open; nothing re-arms a non-live harness',
+        );
+      });
+
+      test('a failed re-arm probe backs off on a BOUNDED schedule and flares '
+          'tickRearmFailed until a probe beats', () async {
+        final h = await startLiveHarness();
+        appender.commitError = StateError('store saturated');
+        makeHeartbeatStale(h);
+        for (final delay in const [
+          Duration(seconds: 1),
+          Duration(seconds: 2),
+          Duration(seconds: 4),
+        ]) {
+          _fireFakeTimer(activeTimer(delay));
+          await pumpEventQueue();
+        }
+        expect(
+          flares
+              .singleWhere((f) => f.$1 == 'trajectory.tickDead')
+              .$2['rearmIn'],
+          '30',
+        );
+
+        final schedule = <String>[];
+        for (final delay in const [30, 60, 120, 240, 300, 300]) {
+          final probe = supervision(h).single;
+          expect(probe.$1, Duration(seconds: delay));
+          _fireFakeTimer(probe);
+          await pumpEventQueue();
+          schedule.add(
+            flares
+                .lastWhere((f) => f.$1 == 'trajectory.tickRearmFailed')
+                .$2['rearmIn']!,
+          );
+        }
+        expect(
+          schedule,
+          ['60', '120', '240', '300', '300', '300'],
+          reason: 'doubling from 30 s, capped at 5 min — never abandoned',
+        );
+        expect(
+          supervision(h),
+          hasLength(1),
+          reason: 'one probe at a time — retries never stack',
+        );
+
+        appender.commitError = null;
+        _fireFakeTimer(supervision(h).single);
+        await pumpEventQueue();
+
+        final recovered = flares.singleWhere(
+          (flare) => flare.$1 == 'trajectory.tickRecovered',
+        );
+        expect(recovered.$2['rearmProbes'], '7');
+        expect(h.processIdentities.health, TrajectorySnapshotHealth.live);
+      });
+
+      for (final interval in const [
+        Duration(seconds: 30),
+        Duration(seconds: 10),
+      ]) {
+        test('every attempt — restart and re-arm probe — is held to the '
+            'barrier grace (kWorktreeOutstandingStaleAfter), never to '
+            '${interval.inSeconds} s × N (tick interval ${interval.inSeconds} '
+            's)', () async {
+          dbScript = seedScript();
+          final h = await harness(
+            config: TrajectoryConfig(
+              mode: TrajectoryConfigMode.required,
+              dualRead: DualReadMode.observe,
+              tickInterval: interval,
+            ),
+            tickQueries: [_ProbeQuery()],
+          );
+          await h.start();
+          final blocked = Completer<void>();
+          appender.commitCompleter = blocked;
+          makeHeartbeatStale(h);
+          for (final delay in const [
+            Duration(seconds: 1),
+            Duration(seconds: 2),
+            Duration(seconds: 4),
+          ]) {
+            _fireFakeTimer(activeTimer(delay));
+            await pumpEventQueue();
+            expect(
+              supervision(h).map((t) => t.$1),
+              [kWorktreeOutstandingStaleAfter],
+              reason: 'the restart deadline is the grace',
+            );
+            _fireFakeTimer(activeTimer(kWorktreeOutstandingStaleAfter));
+            await pumpEventQueue();
+          }
+          _fireFakeTimer(activeTimer(const Duration(seconds: 30)));
+          await pumpEventQueue();
+
+          expect(
+            supervision(h).map((t) => t.$1),
+            [kWorktreeOutstandingStaleAfter],
+            reason: 'the probe deadline is the grace the barrier allows',
+          );
+          _fireFakeTimer(activeTimer(kWorktreeOutstandingStaleAfter));
+          await pumpEventQueue();
+          expect(
+            flares
+                .lastWhere((f) => f.$1 == 'trajectory.tickRearmFailed')
+                .$2['reason'],
+            'timeout after ${kWorktreeOutstandingStaleAfter.inMilliseconds}ms',
+          );
+          blocked.complete();
+        });
+      }
+
+      test('a restart pass slower than ONE interval but inside the grace '
+          'RESUMES — a loaded station never cycles stale → dead', () async {
+        final h = await startLiveHarness();
+        final slow = Completer<void>();
+        appender.commitCompleter = slow;
+        makeHeartbeatStale(h);
+        _fireFakeTimer(activeTimer(const Duration(seconds: 1)));
+        await pumpEventQueue();
+
+        // One interval passes with the pass still running: no deadline fires,
+        // because none is armed at one interval.
+        now = now.add(h.config.tickInterval * 2);
+        expect(
+          timers.where((t) => t.$3.isActive && t.$1 == h.config.tickInterval),
+          isEmpty,
+          reason: 'no one-interval attempt deadline exists',
+        );
+
+        appender.commitCompleter = null;
+        slow.complete();
+        await pumpEventQueue();
+
+        expect(
+          flares.where((f) => f.$1 == 'trajectory.tickResumed'),
+          hasLength(1),
+        );
+        expect(flares.where((f) => f.$1 == 'trajectory.tickDead'), isEmpty);
+        expect(h.processIdentities.health, TrajectorySnapshotHealth.live);
+        expect(h.processIdentities.lastTickAt, now);
+      });
     });
   });
 

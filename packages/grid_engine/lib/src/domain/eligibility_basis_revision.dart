@@ -64,6 +64,10 @@ final class EligibilityBasis {
         'ready=$ready',
         'attempts=${attempt?.count ?? 0}',
         'wedged=${worktree?.wedged ?? false}',
+        // Present only on the DEGRADED read (tg-6n18), so a healthy basis
+        // keeps its pre-existing digest while a mode change still hands the
+        // authority a fresh revision.
+        if (worktree?.degraded ?? false) 'degraded=true',
         'sessions=${sessions.join(',')}',
         'outstanding=${outstanding.join(',')}',
       ].join('\u0000'),
