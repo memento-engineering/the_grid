@@ -174,6 +174,25 @@ final class _ProbeQuery extends ObligationQuery {
   ) async => const [];
 }
 
+/// A query whose REPAIR blocks on [gate] while one is set — repair runs off
+/// the serial lane, so the writer can land appends while this pass is still in
+/// flight.
+final class _GatedQuery extends ObligationQuery {
+  Completer<void>? gate;
+
+  @override
+  String get name => 'gated';
+
+  @override
+  String get sql => 'SELECT 1 AS one';
+
+  @override
+  Future<List<ObligationAppend>> repair(List<Map<String, String?>> rows) async {
+    await gate?.future;
+    return const [];
+  }
+}
+
 /// A named no-op query that records each pass it joins.
 final class _CountingNoOpQuery extends ObligationQuery {
   _CountingNoOpQuery(this.name, this.order);
@@ -3942,6 +3961,63 @@ void main() {
           );
         },
       );
+
+      test('a probe whose pass finishes AFTER the harness left live is '
+          'DISCARDED: no beat, no tickRecovered, the episode stays open '
+          '(tg-6n18 review)', () async {
+        final gated = _GatedQuery();
+        dbScript = seedScript();
+        final h = await harness(tickQueries: [gated]);
+        await h.start();
+        final lastBeat = h.processIdentities.lastTickAt!;
+        appender.commitError = StateError('store saturated');
+        makeHeartbeatStale(h);
+        for (final delay in const [
+          Duration(seconds: 1),
+          Duration(seconds: 2),
+          Duration(seconds: 4),
+        ]) {
+          _fireFakeTimer(activeTimer(delay));
+          await pumpEventQueue();
+        }
+        expect(flareNames(), contains('trajectory.tickDead'));
+
+        // The probe starts and parks in its repair (off the serial lane)…
+        appender.commitError = null;
+        final gate = gated.gate = Completer<void>();
+        _fireFakeTimer(activeTimer(const Duration(seconds: 30)));
+        await pumpEventQueue();
+        // …while the writer lands a fenced-out append: the harness leaves live.
+        appender.appendOutcomes.add(const AppendFencedOut(reason: 'cas-zero'));
+        h.enqueue(_note(1));
+        await pumpEventQueue();
+        expect(h.mode, TrajectoryHarnessMode.fencedOut);
+
+        gate.complete();
+        await pumpEventQueue();
+
+        expect(h.processIdentities.lastTickAt, lastBeat, reason: 'no beat');
+        expect(flareNames(), isNot(contains('trajectory.tickRecovered')));
+        expect(flareNames(), isNot(contains('trajectory.tickResumed')));
+        final discarded = flares.singleWhere(
+          (flare) => flare.$1 == 'trajectory.tickPassDiscarded',
+        );
+        expect(discarded.$2['reason'], 'harness mode fencedOut');
+        expect(
+          h.processIdentities.health,
+          TrajectorySnapshotHealth.compromised,
+        );
+        expect(
+          h.processIdentities.tickStalled,
+          isFalse,
+          reason: 'the fence-out took the compromise over: the read wedges',
+        );
+        expect(
+          supervision(h),
+          isEmpty,
+          reason: 'the episode stays open; nothing re-arms a non-live harness',
+        );
+      });
 
       test('a failed re-arm probe backs off on a BOUNDED schedule and flares '
           'tickRearmFailed until a probe beats', () async {

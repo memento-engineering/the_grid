@@ -314,12 +314,19 @@ final class AdmissionRestorationObligation extends ObligationQuery {
   /// at or above the floor keeps the same `MAX(seq)`; a bead whose rows are
   /// all below it had nothing standing here; and a restoration always has a
   /// higher seq than the refusal it resolves. The floor starts at 0 (one full
-  /// scan per process) and only ever rises, after each pass, to the oldest
+  /// scan per process) and only ever rises, after a pass that owes it, to the oldest
   /// standing refusal — or past the window head when nothing stands.
   int _floor = 0;
 
   /// The current window floor — diagnostics and tests.
   int get floor => _floor;
+
+  /// Whether the next pass owes a floor read (tg-6n18 review). The floor can
+  /// only rise once a restoration lands, so the extra round trip runs on the
+  /// first pass of a process, on a pass that is about to restore, and on the
+  /// pass AFTER one (when its restorations have landed) — never on a run of
+  /// empty passes, which is the steady state.
+  bool _floorOwed = true;
 
   /// The refusal clause this obligation clears — the barrier's, never the
   /// authority's Stage-3 clause family.
@@ -424,11 +431,13 @@ final class AdmissionRestorationObligation extends ObligationQuery {
         ObligationAppend(derived.record, substation: derived.substation),
       );
     }
-    await _advanceFloor();
+    final restoring = appends.isNotEmpty;
+    if (restoring || _floorOwed) await _advanceFloor();
+    _floorOwed = restoring;
     return appends;
   }
 
-  /// Raises the window floor after a pass. Runs BEFORE this pass's
+  /// Raises the window floor after a pass that owes it ([_floorOwed]). Runs BEFORE this pass's
   /// restorations land, so the refusals they clear still count as standing:
   /// the floor lags by one pass, never leads. A failed read keeps the floor —
   /// a wider window is only slower, never wrong.

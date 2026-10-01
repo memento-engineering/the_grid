@@ -137,15 +137,10 @@ final class _TrajectoryQueueEntry {
 }
 
 final class _TickStaleEpisode {
-  _TickStaleEpisode({
-    required this.lastBeat,
-    required this.detectedAt,
-    required this.ownsCompromise,
-  });
+  _TickStaleEpisode({required this.lastBeat, required this.detectedAt});
 
   final DateTime? lastBeat;
   final DateTime detectedAt;
-  final bool ownsCompromise;
   int attempts = 0;
 }
 
@@ -1160,6 +1155,22 @@ class TrajectoryHarness {
         );
         return;
       }
+      // THE MODE RE-CHECK (tg-6n18 review): a replacement whose pass finished
+      // after the harness LEFT `live` must not beat. A harness that leaves
+      // `live` stops beating — that is the fail-closed rule the barrier's
+      // wedged refusal rests on — so the late pass is discarded and the
+      // episode stays open; nothing re-arms a harness that is not live.
+      if (_mode != TrajectoryHarnessMode.live) {
+        _tickAttemptDeadlineTimer?.cancel();
+        _tickAttemptDeadlineTimer = null;
+        _tick?.dispose();
+        _currentTickGeneration = -1;
+        _flare('trajectory.tickPassDiscarded', {
+          ..._tickEpisodeFlareData(episode, _clock().toUtc()),
+          'reason': 'harness mode ${_mode.name}',
+        });
+        return;
+      }
       final resumedAt = _clock().toUtc();
       final lastBeat = episode.lastBeat;
       if (lastBeat != null && !resumedAt.isAfter(lastBeat)) {
@@ -1240,11 +1251,10 @@ class TrajectoryHarness {
     // SUPERVISOR-OWNED (tg-6n18): the snapshot says the TICK stalled while the
     // fold kept applying, which is what lets the barrier degrade to the row
     // join instead of refusing every bead. Any other latch takes it over.
-    final ownsCompromise = _processIdentities.latchTickStalled();
+    _processIdentities.latchTickStalled();
     final episode = _TickStaleEpisode(
       lastBeat: lastBeat?.toUtc(),
       detectedAt: now,
-      ownsCompromise: ownsCompromise,
     );
     _tickStaleEpisode = episode;
     _flare('trajectory.tickStale', {
@@ -1344,11 +1354,7 @@ class TrajectoryHarness {
       // probe, and probes are at most one per backoff step.
       final rearmIn = _scheduleTickRearm();
       _flare('trajectory.tickRearmFailed', {
-        'pass': 'P6',
-        'kind': _kTickStaleKind,
-        'lastBeat': _renderTickBeat(episode.lastBeat),
-        'staleFor': '${_tickStaleForSeconds(episode, now)}',
-        'attempts': '${episode.attempts}',
+        ..._tickEpisodeFlareData(episode, now),
         'reason': reason,
         'rearmIn': rearmIn == null ? 'never' : '${rearmIn.inSeconds}',
       });
@@ -1365,15 +1371,23 @@ class TrajectoryHarness {
     _tickDeadAt = now;
     final rearmIn = _scheduleTickRearm();
     _flare('trajectory.tickDead', {
-      'pass': 'P6',
-      'kind': _kTickStaleKind,
-      'lastBeat': _renderTickBeat(episode.lastBeat),
-      'staleFor': '${_tickStaleForSeconds(episode, now)}',
-      'attempts': '${episode.attempts}',
+      ..._tickEpisodeFlareData(episode, now),
       'reason': reason,
       'rearmIn': rearmIn == null ? 'never' : '${rearmIn.inSeconds}',
     });
   }
+
+  /// The payload every episode flare shares; each adds its own keys.
+  Map<String, String> _tickEpisodeFlareData(
+    _TickStaleEpisode episode,
+    DateTime now,
+  ) => <String, String>{
+    'pass': 'P6',
+    'kind': _kTickStaleKind,
+    'lastBeat': _renderTickBeat(episode.lastBeat),
+    'staleFor': '${_tickStaleForSeconds(episode, now)}',
+    'attempts': '${episode.attempts}',
+  };
 
   /// Schedules the next re-arm probe of a DEAD episode on
   /// [_kTickRearmBackoff] and returns its delay, or null when no probe is
@@ -1411,19 +1425,13 @@ class TrajectoryHarness {
   }) {
     _tickAttemptDeadlineTimer?.cancel();
     _tickAttemptDeadlineTimer = null;
-    if (episode.ownsCompromise) {
-      _processIdentities.noteResumedTickAt(resumedAt);
-    } else {
-      _processIdentities.noteTickAt(resumedAt);
-    }
+    // The mirror owns the stall's ownership: it restores `live` only when the
+    // supervisor's stall is still the sole compromise.
+    _processIdentities.noteResumedTickAt(resumedAt);
     final deadAt = _tickDeadAt;
     final data = <String, String>{
-      'pass': 'P6',
-      'kind': _kTickStaleKind,
-      'lastBeat': _renderTickBeat(episode.lastBeat),
+      ..._tickEpisodeFlareData(episode, resumedAt),
       'resumedAt': resumedAt.toIso8601String(),
-      'staleFor': '${_tickStaleForSeconds(episode, resumedAt)}',
-      'attempts': '${episode.attempts}',
     };
     if (_tickRestartDead) {
       // THE RECOVERY (tg-6n18): a dead episode beat again. Named apart from

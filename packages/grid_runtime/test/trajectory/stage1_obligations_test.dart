@@ -1468,8 +1468,45 @@ void main() {
             {'standing_floor': '90', 'window_head': '400'},
           ],
         );
-        await query.repair(const []);
+        await query.repair([
+          {'record_id': 'R1', 'work_bead_id': 'tg-abc'},
+        ]);
+        expect(db.statements, hasLength(2));
         expect(query.floor, 120, reason: 'monotone');
+      });
+
+      test('a run of EMPTY passes skips the floor round trip; a restoring '
+          'pass and the one after it pay it', () async {
+        final db = _FakeDb()
+          ..next = const SqlResult(
+            rows: [
+              {'standing_floor': '120', 'window_head': '400'},
+            ],
+          );
+        final query = AdmissionRestorationObligation(
+          recorder: _recorder(),
+          station: 'tg',
+          db: db,
+        );
+
+        await query.repair(const []);
+        expect(db.statements, hasLength(1), reason: 'the boot pass reads it');
+        await query.repair(const []);
+        await query.repair(const []);
+        expect(db.statements, hasLength(1), reason: 'steady state: none');
+
+        await query.repair([
+          {'record_id': 'R1', 'work_bead_id': 'tg-abc'},
+        ]);
+        expect(db.statements, hasLength(2), reason: 'about to restore');
+        await query.repair(const []);
+        expect(
+          db.statements,
+          hasLength(3),
+          reason: 'the restorations have landed: the floor can rise now',
+        );
+        await query.repair(const []);
+        expect(db.statements, hasLength(3));
       });
 
       test('nothing standing moves the floor past the window head', () async {
