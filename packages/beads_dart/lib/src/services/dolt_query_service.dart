@@ -58,7 +58,15 @@ typedef SelectRunner = Future<List<Map<String, Object?>>> Function(String sql);
 /// read-only service or reuse its credential for the separate trajectory
 /// database's sole-appender write path.
 class DoltQueryService {
-  /// Deadline applied by `mysql_client` to the Dolt SQL connection and queries.
+  /// Deadline on every Dolt SQL read this service issues — the connect
+  /// handshake (`mysql_client`'s own `connect(timeoutMs:)`) AND each statement.
+  ///
+  /// The statement half is applied HERE (tg-6n18): `mysql_client` 0.0.27 puts
+  /// no timeout on `execute()` itself, so before this a slow SELECT under a
+  /// saturated server simply waited, and the boot summary's timed-out-read
+  /// count could never move during exactly the burst it diagnoses. A
+  /// statement that blows the deadline throws [TimeoutException] and its
+  /// connection is evicted (its socket may still be mid-result).
   ///
   /// This is distinct from [BdCliService.pourTimeout], which applies only to
   /// the atomic `bd create --graph` process.
@@ -68,8 +76,13 @@ class DoltQueryService {
     this.endpoint, {
     int poolSize = 2,
     @visibleForTesting DoltConnectionFactory? connectionFactory,
+    @visibleForTesting Duration queryDeadline = queryTimeout,
   }) : _poolSize = poolSize.clamp(1, 2),
-       _connectionFactory = connectionFactory ?? _defaultConnect;
+       _connectionFactory = connectionFactory ?? _defaultConnect,
+       _queryDeadline = queryDeadline;
+
+  /// The per-statement deadline; [queryTimeout] outside tests.
+  final Duration _queryDeadline;
 
   final DoltEndpoint endpoint;
   final int _poolSize;
@@ -91,17 +104,38 @@ class DoltQueryService {
   /// Reads that died on [queryTimeout] since this service was built — a
   /// plain process-lifetime counter (tg-6n18). The station's boot summary
   /// prints it beside the deadline, so a boot burst that times the store out
-  /// carries its own numbers instead of needing a log dig. Counts a
-  /// `TimeoutException` from a select or a read transaction (connect
-  /// included); never reset.
+  /// carries its own numbers instead of needing a log dig. Counts ONE per
+  /// public read (a select or a read transaction, connect included) that
+  /// failed with a `TimeoutException`; never reset.
   int get timedOutReads => _timedOutReads;
   int _timedOutReads = 0;
 
+  /// Marks the zone of a read already being counted, so a nested read (a
+  /// read transaction's lazy shape probe) never counts the same timeout twice.
+  static final Object _countingZoneKey = Object();
+
   Future<T> _countingTimeouts<T>(Future<T> Function() read) async {
+    if (identical(Zone.current[_countingZoneKey], this)) return read();
     try {
-      return await read();
+      return await runZoned(read, zoneValues: {_countingZoneKey: this});
     } on TimeoutException {
       _timedOutReads += 1;
+      rethrow;
+    }
+  }
+
+  /// Runs one statement on [conn] under the per-statement deadline; a
+  /// statement that blows it evicts [conn] — its socket may still be mid-result,
+  /// so it must never serve another read.
+  Future<List<Map<String, Object?>>> _bounded(
+    DoltConnection conn,
+    String sql,
+  ) async {
+    try {
+      return await conn.query(sql).timeout(_queryDeadline);
+    } on TimeoutException {
+      _pool.remove(conn);
+      unawaited(_safeClose(conn));
       rethrow;
     }
   }
@@ -298,17 +332,21 @@ class DoltQueryService {
   ) async {
     Future<List<Map<String, Object?>>> select(String sql) {
       assertSelectOnly(sql);
-      return conn.query(sql);
+      return _bounded(conn, sql);
     }
 
-    await conn.query('START TRANSACTION READ ONLY');
+    await _bounded(conn, 'START TRANSACTION READ ONLY');
     try {
       final result = await body(select);
-      await conn.query('COMMIT');
+      await _bounded(conn, 'COMMIT');
       return result;
+    } on TimeoutException {
+      // The connection is evicted; a ROLLBACK would queue behind the very
+      // statement that wedged it. Closing the socket aborts the transaction.
+      rethrow;
     } on Object {
       try {
-        await conn.query('ROLLBACK');
+        await _bounded(conn, 'ROLLBACK');
       } on Object {
         // Best-effort: the server may have already aborted the txn.
       }
@@ -524,14 +562,14 @@ class DoltQueryService {
     }
     try {
       final conn = await _acquire();
-      return await conn.query(sql);
+      return await _bounded(conn, sql);
     } on Object catch (error) {
       if (_isConnectionClosed(error)) {
         // Server reaped the idle socket (30s) or it dropped mid-query: drop the
         // dead connection and retry once on a fresh one.
         _evictDead();
         final conn = await _acquire(forceFresh: true);
-        return await conn.query(sql);
+        return await _bounded(conn, sql);
       }
       rethrow;
     }

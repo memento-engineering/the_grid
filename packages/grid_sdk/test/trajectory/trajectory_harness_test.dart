@@ -27,8 +27,7 @@ import 'package:grid_engine/grid_engine.dart'
         TrajectorySnapshotHealth,
         WorktreeOutstandingFinding,
         evaluateWorktreeOutstanding,
-        kWorktreeOutstandingStaleAfter,
-        kWorktreeOutstandingStaleTicks;
+        kWorktreeOutstandingStaleAfter;
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:grid_trajectory/grid_trajectory.dart';
@@ -3750,7 +3749,7 @@ void main() {
             _fireFakeTimer(activeTimer(delay));
             await pumpEventQueue();
             generations.add(h.tick!);
-            _fireFakeTimer(activeTimer(h.config.tickInterval));
+            _fireFakeTimer(activeTimer(kWorktreeOutstandingStaleAfter));
             await pumpEventQueue();
           }
 
@@ -3760,7 +3759,7 @@ void main() {
           expect(dead.$2['attempts'], '3');
           expect(
             dead.$2['reason'],
-            'timeout after ${h.config.tickInterval.inMilliseconds}ms',
+            'timeout after ${kWorktreeOutstandingStaleAfter.inMilliseconds}ms',
           );
           expect(generations.toSet(), hasLength(3));
           expect(h.mode, TrajectoryHarnessMode.live);
@@ -3867,14 +3866,14 @@ void main() {
           ]) {
             _fireFakeTimer(activeTimer(delay));
             await pumpEventQueue();
-            _fireFakeTimer(activeTimer(h.config.tickInterval));
+            _fireFakeTimer(activeTimer(kWorktreeOutstandingStaleAfter));
             await pumpEventQueue();
           }
           final dead = flares.singleWhere(
             (flare) => flare.$1 == 'trajectory.tickDead',
           );
           expect(dead.$2['attempts'], '3');
-          expect(dead.$2['reason'], 'timeout after 30000ms');
+          expect(dead.$2['reason'], 'timeout after 90000ms');
 
           // DEAD, but DEGRADED rather than wedged: the clean bead is admitted
           // on the join, the stranded one is still refused on its real row.
@@ -3998,10 +3997,24 @@ void main() {
         expect(h.processIdentities.health, TrajectorySnapshotHealth.live);
       });
 
-      test(
-        'a re-arm probe is held to the barrier grace, not one interval',
-        () async {
-          final h = await startLiveHarness();
+      for (final interval in const [
+        Duration(seconds: 30),
+        Duration(seconds: 10),
+      ]) {
+        test('every attempt — restart and re-arm probe — is held to the '
+            'barrier grace (kWorktreeOutstandingStaleAfter), never to '
+            '${interval.inSeconds} s × N (tick interval ${interval.inSeconds} '
+            's)', () async {
+          dbScript = seedScript();
+          final h = await harness(
+            config: TrajectoryConfig(
+              mode: TrajectoryConfigMode.required,
+              dualRead: DualReadMode.observe,
+              tickInterval: interval,
+            ),
+            tickQueries: [_ProbeQuery()],
+          );
+          await h.start();
           final blocked = Completer<void>();
           appender.commitCompleter = blocked;
           makeHeartbeatStale(h);
@@ -4012,7 +4025,12 @@ void main() {
           ]) {
             _fireFakeTimer(activeTimer(delay));
             await pumpEventQueue();
-            _fireFakeTimer(activeTimer(h.config.tickInterval));
+            expect(
+              supervision(h).map((t) => t.$1),
+              [kWorktreeOutstandingStaleAfter],
+              reason: 'the restart deadline is the grace',
+            );
+            _fireFakeTimer(activeTimer(kWorktreeOutstandingStaleAfter));
             await pumpEventQueue();
           }
           _fireFakeTimer(activeTimer(const Duration(seconds: 30)));
@@ -4020,20 +4038,51 @@ void main() {
 
           expect(
             supervision(h).map((t) => t.$1),
-            [h.config.tickInterval * kWorktreeOutstandingStaleTicks],
-            reason: 'the probe deadline is the 90 s grace the barrier allows',
+            [kWorktreeOutstandingStaleAfter],
+            reason: 'the probe deadline is the grace the barrier allows',
           );
-          _fireFakeTimer(activeTimer(const Duration(seconds: 90)));
+          _fireFakeTimer(activeTimer(kWorktreeOutstandingStaleAfter));
           await pumpEventQueue();
           expect(
             flares
                 .lastWhere((f) => f.$1 == 'trajectory.tickRearmFailed')
                 .$2['reason'],
-            'timeout after 90000ms',
+            'timeout after ${kWorktreeOutstandingStaleAfter.inMilliseconds}ms',
           );
           blocked.complete();
-        },
-      );
+        });
+      }
+
+      test('a restart pass slower than ONE interval but inside the grace '
+          'RESUMES — a loaded station never cycles stale → dead', () async {
+        final h = await startLiveHarness();
+        final slow = Completer<void>();
+        appender.commitCompleter = slow;
+        makeHeartbeatStale(h);
+        _fireFakeTimer(activeTimer(const Duration(seconds: 1)));
+        await pumpEventQueue();
+
+        // One interval passes with the pass still running: no deadline fires,
+        // because none is armed at one interval.
+        now = now.add(h.config.tickInterval * 2);
+        expect(
+          timers.where((t) => t.$3.isActive && t.$1 == h.config.tickInterval),
+          isEmpty,
+          reason: 'no one-interval attempt deadline exists',
+        );
+
+        appender.commitCompleter = null;
+        slow.complete();
+        await pumpEventQueue();
+
+        expect(
+          flares.where((f) => f.$1 == 'trajectory.tickResumed'),
+          hasLength(1),
+        );
+        expect(flares.where((f) => f.$1 == 'trajectory.tickDead'), isEmpty);
+        expect(h.processIdentities.health, TrajectorySnapshotHealth.live);
+        expect(h.processIdentities.lastTickAt, now);
+      });
     });
   });
 

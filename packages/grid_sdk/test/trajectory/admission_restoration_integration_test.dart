@@ -238,4 +238,96 @@ void main() {
     );
     expect(await ids(), isEmpty);
   });
+
+  test('the WINDOW floor rises past restored and superseded rows and answers '
+      'exactly what the unwindowed query answers (tg-6n18 review)', () async {
+    Future<int> seqOf(String recordId) async => int.parse(
+      (await db.execute('SELECT seq FROM trajectory WHERE record_id = :id', {
+        'id': recordId,
+      })).rows.single['seq']!,
+    );
+    Future<List<String>> answer(AdmissionRestorationObligation query) async => [
+      for (final row in (await db.execute(query.sql, query.parameters)).rows)
+        row['record_id']!,
+    ];
+
+    // Below-the-floor history: a restored refusal, and a superseded one.
+    await append(
+      recordId: '01J8ZR0000000000000000002A',
+      epochSeq: 20,
+      recordType: 'admission.refused',
+      bead: 'tg-w1',
+    );
+    await append(
+      recordId: '01J8ZR0000000000000000002B',
+      epochSeq: 21,
+      recordType: 'admission.restored',
+      bead: 'tg-w1',
+      resolvesRecordId: '01J8ZR0000000000000000002A',
+    );
+    await append(
+      recordId: '01J8ZR0000000000000000002C',
+      epochSeq: 22,
+      recordType: 'admission.refused',
+      bead: 'tg-w2',
+    );
+    // The standing ones.
+    await append(
+      recordId: '01J8ZR0000000000000000002D',
+      epochSeq: 23,
+      recordType: 'admission.refused',
+      bead: 'tg-w2',
+    );
+    await append(
+      recordId: '01J8ZR0000000000000000002E',
+      epochSeq: 24,
+      recordType: 'admission.refused',
+      bead: 'tg-w3',
+    );
+
+    final windowed = AdmissionRestorationObligation(
+      recorder: StationTrajectoryRecorder(
+        sink: _InertSink(),
+        substationPrefixes: const {'tg'},
+      ),
+      station: _station,
+      db: db,
+    );
+    final first = await answer(windowed);
+    expect(
+      first,
+      await answer(obligation()),
+      reason: 'floor 0 is the old query',
+    );
+    await windowed.repair(
+      (await db.execute(windowed.sql, windowed.parameters)).rows,
+    );
+
+    // The floor rose to the oldest standing refusal: the restored pair and the
+    // superseded refusal now sit BELOW it and are never scanned again.
+    expect(windowed.floor, await seqOf('01J8ZR0000000000000000002D'));
+    expect(await seqOf('01J8ZR0000000000000000002C'), lessThan(windowed.floor));
+    expect(await seqOf('01J8ZR0000000000000000002B'), lessThan(windowed.floor));
+    expect(await answer(windowed), await answer(obligation()));
+    expect(
+      await answer(windowed),
+      containsAll(<String>[
+        '01J8ZR0000000000000000002D',
+        '01J8ZR0000000000000000002E',
+      ]),
+    );
+
+    // The tick lands one restoration; the windowed and unwindowed answers
+    // still agree, and the floor follows the remaining standing refusal.
+    await append(
+      recordId: '01J8ZR0000000000000000002F',
+      epochSeq: 25,
+      recordType: 'admission.restored',
+      bead: 'tg-w2',
+      resolvesRecordId: '01J8ZR0000000000000000002D',
+    );
+    await windowed.repair(const []);
+    expect(windowed.floor, await seqOf('01J8ZR0000000000000000002E'));
+    expect(await answer(windowed), await answer(obligation()));
+  });
 }

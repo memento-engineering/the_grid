@@ -29,6 +29,15 @@ final class _FakeDb implements TrajectoryDb {
   Future<void> close() async {}
 }
 
+final class _ThrowingDb implements TrajectoryDb {
+  @override
+  Future<SqlResult> execute(String sql, [Map<String, dynamic>? params]) =>
+      Future<SqlResult>.error(StateError('floor read failed'));
+
+  @override
+  Future<void> close() async {}
+}
+
 final class _FakeProcesses implements ProcessGroupController {
   _FakeProcesses(this.alive);
 
@@ -1421,6 +1430,85 @@ void main() {
 
     test('no rows is the fixpoint signal', () async {
       expect(await build().repair(const []), isEmpty);
+    });
+
+    group('the WINDOW floor (tg-6n18 review)', () {
+      test('both exclusion tables are floored; a bare obligation stays '
+          'unwindowed', () async {
+        final query = build();
+        expect(query.sql, contains('AND c.seq >= :floor'));
+        expect(query.sql, contains('AND s.seq >= :floor'));
+        expect(query.parameters['floor'], 0);
+        await query.repair(const []);
+        expect(query.floor, 0, reason: 'no db, no advance — the old query');
+      });
+
+      test('rises to the oldest STANDING refusal after a pass, and never '
+          'falls', () async {
+        final db = _FakeDb()
+          ..next = const SqlResult(
+            rows: [
+              {'standing_floor': '120', 'window_head': '400'},
+            ],
+          );
+        final query = AdmissionRestorationObligation(
+          recorder: _recorder(),
+          station: 'tg',
+          db: db,
+        );
+
+        await query.repair(const []);
+        expect(query.floor, 120);
+        expect(db.statements.single.sql, query.floorSql);
+        expect(db.statements.single.params?['floor'], 0);
+        expect(query.parameters['floor'], 120);
+
+        db.next = const SqlResult(
+          rows: [
+            {'standing_floor': '90', 'window_head': '400'},
+          ],
+        );
+        await query.repair(const []);
+        expect(query.floor, 120, reason: 'monotone');
+      });
+
+      test('nothing standing moves the floor past the window head', () async {
+        final db = _FakeDb()
+          ..next = const SqlResult(
+            rows: [
+              {'standing_floor': null, 'window_head': '400'},
+            ],
+          );
+        final query = AdmissionRestorationObligation(
+          recorder: _recorder(),
+          station: 'tg',
+          db: db,
+        );
+
+        await query.repair(const []);
+        expect(query.floor, 401);
+      });
+
+      test('a failed floor read keeps the floor and still repairs', () async {
+        final query = AdmissionRestorationObligation(
+          recorder: _recorder(),
+          station: 'tg',
+          db: _ThrowingDb(),
+        );
+
+        final appends = await query.repair([
+          {'record_id': 'R1', 'work_bead_id': 'tg-abc'},
+        ]);
+        expect(appends, hasLength(1));
+        expect(query.floor, 0);
+      });
+
+      test('the floor query counts standing refusals BLOCKED by a live '
+          'worktree too', () {
+        final floorSql = build().floorSql;
+        expect(floorSql, isNot(contains('proj_process_identity')));
+        expect(floorSql, contains('r.station = :station'));
+      });
     });
   });
 }

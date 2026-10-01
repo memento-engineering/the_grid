@@ -61,8 +61,7 @@ import 'package:grid_engine/grid_engine.dart'
         TrajectoryHeadSnapshot,
         TrajectoryProcessIdentitySnapshot,
         TrajectoryStepSnapshot,
-        kWorktreeOutstandingStaleAfter,
-        kWorktreeOutstandingStaleTicks;
+        kWorktreeOutstandingStaleAfter;
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:meta/meta.dart';
 import 'package:state_notifier/state_notifier.dart' show RemoveListener;
@@ -268,8 +267,8 @@ class TrajectoryHarness {
   /// The RE-ARM schedule after `trajectory.tickDead` (tg-6n18): 30 s, then
   /// doubling, capped at 5 min, for as long as the harness stays `live`.
   ///
-  /// The three restarts above are HANG detection — each gets one tick
-  /// interval. Exhausting them used to latch P6 dead for the process lifetime,
+  /// Exhausting the three restarts above used to latch P6 dead for the
+  /// process lifetime,
   /// and the worktree-outstanding barrier then refused every mount until an
   /// operator bounced the station: a boot burst that slowed three passes past
   /// 30 s became a permanent outage. Death is now an episode, never a state:
@@ -1285,16 +1284,17 @@ class TrajectoryHarness {
   /// the restart backoff refuses once the episode is dead, the re-arm backoff
   /// refuses until it is.
   ///
-  /// [deadline] is the attempt's budget: one tick interval for a restart (hang
-  /// detection), the barrier's whole three-interval grace for a re-arm probe —
-  /// a pass that completes inside the grace the barrier itself allows IS a
-  /// beat, and a probe held to one interval would keep failing on exactly the
-  /// slow-but-alive pass that killed the episode.
-  Future<void> _startTickRestart(int attempt, {Duration? deadline}) async {
+  /// Every attempt — restart or re-arm probe — is held to
+  /// [kWorktreeOutstandingStaleAfter], the SAME grace the barrier and the
+  /// watchdog read (tg-6n18). A pass that completes inside the grace the
+  /// barrier itself allows IS a beat; an attempt held to one tick interval
+  /// kept failing on exactly the slow-but-alive pass that started the
+  /// episode, and a loaded 60–70 s pass cycled stale → dead forever.
+  Future<void> _startTickRestart(int attempt) async {
     final episode = _tickStaleEpisode;
     final appender = _appender;
     if (_isShutdown || episode == null || appender == null) return;
-    final budget = deadline ?? config.tickInterval;
+    const budget = kWorktreeOutstandingStaleAfter;
     episode.attempts = attempt;
     final generation = ++_nextTickGeneration;
     _currentTickGeneration = generation;
@@ -1399,12 +1399,7 @@ class TrajectoryHarness {
           !identical(_tickStaleEpisode, episode)) {
         return;
       }
-      unawaited(
-        _startTickRestart(
-          episode.attempts + 1,
-          deadline: config.tickInterval * kWorktreeOutstandingStaleTicks,
-        ),
-      );
+      unawaited(_startTickRestart(episode.attempts + 1));
     });
     return delay;
   }
@@ -1422,31 +1417,27 @@ class TrajectoryHarness {
       _processIdentities.noteTickAt(resumedAt);
     }
     final deadAt = _tickDeadAt;
+    final data = <String, String>{
+      'pass': 'P6',
+      'kind': _kTickStaleKind,
+      'lastBeat': _renderTickBeat(episode.lastBeat),
+      'resumedAt': resumedAt.toIso8601String(),
+      'staleFor': '${_tickStaleForSeconds(episode, resumedAt)}',
+      'attempts': '${episode.attempts}',
+    };
     if (_tickRestartDead) {
       // THE RECOVERY (tg-6n18): a dead episode beat again. Named apart from
       // `tickResumed` so an operator can grep the outage's end by the same
       // word that announced it.
       _flare('trajectory.tickRecovered', {
-        'pass': 'P6',
-        'kind': _kTickStaleKind,
-        'lastBeat': _renderTickBeat(episode.lastBeat),
-        'resumedAt': resumedAt.toIso8601String(),
-        'staleFor': '${_tickStaleForSeconds(episode, resumedAt)}',
+        ...data,
         'deadFor': deadAt == null
             ? '0'
             : '${resumedAt.difference(deadAt).inSeconds}',
-        'attempts': '${episode.attempts}',
         'rearmProbes': '$_tickRearmProbes',
       });
     } else {
-      _flare('trajectory.tickResumed', {
-        'pass': 'P6',
-        'kind': _kTickStaleKind,
-        'lastBeat': _renderTickBeat(episode.lastBeat),
-        'resumedAt': resumedAt.toIso8601String(),
-        'staleFor': '${_tickStaleForSeconds(episode, resumedAt)}',
-        'attempts': '${episode.attempts}',
-      });
+      _flare('trajectory.tickResumed', data);
     }
     _tickRestartDead = false;
     _tickRearmProbes = 0;

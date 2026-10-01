@@ -1136,10 +1136,49 @@ void main() {
         expect(flare.data['lastBeat'], _staleBeat.toIso8601String());
         expect(flare.data['fallback'], 'p6-post-ack-rows+bd-ledger');
 
-        // RECOVERY: a fresh beat re-arms the latch, so the NEXT episode flares.
-        admit(_read(), 'tg-3');
+        // RECOVERY with NO candidate pending: the pass still closes the
+        // episode with its paired flare, so the NEXT episode flares again.
+        StationAdmissionBatch idle(WorktreeOutstandingRead read) =>
+            services.admission.admitPending(
+              JoinedSnapshot(
+                graph: GraphSnapshot.fromParts(
+                  beads: const [],
+                  dependencies: const [],
+                  readyIds: const {},
+                  capturedAt: _now,
+                ),
+                worktreeOutstanding: read,
+              ),
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+                maxConcurrentWork: 4,
+              ),
+              ServiceBundle(transport: transport),
+              const [],
+            );
+        idle(_read());
+        final restored = transport
+            .named('work.mountEligibilityRestoredFromDegraded')
+            .single;
+        expect(restored.data['clause'], kWorktreeOutstandingClause);
+        idle(_read());
+        expect(
+          transport.named('work.mountEligibilityRestoredFromDegraded'),
+          hasLength(1),
+          reason: 'one restored flare per episode',
+        );
+
+        // EPISODE TWO, first seen on an idle pass.
+        idle(stalled());
+        expect(transport.named('work.mountEligibilityDegraded'), hasLength(2));
         admit(stalled(), 'tg-4');
         expect(transport.named('work.mountEligibilityDegraded'), hasLength(2));
+        idle(_read());
+        expect(
+          transport.named('work.mountEligibilityRestoredFromDegraded'),
+          hasLength(2),
+        );
       });
     },
   );

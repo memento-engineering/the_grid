@@ -479,12 +479,14 @@ void main() {
       },
     );
 
-    test('a pass disposed mid-flight abandons its remaining obligations, '
-        'repairs and cadence commit (tg-6n18)', () async {
+    test('a pass disposed mid-flight abandons the NEXT obligation but lands '
+        'the computed repairs and the cadence commit (tg-6n18)', () async {
       // The owner disposes a tick it has given up on — a supervisor's
       // timed-out replacement. A corpse that kept draining its obligation list
       // would hold the owner's serial lane (and run the station's external I/O)
-      // under the next generation's feet.
+      // under the next generation's feet; but a repair list already computed
+      // from a completed query is paid for, and discarding it would only make
+      // the replacement re-run the query.
       final gate = Completer<List<ObligationAppend>>();
       final first = StubObligationQuery(
         name: 'first',
@@ -492,26 +494,27 @@ void main() {
       );
       final second = StubObligationQuery(
         name: 'second',
-        onRepair: (_) async => [_repair(2)],
+        onRepair: (_) async => [_repair(3)],
       );
       final harness = _Harness(queries: [first, second]);
 
       final pass = harness.tick.runPass();
       await harness.timers.pump();
       harness.tick.dispose();
-      gate.complete([_repair(1)]);
+      gate.complete([_repair(1), _repair(2)]);
       final result = await pass;
 
       expect(result.disposition, TickPassDisposition.skippedDisposed);
       expect(result.ran, isFalse, reason: 'an abandoned pass is no heartbeat');
       expect(result.queriesRun, 1);
+      expect(result.recordsAppended, 2);
       expect(second.runs, 0, reason: 'the next obligation never runs');
       expect(
         harness.appender.appended,
-        isEmpty,
-        reason: 'the first obligation\'s repair is left to the next live pass',
+        hasLength(2),
+        reason: 'the computed repair list lands whole',
       );
-      expect(harness.appender.doltCommits, 0);
+      expect(harness.appender.doltCommits, 1);
       expect(harness.passes.single, same(result));
     });
   });

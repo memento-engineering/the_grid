@@ -167,26 +167,22 @@ class TrajectoryTick {
     var deduped = 0;
     final refusals = <TickRefusal>[];
 
-    TrajectoryTickPass abandoned() => TrajectoryTickPass(
-      startedAt: startedAt,
-      disposition: TickPassDisposition.skippedDisposed,
-      queriesRun: queriesRun,
-      recordsAppended: appended,
-      recordsDeduped: deduped,
-      refusals: List.unmodifiable(refusals),
-    );
+    var abandoned = false;
 
     obligations:
     for (final query in _queries) {
-      // A DISPOSED tick abandons its in-flight pass at the next obligation
-      // boundary (tg-6n18). The owner disposes a tick it has given up on — a
-      // supervisor's timed-out replacement — and a pass that kept running its
-      // remaining obligations would hold the owner's shared serial lane and
-      // its external I/O under the NEXT generation's feet, so each retry would
-      // queue behind the corpse of the last. Every obligation is keyed on
-      // external state, so whatever this pass leaves undone the next live
-      // pass re-reads.
-      if (_disposed) return abandoned();
+      // A DISPOSED tick abandons its in-flight pass at the next OBLIGATION
+      // boundary — before the next query runs, never between the appends of a
+      // repair list already computed (tg-6n18). The owner disposes a tick it
+      // has given up on — a supervisor's timed-out replacement — and a pass
+      // that kept running its remaining obligations would hold the owner's
+      // shared serial lane and its external I/O under the NEXT generation's
+      // feet. Repairs already paid for land, and so does the cadence commit:
+      // discarding them would only make the replacement re-run the query.
+      if (_disposed) {
+        abandoned = true;
+        break;
+      }
       // Re-checked per query: the fence can change hands mid-pass, and a
       // fenced-out service must stop repairing at that instant.
       if (_appender.isInert || _appender.isHalted) break;
@@ -213,7 +209,6 @@ class TrajectoryTick {
       }
 
       for (final repair in repairs) {
-        if (_disposed) return abandoned();
         final outcome = await _appender.append(
           repair.record,
           substation: repair.substation,
@@ -277,9 +272,6 @@ class TrajectoryTick {
       }
     }
 
-    // An abandoned pass leaves the cadence commit to the live generation.
-    if (_disposed) return abandoned();
-
     // The cadence commit fires on the interval even when the pass appended
     // nothing (§5); a branch-pin violation throws out of here, deliberately —
     // fail closed.
@@ -287,7 +279,10 @@ class TrajectoryTick {
 
     return TrajectoryTickPass(
       startedAt: startedAt,
-      disposition: TickPassDisposition.ran,
+      // An abandoned pass is no heartbeat: it did not run the whole set.
+      disposition: abandoned
+          ? TickPassDisposition.skippedDisposed
+          : TickPassDisposition.ran,
       queriesRun: queriesRun,
       recordsAppended: appended,
       recordsDeduped: deduped,

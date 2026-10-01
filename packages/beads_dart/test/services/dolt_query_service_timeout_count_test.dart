@@ -18,19 +18,25 @@ const _endpoint = DoltEndpoint(
   password: 'fake',
 );
 
-/// Answers the connect-time shape probe, then times out every statement while
-/// [timingOut] is set — the shape a saturated sql-server leaves on the wire.
+/// A short test deadline: the production one is [DoltQueryService.queryTimeout].
+const _deadline = Duration(milliseconds: 50);
+
+/// Answers normally until [hanging] is set; then every statement NEVER
+/// completes — the shape a saturated sql-server leaves on the wire, and the
+/// one `mysql_client`'s `execute()` (no timeout of its own) would wait on
+/// forever.
 final class _SaturatedConnection implements DoltConnection {
-  bool timingOut = false;
+  _SaturatedConnection({this.hanging = false});
+
+  bool hanging;
+  bool closed = false;
 
   @override
-  bool get connected => true;
+  bool get connected => !closed;
 
   @override
   Future<List<Map<String, Object?>>> query(String sql) async {
-    if (timingOut) {
-      throw TimeoutException('query', DoltQueryService.queryTimeout);
-    }
+    if (hanging) return Completer<List<Map<String, Object?>>>().future;
     return switch (sql) {
       'SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations' => [
         {'v': 53},
@@ -44,16 +50,23 @@ final class _SaturatedConnection implements DoltConnection {
   }
 
   @override
-  Future<void> close() async {}
+  Future<void> close() async => closed = true;
 }
 
 void main() {
-  test('counts every read that dies on the query deadline, and only those '
-      '(tg-6n18)', () async {
-    final connection = _SaturatedConnection();
+  test('a statement that never completes dies on the deadline, is counted, '
+      'and its connection is evicted (tg-6n18)', () async {
+    final connections = <_SaturatedConnection>[];
+    var saturated = false;
     final service = DoltQueryService(
       _endpoint,
-      connectionFactory: (_) async => connection,
+      poolSize: 1,
+      queryDeadline: _deadline,
+      connectionFactory: (_) async {
+        final connection = _SaturatedConnection(hanging: saturated);
+        connections.add(connection);
+        return connection;
+      },
     );
     await service.connect();
     addTearDown(service.close);
@@ -61,16 +74,43 @@ void main() {
     await service.probe();
     expect(service.timedOutReads, 0, reason: 'an answered read is not one');
 
-    connection.timingOut = true;
+    saturated = true;
+    connections.single.hanging = true;
     await expectLater(service.probe(), throwsA(isA<TimeoutException>()));
     await expectLater(
       service.runReadTransaction((select) => select('SELECT 1')),
       throwsA(isA<TimeoutException>()),
     );
     expect(service.timedOutReads, 2);
+    expect(
+      connections.first.closed,
+      isTrue,
+      reason: 'a wedged socket never serves another read',
+    );
 
-    connection.timingOut = false;
+    // The server recovers: a fresh connection answers; the count is
+    // process-lifetime.
+    saturated = false;
     await service.probe();
-    expect(service.timedOutReads, 2, reason: 'a process-lifetime count');
+    expect(service.timedOutReads, 2);
+    expect(connections.length, greaterThan(1));
+  });
+
+  test('a timeout inside a NESTED read (the read transaction\'s lazy shape '
+      'probe) is counted ONCE', () async {
+    final service = DoltQueryService(
+      _endpoint,
+      queryDeadline: _deadline,
+      connectionFactory: (_) async => _SaturatedConnection(hanging: true),
+    );
+    addTearDown(service.close);
+
+    // Never connected: runReadTransaction probes the shape first, through the
+    // same counted select path, and that probe is what times out.
+    await expectLater(
+      service.runReadTransaction((select) => select('SELECT 1')),
+      throwsA(isA<TimeoutException>()),
+    );
+    expect(service.timedOutReads, 1);
   });
 }
