@@ -492,7 +492,16 @@ Future<void> _exerciseResidentResolve({
       tick: 4,
     ),
   );
-  await _pumpUntil(mounted.owner, () => downstream.runs == 1);
+  await _pumpUntil(
+    mounted.owner,
+    () =>
+        downstream.runs == 1 &&
+        sink.records.whereType<StepTransition>().any(
+          (record) =>
+              record.stepPath == downstreamPath &&
+              record.state == StepState.running,
+        ),
+  );
 
   final transitions = sink.records
       .whereType<StepTransition>()
