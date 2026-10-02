@@ -712,6 +712,41 @@ void main() {
       },
     );
 
+    test('strict guarded update refuses unsupported preflight without a '
+        'mutation', () async {
+      BdCliService.resetGuardedWriteCapabilityForTesting();
+      final unsupported = FakeBdRunner()
+        ..stub(
+          (args) => args.join(' ') == 'update --help',
+          const BdReply(stdout: 'Flags:\n  --actor string'),
+        )
+        ..stubCommand('update', _okEnvelope());
+      final receipts = <String>[];
+
+      await expectLater(
+        BdCliService(unsupported).update(
+          'tg-7',
+          ifStatus: BeadStatus.open,
+          requireGuardedWrite: true,
+          onGuardDegraded: (name, _) => receipts.add(name),
+        ),
+        throwsA(isA<BdGuardedWriteUnavailable>()),
+      );
+
+      expect(unsupported.calls, [
+        ['update', '--help'],
+      ]);
+      expect(receipts, ['bd.guardedWriteDegraded']);
+    });
+
+    test('strict guarded update requires a requested guard', () async {
+      await expectLater(
+        service.update('tg-7', requireGuardedWrite: true),
+        throwsArgumentError,
+      );
+      expect(runner.calls, isEmpty);
+    });
+
     test('indeterminate guard probe preserves guards', () async {
       BdCliService.resetGuardedWriteCapabilityForTesting();
       final failing = FakeBdRunner()
@@ -853,6 +888,37 @@ void main() {
                 'StationBeadWriter single-writer chokepoint preserved',
           });
         }
+      },
+    );
+
+    test(
+      'strict unknown guard flag refuses without an unguarded retry',
+      () async {
+        BdCliService.resetGuardedWriteCapabilityForTesting();
+        final retrying = FakeBdRunner(
+          queuedReplies: [
+            const BdReply(stdout: '{"schema_version":1,"data":{}}'),
+            const BdReply(
+              exitCode: 1,
+              stderr: 'Error: unknown flag: --if-status',
+            ),
+          ],
+        );
+        final receipts = <String>[];
+
+        await expectLater(
+          BdCliService(retrying).update(
+            'tg-7',
+            ifStatus: BeadStatus.open,
+            requireGuardedWrite: true,
+            onGuardDegraded: (name, _) => receipts.add(name),
+          ),
+          throwsA(isA<BdGuardedWriteUnavailable>()),
+        );
+
+        expect(retrying.calls, hasLength(2));
+        expect(retrying.calls.last, contains('--if-status'));
+        expect(receipts, ['bd.guardedWriteDegraded']);
       },
     );
 

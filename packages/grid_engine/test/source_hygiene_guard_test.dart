@@ -107,6 +107,7 @@ void main() {
         '_blockedUntilFreshReady',
         '_rivalCleanupsInFlight',
         '_operatorVoids',
+        '_runtimeEffects',
       };
       final declaredCollections = RegExp(
         r'final\s+(?:Set|Map|List)<[^;]+?>\s+(_[A-Za-z0-9]+)\s*=',
@@ -128,6 +129,7 @@ void main() {
         '_blockedUntilFreshReady': 'Cancellation quarantine persists',
         '_rivalCleanupsInFlight': 'rival-cleanup microtasks are unavailable',
         '_operatorVoids': 'command-door fact the snapshot cannot carry',
+        '_runtimeEffects': 'Provisional runtime effects are unavailable',
       };
       for (final entry in rationaleByCollection.entries) {
         expect(

@@ -1195,6 +1195,10 @@ class StationBeadWriter {
     String? appendNotes,
     String? ifAssignee,
     BeadStatus? ifStatus,
+
+    /// Refuses rather than dropping [ifAssignee] or [ifStatus] when bd lacks
+    /// guarded-write support.
+    bool requireGuardedWrite = false,
   }) async {
     // `async` so the fail-closed `_assertOwned` throw surfaces as a rejected
     // future (not a synchronous throw at the call site); `_serialized` registers
@@ -1209,6 +1213,7 @@ class StationBeadWriter {
         appendNotes: appendNotes,
         ifAssignee: ifAssignee,
         ifStatus: ifStatus,
+        requireGuardedWrite: requireGuardedWrite,
       ),
     );
   }
@@ -1329,6 +1334,7 @@ class StationBeadWriter {
     String id, {
     String? ifAssignee,
     BeadStatus? ifStatus,
+    bool requireGuardedWrite = false,
     String? title,
     BeadStatus? status,
     int? priority,
@@ -1348,6 +1354,7 @@ class StationBeadWriter {
         ifAssignee: ifAssignee,
         ifStatus: ifStatus,
         onGuardDegraded: _flare,
+        requireGuardedWrite: requireGuardedWrite,
         title: title,
         status: status,
         priority: priority,

@@ -219,6 +219,18 @@ class BdGuardrailRefused extends BdException {
   String get message => 'Refused ${jsonEncode(call)}: $reason Remedy: $remedy';
 }
 
+/// A conditional update was refused because bd cannot honor its guard.
+///
+/// Callers requesting strict guarded writes must handle this as a refusal;
+/// the update is never retried without its compare-and-swap guard.
+final class BdGuardedWriteUnavailable extends BdGuardrailRefused {
+  BdGuardedWriteUnavailable({required super.call})
+    : super(
+        reason: 'bd cannot honor the requested conditional-update guard.',
+        remedy: 'Restore bd guarded-write support and retry the operation.',
+      );
+}
+
 /// An argv-only bead text field contains a control character that Dart cannot
 /// transport safely.
 class BeadTextRefused extends BdException {

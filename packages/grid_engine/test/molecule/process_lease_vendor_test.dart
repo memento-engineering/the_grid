@@ -195,11 +195,18 @@ ProcessLeaseRequest _request(
 FakeTreeContext _stationCtx({
   required String workspaceDir,
   required SourceControl sourceControl,
-}) => FakeTreeContext()
-  ..provide<ServiceBundle>(ServiceBundle(sourceControl: sourceControl))
-  ..provide<Workspace>(
-    testWorkspace('tg-1', workspaceDir: workspaceDir, branch: 'grid/tg-1'),
-  );
+  StationServices? stationServices,
+}) {
+  final context = FakeTreeContext()
+    ..provide<ServiceBundle>(ServiceBundle(sourceControl: sourceControl))
+    ..provide<Workspace>(
+      testWorkspace('tg-1', workspaceDir: workspaceDir, branch: 'grid/tg-1'),
+    );
+  if (stationServices != null) {
+    context.provide<StationServices>(stationServices);
+  }
+  return context;
+}
 
 Future<void> _mountAndStart(Allocation allocation, TreeContext treeContext) {
   final owner = TreeOwner();
@@ -408,7 +415,12 @@ void main() {
           .createTempSync('grid-molecule-sourceless-')
           .path;
       addTearDown(() => Directory(workspaceDir).deleteSync(recursive: true));
-      final transport = FakeRuntimeProvider();
+      final fakes = buildFakes();
+      addTearDown(() async {
+        fakes.ctx.dispose();
+        await fakes.provider.close();
+      });
+      final transport = fakes.provider;
       final reports = <AllocationReport>[];
       final request = _request(
         'tgdog-step-1',
@@ -418,6 +430,7 @@ void main() {
       final ctx = _stationCtx(
         workspaceDir: workspaceDir,
         sourceControl: _ProvisionSourceControl(),
+        stationServices: fakes.ctx,
       );
 
       await expectLater(
@@ -433,6 +446,57 @@ void main() {
 
       expect(reports.whereType<AllocationStarted>(), isEmpty);
       expect(transport.started, isEmpty);
+      expect(fakes.ctx.admission.liveRuntimesOf('tgdog-s'), isEmpty);
+    });
+
+    test('provisioning is censused before start and remains live through '
+        'provider handoff', () async {
+      final workspaceDir = Directory.systemTemp
+          .createTempSync('grid-molecule-provisioning-census-')
+          .path;
+      addTearDown(() => Directory(workspaceDir).deleteSync(recursive: true));
+      final fakes = buildFakes();
+      addTearDown(() async {
+        fakes.ctx.dispose();
+        await fakes.provider.close();
+      });
+      final sourceControl = _BlockingProvisionSourceControl();
+      final request = _request('tgdog-step-1', transport: fakes.provider);
+      final context = _stationCtx(
+        workspaceDir: workspaceDir,
+        sourceControl: sourceControl,
+        stationServices: fakes.ctx,
+      );
+
+      final spawning = stationProcessSpawner(
+        request,
+        context,
+        stepArgs('tg-1/lease'),
+      );
+      await sourceControl.entered.future;
+
+      expect(fakes.provider.started, isEmpty);
+      expect(fakes.ctx.admission.liveRuntimesOf('tgdog-s'), [
+        'tgdog-s/tg-1/lease',
+      ]);
+
+      sourceControl.release.complete();
+      while (fakes.provider.started.isEmpty) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(fakes.ctx.admission.liveRuntimesOf('tgdog-s'), [
+        'tgdog-s/tg-1/lease',
+      ]);
+      fakes.provider.emit(
+        const SessionStarted(name: 'tgdog-s/tg-1/lease', pid: 10, pgid: 20),
+      );
+      await spawning;
+      expect(fakes.ctx.admission.liveRuntimesOf('tgdog-s'), [
+        'tgdog-s/tg-1/lease',
+      ]);
+
+      await fakes.provider.stop('tgdog-s/tg-1/lease');
+      expect(fakes.ctx.admission.liveRuntimesOf('tgdog-s'), isEmpty);
     });
 
     test('provisioned checkout starts and resolves a process handle', () async {
