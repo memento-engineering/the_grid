@@ -13,6 +13,11 @@
 # command substitutions (the review lane runs plans under sh -c).
 set -u
 
+if ! bd --version >/dev/null 2>&1; then
+  echo 'live-attach pair: bd is required; refusing a skipped receipt' >&2
+  exit 1
+fi
+
 iterations="${ITERATIONS:-10}"
 width="${WIDTH:-2}"
 logs="$(mktemp -d "${TMPDIR:-/tmp}/live-attach-pair.XXXXXX")"
