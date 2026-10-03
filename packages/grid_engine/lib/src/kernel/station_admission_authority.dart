@@ -1588,7 +1588,7 @@ final class StationAdmissionAuthority {
       _notifyListeners();
       return null;
     }
-    if (reservation != null && reservation.sessionId != sessionId) {
+    if (reservation?.sessionId != sessionId) {
       return null;
     }
     return _voidCreatedSession(

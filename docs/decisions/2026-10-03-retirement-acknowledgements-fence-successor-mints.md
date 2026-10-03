@@ -20,7 +20,7 @@ register:
     - "trajectory-decision-bearing-awaits-are-cut-only"
   obsoleted-by: null
   updated-by: []
-  bead: null
+  bead: tg-1uat
   legacy-id: null
 ---
 

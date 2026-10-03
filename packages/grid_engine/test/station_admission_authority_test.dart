@@ -2669,27 +2669,24 @@ void main() {
       station.admission.addInvalidationListener(() => notifications += 1);
       final beforeRetirement = notifications;
 
-      await expectLater(
-        station.admission.abandonSessionAttempt(
-          workBeadId: owned.candidate.bead.id,
-          sessionId: owned.sessionId,
-          reservationToken: null,
-          services: const ServiceBundle(),
-        ),
-        throwsStateError,
+      final firstRetirement = station.admission.retireLostSession(
+        workBeadId: owned.candidate.bead.id,
+        sessionId: owned.sessionId,
+        attemptId: 'attempt-1',
+        services: const ServiceBundle(),
       );
+      await expectLater(firstRetirement, throwsStateError);
       expect(station.admission.admissionStatus.reservations, isEmpty);
       expect(notifications, greaterThan(beforeRetirement));
 
-      expect(
-        await station.admission.abandonSessionAttempt(
-          workBeadId: owned.candidate.bead.id,
-          sessionId: owned.sessionId,
-          reservationToken: null,
-          services: const ServiceBundle(),
-        ),
-        owned.sessionId,
+      final retry = station.admission.retireLostSession(
+        workBeadId: owned.candidate.bead.id,
+        sessionId: owned.sessionId,
+        attemptId: 'attempt-1',
+        services: const ServiceBundle(),
       );
+      expect(identical(retry, firstRetirement), isFalse);
+      expect(await retry, owned.sessionId);
 
       expect(acknowledgements, 2);
       expect(runner.callsFor('close'), hasLength(2));
@@ -3749,6 +3746,48 @@ void main() {
         [StationAdmissionCandidate(bead: rival, session: null)],
       );
       expect(admitted.admitted.single.candidate.bead.id, 'tg-2');
+    },
+  );
+
+  test(
+    'abandonment is a no-op after release or for an unknown session',
+    () async {
+      final runner = RecordingBdRunner(createdId: 'tg-s1');
+      final station = _stationOver(runner);
+      addTearDown(station.dispose);
+      final owned = await _reserveAndCreate(station, 'tg-1');
+
+      await station.admission.completeSession(
+        workBeadId: owned.candidate.bead.id,
+        sessionId: owned.sessionId,
+        outcomeMarked: true,
+        outcomeMetadata: const {},
+        reapMolecule: false,
+        services: const ServiceBundle(),
+      );
+      final callsAfterRelease = runner.calls
+          .map(List<String>.of)
+          .toList(growable: false);
+
+      expect(
+        await station.admission.abandonSessionAttempt(
+          workBeadId: owned.candidate.bead.id,
+          sessionId: owned.sessionId,
+          reservationToken: null,
+          services: const ServiceBundle(),
+        ),
+        isNull,
+      );
+      expect(
+        await station.admission.abandonSessionAttempt(
+          workBeadId: owned.candidate.bead.id,
+          sessionId: 'tg-unknown',
+          reservationToken: null,
+          services: const ServiceBundle(),
+        ),
+        isNull,
+      );
+      expect(runner.calls, callsAfterRelease);
     },
   );
 
