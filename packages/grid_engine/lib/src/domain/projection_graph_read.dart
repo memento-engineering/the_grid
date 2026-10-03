@@ -7,6 +7,18 @@ import '../sdk/circuit.dart';
 import '../sdk/cursor.dart';
 import 'trajectory_views.dart';
 
+/// How a session is held when its G2 structural projection cannot be read.
+enum ProjectionGraphFailurePosture {
+  /// No projection-graph failure was observed for this joined session.
+  none,
+
+  /// Shadow isolated the corrupt non-authoritative graph and kept legacy reads.
+  shadowIsolated,
+
+  /// Cut refused to drive the corrupt authoritative graph.
+  cutHeld,
+}
+
 @immutable
 sealed class ProjectionAttemptLeaseRead {
   const ProjectionAttemptLeaseRead();

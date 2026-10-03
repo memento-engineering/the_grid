@@ -2459,6 +2459,21 @@ void main() {
       }
     });
 
+    test('join bridge projection failures use the station flare sink', () {
+      final source = File('lib/src/work/work_assembly.dart').readAsStringSync();
+      final bridgeStart = source.indexOf(
+        'StationJoinBridge buildJoinBridgeDefault() => StationJoinBridge(',
+      );
+      final bridgeEnd = source.indexOf('\n  );', bridgeStart);
+
+      expect(bridgeStart, isNonNegative);
+      expect(bridgeEnd, greaterThan(bridgeStart));
+      expect(
+        source.substring(bridgeStart, bridgeEnd),
+        contains('onFlare: transport?.flare,'),
+      );
+    });
+
     test('public assembly signature and acquisition order stay pinned', () {
       final source = File('lib/src/work/work_assembly.dart').readAsStringSync();
       final signatureStart = source.indexOf(

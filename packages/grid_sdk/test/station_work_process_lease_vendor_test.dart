@@ -8,10 +8,17 @@
 import 'package:beads_dart/beads_dart.dart' show Bead;
 import 'package:grid_engine/grid_engine.dart' as engine;
 import 'package:grid_engine/src/molecule/process_lease_vendor.dart'
-    show ProcessHandle, ProcessLeaseRequest, SelfManagedProcessVendor;
+    show
+        LeaseSweepCandidate,
+        ProcessHandle,
+        ProcessLeaseRequest,
+        SelfManagedProcessVendor;
+import 'package:grid_engine/src/molecule/molecule_schema.dart'
+    show MoleculeStepKeys;
 import 'package:grid_engine/src/molecule/station_process_transport.dart'
     show stationProcessDispatcher, stationProcessSpawner;
 import 'package:grid_engine/testing.dart';
+import 'package:grid_runtime/grid_runtime.dart' show GroupTerminateResult;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
 
@@ -104,6 +111,54 @@ void main() {
       processLeaseVendor: explicit,
     );
     expect(vendor, same(explicit));
+  });
+
+  test('authoritative absent lease flares for spawned steps', () async {
+    final fakes = buildFakes();
+    final vendor = _resolvedVendor(fakes: fakes)!;
+    final orphanLines = <String>[];
+    var aliveCalls = 0;
+    var terminateCalls = 0;
+
+    final swept = await vendor.sweepOrphanedLeases(
+      candidates: [
+        for (final state in [engine.StepState.running, engine.StepState.ready])
+          LeaseSweepCandidate(
+            stepBeadId: 'tgdog-step-${state.name}',
+            willRemount: true,
+            metadata: {MoleculeStepKeys.state: state.name},
+            projectedLease: const engine.ProjectionAttemptLeaseAbsent(),
+          ),
+      ],
+      alive: ({required int pgid, required int leaderPid}) {
+        aliveCalls += 1;
+        return true;
+      },
+      terminate: ({required int pgid, required int leaderPid}) async {
+        terminateCalls += 1;
+        return GroupTerminateResult.exitedOnTerm;
+      },
+      onOrphan: orphanLines.add,
+    );
+
+    expect(swept, isEmpty);
+    expect(aliveCalls, 0);
+    expect(terminateCalls, 0);
+    expect(fakes.runner.callsFor('update'), isEmpty);
+    expect(orphanLines, hasLength(2));
+    expect(
+      orphanLines,
+      containsAll([
+        contains(
+          'step "tgdog-step-running" is running but the authoritative '
+          'P2/P6 projection reports NO held lease',
+        ),
+        contains(
+          'step "tgdog-step-ready" is ready but the authoritative P2/P6 '
+          'projection reports NO held lease',
+        ),
+      ]),
+    );
   });
 }
 
