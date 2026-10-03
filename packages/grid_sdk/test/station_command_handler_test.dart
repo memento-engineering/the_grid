@@ -2526,8 +2526,9 @@ void main() {
   // `grid rework`'s park check is the one cursor consumer with NO
   // SessionProjection to hang a `trajCursor` on, so its posture arrives by
   // constructor. What the group proves is the pair the rollback story needs:
-  // `observe` is byte-identical to today, and `primary` actually reads the
-  // fold — through the ENGINE's merge, with the same three protections.
+  // `observe` is byte-identical to today, while `primary` compares the fold
+  // and records divergence through the ENGINE's merge. The bead remains the
+  // decision carrier, so fold-only evidence cannot invent an operator gate.
   group('grid/rework — the step dual read (C4)', () {
     Future<GridCommandResult> park({
       required StepState beadState,
@@ -2613,15 +2614,15 @@ void main() {
       },
     );
 
-    test('PRIMARY serves the FOLD: the SAME inputs proceed, because P2 says '
-        'the node parked', () async {
+    test('PRIMARY keeps the BEAD authoritative: fold-only gated evidence '
+        'does not permit rework', () async {
       expect(
         await park(
           beadState: StepState.running,
           rows: [_StepRow(stepPath: 'build', stepState: 'gated')],
           mode: DualReadMode.primary,
         ),
-        isA<GridCommandCompleted>(),
+        notParked(),
       );
     });
 

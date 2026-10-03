@@ -26,6 +26,25 @@ const _code = Circuit(
   ],
 );
 
+const _deliveryCode = Circuit(
+  id: 'delivery-code',
+  terminalStepId: 'deliver',
+  steps: [
+    CapabilityStep(stepId: 'build', capabilityId: 'build'),
+    CapabilityStep(
+      stepId: 'review',
+      capabilityId: 'review',
+      dependsOn: {'build'},
+    ),
+    CapabilityStep(stepId: 'land', capabilityId: 'land', dependsOn: {'review'}),
+    CapabilityStep(
+      stepId: 'deliver',
+      capabilityId: 'deliver',
+      dependsOn: {'land'},
+    ),
+  ],
+);
+
 const _burn = Circuit(
   id: 'burn',
   terminalStepId: 'report',
@@ -150,6 +169,65 @@ List<Map<String, dynamic>> _updatesFor(RecordingBdRunner runner, String id) {
   ];
 }
 
+bool _createsType(List<String> call, String type) {
+  final index = call.indexOf('--type');
+  return index >= 0 && index + 1 < call.length && call[index + 1] == type;
+}
+
+final class _ThrowFirstStepUpdateRunner extends RecordingBdRunner {
+  _ThrowFirstStepUpdateRunner({required this.stepBeadId})
+    : super(createdId: 'tgdog-gate');
+
+  final String stepBeadId;
+  bool _thrown = false;
+
+  @override
+  Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
+    if (!_thrown &&
+        args.length > 1 &&
+        args.first == 'update' &&
+        args[1] == stepBeadId) {
+      _thrown = true;
+      return Future<BdResult>.error(StateError('deliver park write refused'));
+    }
+    return super.run(args, timeout: timeout, stdin: stdin);
+  }
+}
+
+final class _AckedTrajectorySink implements TrajectoryAckRecordSink {
+  @override
+  bool get accepting => true;
+
+  @override
+  void enqueue(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+  }) {}
+
+  @override
+  Future<TrajectoryAppendResult> appendAcked(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+    required bool decisionBearing,
+  }) async => const TrajectoryAppendResult.acked();
+}
+
+StationServices _stationForRunner(RecordingBdRunner runner) => StationServices(
+  provider: FakeRuntimeProvider(),
+  writer: StationBeadWriter(
+    bd: BdCliService(runner),
+    reader: runner,
+    ownership: BeadOwnershipPredicate(const {stateSubstation}),
+  ),
+  stateSubstation: stateSubstation,
+);
+
 const _tgConfig = SubstationConfig(
   substationId: 'tg',
   ownedSubstations: {'tg'},
@@ -165,6 +243,7 @@ const _tgConfig = SubstationConfig(
   required RootCircuitFor rootCircuit,
   ServiceBundle services = const ServiceBundle(),
   SubstationConfig substationConfig = _tgConfig,
+  TrajectoryRecorderScope? trajectoryScope,
 }) {
   final owner = TreeOwner();
   final root = owner.mountRoot(
@@ -177,13 +256,16 @@ const _tgConfig = SubstationConfig(
             value: registry,
             child: InheritedSeed<SessionResolver>(
               value: CircuitResolver(rootCircuit),
-              child: Station([
-                SubstationScope(
-                  configNotifier: SubstationConfigNotifier(substationConfig),
-                  services: services,
-                  key: const ValueKey('scope.tg'),
-                ),
-              ]),
+              child: InheritedSeed<TrajectoryRecorderScope>(
+                value: trajectoryScope ?? TrajectoryRecorderScope.disabled,
+                child: Station([
+                  SubstationScope(
+                    configNotifier: SubstationConfigNotifier(substationConfig),
+                    services: services,
+                    key: const ValueKey('scope.tg'),
+                  ),
+                ]),
+              ),
             ),
           ),
         ),
@@ -827,23 +909,127 @@ void main() {
     });
 
     test(
-      'delivery-bound terminal without recorded outcome blocks close and flares',
+      'historical flat missing delivery receipt flares without molecule park',
       () async {
         final f = buildFakes();
         final transport = RecordingExplorationTransport();
         final method = RecordingDeliveryMethod(id: 'github-pr');
-        final reg = RecordingCapabilityRegistry(circuits: const {});
+        final registry = RecordingCapabilityRegistry(circuits: const {});
         const terminal = SessionProjection(
           workBeadId: 'tg-1',
           sessionId: 'tgdog-s',
+          isMolecule: false,
           cursor: {
-            'tg-1/agent': NodeCursor(state: StepState.complete),
-            'tg-1/verify': NodeCursor(state: StepState.complete),
+            'tg-1/build': NodeCursor(state: StepState.complete),
+            'tg-1/review': NodeCursor(state: StepState.complete),
             'tg-1/land': NodeCursor(state: StepState.complete),
+            'tg-1/deliver': NodeCursor(state: StepState.complete),
           },
-          results: {
-            'tg-1/land': {'grade': 'A'},
+        );
+        // the_grid#a48-a-closed-session-is-dispositioned-done-held-voided-not-b:
+        // "The marker, not the cursor, is the done evidence." Its legacy
+        // positive-cursor fallback classifies only a CLOSED row as done. This
+        // open adopted row remains live even though every flat node is
+        // positive-terminal, so missing delivery evidence must not close it.
+        expect(sessionDispositionOf(terminal), isA<LiveSession>());
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {'tg-1': terminal},
+          ),
+        );
+        final m = _mountFull(
+          joined: joined,
+          ctx: f.ctx,
+          registry: registry,
+          rootCircuit: (_) => _deliveryCode,
+          services: ServiceBundle(delivery: method, transport: transport),
+        );
+        addTearDown(m.owner.dispose);
+
+        await _pumpUntil(
+          m.owner,
+          () => transport.named('delivery.outcomeMissing').isNotEmpty,
+        );
+
+        expect(transport.named('delivery.outcomeMissing'), hasLength(1));
+        expect(transport.named('delivery.outcomeMissing').single.data, {
+          'sessionId': 'tgdog-s',
+          'workBeadId': 'tg-1',
+          'nodePath': 'tg-1/deliver',
+          'method': 'github-pr',
+        });
+        expect(method.requests, isEmpty);
+        expect(f.runner.callsFor('update'), isEmpty);
+        expect(f.runner.callsFor('close'), isEmpty);
+        expect(f.runner.callsFor('create'), isEmpty);
+
+        joined.push(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {'tg-1': terminal},
+          ),
+        );
+        m.owner.flush();
+        await _pump();
+
+        expect(transport.named('delivery.outcomeMissing'), hasLength(1));
+        expect(method.requests, isEmpty);
+        expect(f.runner.callsFor('update'), isEmpty);
+        expect(f.runner.callsFor('close'), isEmpty);
+        expect(f.runner.callsFor('create'), isEmpty);
+      },
+    );
+
+    test(
+      'missing delivery receipt reports raw evidence and parks deliver once',
+      () async {
+        final f = buildFakes(createdId: 'tgdog-gate');
+        final transport = RecordingExplorationTransport();
+        final method = RecordingDeliveryMethod(id: 'github-pr');
+        final reg = RecordingCapabilityRegistry(circuits: const {});
+        final completedAt = DateTime.utc(2026, 9, 21, 21, 49);
+        final build = _stepBead(
+          'tgdog-build',
+          sessionId: 'tgdog-s',
+          path: 'tg-1/build',
+          state: StepState.complete,
+          extra: {
+            MoleculeStepKeys.finishedAt: completedAt
+                .subtract(const Duration(minutes: 1))
+                .toIso8601String(),
           },
+        );
+        final review = _stepBead(
+          'tgdog-review',
+          sessionId: 'tgdog-s',
+          path: 'tg-1/review',
+          state: StepState.complete,
+          extra: {MoleculeStepKeys.finishedAt: completedAt.toIso8601String()},
+        );
+        final land = _stepBead(
+          'tgdog-land',
+          sessionId: 'tgdog-s',
+          path: 'tg-1/land',
+          state: StepState.complete,
+          extra: {MoleculeStepKeys.finishedAt: completedAt.toIso8601String()},
+        );
+        final deliver = _stepBead(
+          'tgdog-deliver',
+          sessionId: 'tgdog-s',
+          path: 'tg-1/deliver',
+          state: StepState.complete,
+          extra: const {
+            MoleculeStepKeys.failureReason: 'gh refused: branch was not pushed',
+          },
+        );
+        final terminal = SessionProjection(
+          workBeadId: 'tg-1',
+          sessionId: 'tgdog-s',
+          isMolecule: true,
+          moleculeBeads: [build, review, land, deliver],
         );
         final joined = JoinedSnapshotNotifier(
           _joined(
@@ -856,26 +1042,73 @@ void main() {
           joined: joined,
           ctx: f.ctx,
           registry: reg,
-          rootCircuit: (_) => _code,
+          rootCircuit: (_) => _deliveryCode,
           services: ServiceBundle(delivery: method, transport: transport),
         );
         addTearDown(m.owner.dispose);
 
-        await _pump();
-        m.owner.flush();
-        await _pump();
+        await _pumpUntil(
+          m.owner,
+          () => transport.named('delivery.outcomeMissing').isNotEmpty,
+        );
+        await _pumpUntil(
+          m.owner,
+          () => _updatesFor(f.runner, 'tgdog-deliver').isNotEmpty,
+        );
 
         expect(f.runner.callsFor('close'), isEmpty);
-        expect(f.runner.callsFor('update'), isEmpty);
         expect(method.requests, isEmpty);
         final flares = transport.named('delivery.outcomeMissing').toList();
         expect(flares, hasLength(1));
         expect(flares.single.data, {
           'sessionId': 'tgdog-s',
           'workBeadId': 'tg-1',
-          'nodePath': 'tg-1/land',
+          'nodePath': 'tg-1/deliver',
           'method': 'github-pr',
+          'reason': 'gh refused: branch was not pushed',
+          'lastCompletedNodePath': 'tg-1/land',
+          'failureClass': 'infra',
         });
+        expect(_updatesFor(f.runner, 'tgdog-deliver'), hasLength(1));
+        expect(
+          _updatesFor(f.runner, 'tgdog-deliver').single,
+          containsPair(MoleculeStepKeys.state, StepState.gated.name),
+        );
+        expect(
+          _updatesFor(f.runner, 'tgdog-deliver').single,
+          containsPair(
+            MoleculeStepKeys.failureReason,
+            'gh refused: branch was not pushed',
+          ),
+        );
+        for (final id in ['tgdog-build', 'tgdog-review', 'tgdog-land']) {
+          expect(_updatesFor(f.runner, id), isEmpty);
+        }
+        final gateCreates = f.runner
+            .callsFor('create')
+            .where((call) => _createsType(call, 'gate'));
+        expect(gateCreates, hasLength(1));
+        expect(
+          _updatesFor(f.runner, 'tgdog-gate').single,
+          containsPair('blocks', 'tgdog-s'),
+        );
+        expect(
+          _updatesFor(f.runner, 'tgdog-gate').single,
+          containsPair('node', 'tg-1/deliver'),
+        );
+        expect(
+          _updatesFor(f.runner, 'tgdog-gate').single['reason'],
+          'delivery outcome missing (infra): method=github-pr; '
+          'nodePath=tg-1/deliver; '
+          'reason=gh refused: branch was not pushed; '
+          'lastCompletedNodePath=tg-1/land',
+        );
+        expect(
+          f.runner
+              .callsFor('create')
+              .where((call) => _createsType(call, 'session')),
+          isEmpty,
+        );
 
         joined.push(
           _joined(
@@ -889,6 +1122,239 @@ void main() {
 
         expect(f.runner.callsFor('close'), isEmpty);
         expect(transport.named('delivery.outcomeMissing'), hasLength(1));
+        expect(_updatesFor(f.runner, 'tgdog-deliver'), hasLength(1));
+        expect(
+          f.runner
+              .callsFor('create')
+              .where((call) => _createsType(call, 'gate')),
+          hasLength(1),
+        );
+      },
+    );
+
+    test(
+      'closing the delivery gate re-arms only its active generation',
+      () async {
+        final f = buildFakes(createdId: 'tgdog-gate');
+        final transport = RecordingExplorationTransport();
+        final method = RecordingDeliveryMethod(id: 'github-pr');
+        final registry = RecordingCapabilityRegistry(circuits: const {});
+        List<Bead> steps(StepState deliverState) => [
+          _stepBead(
+            'tgdog-build',
+            sessionId: 'tgdog-s',
+            path: 'tg-1/build',
+            state: StepState.complete,
+          ),
+          _stepBead(
+            'tgdog-review',
+            sessionId: 'tgdog-s',
+            path: 'tg-1/review',
+            state: StepState.complete,
+          ),
+          _stepBead(
+            'tgdog-land',
+            sessionId: 'tgdog-s',
+            path: 'tg-1/land',
+            state: StepState.complete,
+          ),
+          _stepBead(
+            'tgdog-deliver',
+            sessionId: 'tgdog-s',
+            path: 'tg-1/deliver',
+            state: deliverState,
+          ),
+        ];
+        SessionProjection session(
+          StepState deliverState, {
+          Set<String> openGateNodes = const {},
+        }) => SessionProjection(
+          workBeadId: 'tg-1',
+          sessionId: 'tgdog-s',
+          isMolecule: true,
+          moleculeBeads: steps(deliverState),
+          openGateNodes: openGateNodes,
+        );
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {'tg-1': session(StepState.complete)},
+          ),
+        );
+        final m = _mountFull(
+          joined: joined,
+          ctx: f.ctx,
+          registry: registry,
+          rootCircuit: (_) => _deliveryCode,
+          services: ServiceBundle(delivery: method, transport: transport),
+          trajectoryScope: TrajectoryRecorderScope(
+            StationTrajectoryRecorder(
+              sink: _AckedTrajectorySink(),
+              substationPrefixes: const {'tgdog'},
+              clock: () => DateTime(2026),
+            ),
+          ),
+        );
+        addTearDown(m.owner.dispose);
+        await _pumpUntil(
+          m.owner,
+          () => _updatesFor(f.runner, 'tgdog-deliver').isNotEmpty,
+        );
+
+        joined.push(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {
+              'tg-1': session(StepState.gated, openGateNodes: {'tg-1/deliver'}),
+            },
+          ),
+        );
+        m.owner.flush();
+        await _pump();
+        joined.push(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {'tg-1': session(StepState.gated)},
+          ),
+        );
+        m.owner.flush();
+        await _pumpUntil(
+          m.owner,
+          () => _updatesFor(f.runner, 'tgdog-deliver').length == 2,
+        );
+
+        expect(_updatesFor(f.runner, 'tgdog-deliver').last, {
+          MoleculeStepKeys.state: StepState.pending.name,
+        });
+
+        // Publish the exact acknowledged generation as complete again. Its
+        // successful re-arm must have reopened every terminal latch so this
+        // same session round can report and park a second missing receipt.
+        joined.push(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {'tg-1': session(StepState.complete)},
+          ),
+        );
+        m.owner.flush();
+        await _pumpUntil(
+          m.owner,
+          () =>
+              transport.named('delivery.outcomeMissing').length == 2 &&
+              _updatesFor(f.runner, 'tgdog-deliver').length == 3,
+        );
+
+        expect(transport.named('delivery.outcomeMissing'), hasLength(2));
+        expect(
+          _updatesFor(f.runner, 'tgdog-deliver').last,
+          containsPair(MoleculeStepKeys.state, StepState.gated.name),
+        );
+        for (final id in ['tgdog-build', 'tgdog-review', 'tgdog-land']) {
+          expect(_updatesFor(f.runner, id), isEmpty);
+        }
+        expect(f.runner.callsFor('close'), isEmpty);
+        expect(
+          f.runner
+              .callsFor('create')
+              .where((call) => _createsType(call, 'session')),
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      'a failed delivery park is loud and retries on a later snapshot',
+      () async {
+        final runner = _ThrowFirstStepUpdateRunner(stepBeadId: 'tgdog-deliver');
+        final transport = RecordingExplorationTransport();
+        final method = RecordingDeliveryMethod(id: 'github-pr');
+        final registry = RecordingCapabilityRegistry(circuits: const {});
+        final terminal = SessionProjection(
+          workBeadId: 'tg-1',
+          sessionId: 'tgdog-s',
+          isMolecule: true,
+          moleculeBeads: [
+            _stepBead(
+              'tgdog-build',
+              sessionId: 'tgdog-s',
+              path: 'tg-1/build',
+              state: StepState.complete,
+            ),
+            _stepBead(
+              'tgdog-review',
+              sessionId: 'tgdog-s',
+              path: 'tg-1/review',
+              state: StepState.complete,
+            ),
+            _stepBead(
+              'tgdog-land',
+              sessionId: 'tgdog-s',
+              path: 'tg-1/land',
+              state: StepState.complete,
+            ),
+            _stepBead(
+              'tgdog-deliver',
+              sessionId: 'tgdog-s',
+              path: 'tg-1/deliver',
+              state: StepState.complete,
+            ),
+          ],
+        );
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {'tg-1': terminal},
+          ),
+        );
+        final m = _mountFull(
+          joined: joined,
+          ctx: _stationForRunner(runner),
+          registry: registry,
+          rootCircuit: (_) => _deliveryCode,
+          services: ServiceBundle(delivery: method, transport: transport),
+        );
+        addTearDown(m.owner.dispose);
+        await _pumpUntil(
+          m.owner,
+          () => transport.named('delivery.outcomeParkFailed').isNotEmpty,
+        );
+
+        final failure = transport.named('delivery.outcomeParkFailed').single;
+        expect(failure.data['failureClass'], 'infra');
+        expect(failure.data['reason'], contains('deliver park write refused'));
+        expect(runner.callsFor('close'), isEmpty);
+        expect(
+          runner
+              .callsFor('create')
+              .where((call) => _createsType(call, 'session')),
+          isEmpty,
+        );
+
+        joined.push(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {'tg-1': terminal},
+          ),
+        );
+        m.owner.flush();
+        await _pumpUntil(
+          m.owner,
+          () => _updatesFor(runner, 'tgdog-deliver').isNotEmpty,
+        );
+
+        expect(
+          _updatesFor(runner, 'tgdog-deliver').single,
+          containsPair(MoleculeStepKeys.state, StepState.gated.name),
+        );
+        expect(transport.named('delivery.outcomeMissing'), hasLength(2));
+        expect(runner.callsFor('close'), isEmpty);
+        expect(method.requests, isEmpty);
       },
     );
 

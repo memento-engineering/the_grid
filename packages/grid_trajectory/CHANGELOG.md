@@ -1,3 +1,7 @@
+## 0.2.1-dev.9
+
+ - Coherence bump with the 2026-10-03 the_grid dev wave (beads_dart 0.3.0-dev.9); no grid_trajectory code change.
+
 ## 0.2.1-dev.8
 
  - **FIX**(engine,runtime,sdk,trajectory): re-arm the P6 mirror and degrade admission while it is dead (tg-6n18) (#520).
