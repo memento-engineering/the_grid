@@ -203,11 +203,15 @@ final class ProjectionGraphRead {
   ProjectionStepRead stepAt(String path) =>
       _steps[path] ?? ProjectionStepNotMaterialized(path);
 
-  List<String> blockersFor(String path) =>
-      List<String>.unmodifiable(_blockers[path] ?? const <String>[]);
+  List<String>? blockersFor(String path) => switch (_blockers[path]) {
+    final paths? => List<String>.unmodifiable(paths),
+    null => null,
+  };
 
-  List<String> validatesFor(String path) =>
-      List<String>.unmodifiable(_validates[path] ?? const <String>[]);
+  List<String>? validatesFor(String path) => switch (_validates[path]) {
+    final paths? => List<String>.unmodifiable(paths),
+    null => null,
+  };
 
   CircuitCursor get cursor => {
     for (final entry in _steps.entries) entry.key: entry.value.cursor,
