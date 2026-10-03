@@ -227,22 +227,24 @@ final class StoreCloseReport {
 /// the narrative (`store connections closed: N/M`) exist once. Each close is a
 /// [settle] step: a handle whose close hangs on the wire is awaited for
 /// [within] — or for what is left of [deadline] when an unwind's total is
-/// supplied, whichever is smaller — then named through [onRefusal] (the settle
-/// line, stderr by default) and [onFlare] (`unwind.storeHandleOutstanding`) and
-/// NO LONGER awaited, so one half-open proxy socket can delay the exit by its
-/// budget but never hold it. A refused close is reported the same way: a
-/// refused close is not a confirmed one. The pass itself never throws.
+/// supplied after holding back [reserve], whichever is smaller — then named
+/// through [onRefusal] (the settle line, stderr by default) and [onFlare]
+/// (`unwind.storeHandleOutstanding`) and NO LONGER awaited, so one half-open
+/// proxy socket can delay the exit by its budget but never hold it. A refused
+/// close is reported the same way: a refused close is not a confirmed one. The
+/// pass itself never throws.
 Future<StoreCloseReport> closeStoreConnections(
   List<StoreConnection> stores, {
   Duration within = kStoreCloseTimeout,
   UnwindDeadline? deadline,
+  Duration reserve = Duration.zero,
   void Function(String message)? onRefusal,
   void Function(String name, Map<String, String> data)? onFlare,
 }) async {
   final closed = <String>[];
   final outstanding = <OutstandingStoreHandle>[];
   for (final store in List<StoreConnection>.of(stores)) {
-    final budget = deadline?.budget(within) ?? within;
+    final budget = deadline?.budget(within, reserve: reserve) ?? within;
     String? refusal;
     Duration? expired;
     final confirmed = await settle(

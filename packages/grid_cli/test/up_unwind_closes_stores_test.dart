@@ -105,6 +105,7 @@ final class _Grid implements GridResource {
   final List<String> events;
   final GridDelegate delegate;
   final Future<void> Function() orphanSweep;
+  Future<void>? _trajectoryDrain;
 
   @override
   Future<ReassembleReport> hotReload() => throw UnimplementedError();
@@ -113,7 +114,12 @@ final class _Grid implements GridResource {
   Future<ReassembleReport> hotRestart() => throw UnimplementedError();
 
   @override
+  Future<void> drainTrajectory() =>
+      _trajectoryDrain ??= delegate.drainTrajectory();
+
+  @override
   Future<void> teardown({Duration? orphanSweepBudget}) async {
+    await drainTrajectory();
     events.add('grid.teardown');
     await orphanSweep();
     delegate.dispose();

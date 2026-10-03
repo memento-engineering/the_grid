@@ -80,6 +80,7 @@ final class _Delegate extends GridDelegate {
     this.monitor,
     this.admission,
     this.trajectory = const <String, Object?>{},
+    this.trajectoryDrainDelay = Duration.zero,
   });
 
   final List<String> events;
@@ -89,6 +90,7 @@ final class _Delegate extends GridDelegate {
   final WedgeMonitor? monitor;
   final StationAdmissionStatus? admission;
   final Map<String, Object?> trajectory;
+  final Duration trajectoryDrainDelay;
 
   /// False = the ABSENCE posture: this station vends neither a status view
   /// nor a command handler (the unified base's null defaults, tg-at3r), and
@@ -134,6 +136,15 @@ final class _Delegate extends GridDelegate {
       throw StateError('sweepOrphans on disposed delegate "$label"');
     }
     events.add('sweep:$label');
+    if (failAt == 'sweep.hang') await Completer<void>().future;
+  }
+
+  @override
+  Future<void> drainTrajectory() async {
+    if (trajectoryDrainDelay == Duration.zero) return;
+    events.add('trajectory.drain.start');
+    await Future<void>.delayed(trajectoryDrainDelay);
+    events.add('trajectory.drain.done');
   }
 
   @override
@@ -166,6 +177,7 @@ final class _Harness {
     required this.trajectory,
     required this.hangDevModeDispose,
     required this.useRealLock,
+    required this.trajectoryDrainDelay,
   });
 
   static Future<_Harness> create({
@@ -185,6 +197,7 @@ final class _Harness {
     Map<String, Object?> trajectory = const <String, Object?>{},
     bool hangDevModeDispose = false,
     bool useRealLock = false,
+    Duration trajectoryDrainDelay = Duration.zero,
     Map<String, PrimaryCheckoutFreshness> checkoutFreshness =
         const <String, PrimaryCheckoutFreshness>{},
   }) async {
@@ -215,6 +228,7 @@ final class _Harness {
       trajectory: trajectory,
       hangDevModeDispose: hangDevModeDispose,
       useRealLock: useRealLock,
+      trajectoryDrainDelay: trajectoryDrainDelay,
     );
   }
 
@@ -238,6 +252,7 @@ final class _Harness {
   final Map<String, Object?> trajectory;
   final bool hangDevModeDispose;
   final bool useRealLock;
+  final Duration trajectoryDrainDelay;
   final events = <String>[];
   final controlFlares = <({String name, Map<String, String> data})>[];
   final unwindRecords = <StationUnwindRecord>[];
@@ -289,6 +304,7 @@ final class _Harness {
     bool untimed = false,
     Duration unwindDuration = kUnwindDeadline,
     AssetCatalogResolver assetCatalogResolver = const AssetCatalogResolver(),
+    bool injectExiter = true,
   }) async {
     final stdoutSink = RecordingStdout(_stdout);
     final stderrSink = RecordingStdout(_stderr);
@@ -310,6 +326,7 @@ final class _Harness {
           monitor: monitor,
           admission: admission,
           trajectory: trajectory,
+          trajectoryDrainDelay: trajectoryDrainDelay,
         );
         built.add(delegate);
         return delegate;
@@ -373,6 +390,7 @@ final class _Harness {
               orphanSweepBudgets: orphanSweepBudgets,
               delegateFactory: delegateFactory,
               onDelegateSwapped: onDelegateSwapped,
+              onError: onError,
             );
           },
       startControl:
@@ -441,11 +459,13 @@ final class _Harness {
           throw StateError('unexpected signal wait');
         }
       },
-      exiter: (code) {
-        exitCodes.add(code);
-        final path = heldLockPath;
-        if (path != null) lockExistedAtExit = File(path).existsSync();
-      },
+      exiter: injectExiter
+          ? (code) {
+              exitCodes.add(code);
+              final path = heldLockPath;
+              if (path != null) lockExistedAtExit = File(path).existsSync();
+            }
+          : null,
       unwindDuration: unwindDuration,
     );
     final runner = CommandRunner<int>('lunar', 'test')..addCommand(command);
@@ -497,6 +517,10 @@ final class _Lock implements LockResource {
 
   @override
   Future<void> updateUnwind(StationUnwindRecord unwind) async {
+    if (failAt == 'lock.unwind') {
+      events.add('lock.unwind');
+      throw const StationRefusal('unwind ownership refused');
+    }
     unwindRecords?.add(unwind);
   }
 
@@ -544,6 +568,7 @@ final class _Grid implements GridResource {
     required this.orphanSweepBudgets,
     this.delegateFactory,
     this.onDelegateSwapped,
+    required this.onError,
   });
 
   final List<String> events;
@@ -555,7 +580,9 @@ final class _Grid implements GridResource {
   final List<Duration?> orphanSweepBudgets;
   final GridDelegate Function()? delegateFactory;
   final void Function(GridDelegate next)? onDelegateSwapped;
+  final void Function(GridHookError refusal) onError;
   var _generation = 0;
+  Future<void>? _trajectoryDrain;
 
   @override
   Future<ReassembleReport> hotReload() => throw UnimplementedError();
@@ -590,14 +617,30 @@ final class _Grid implements GridResource {
   }
 
   @override
+  Future<void> drainTrajectory() =>
+      _trajectoryDrain ??= delegate.drainTrajectory();
+
+  @override
   Future<void> teardown({Duration? orphanSweepBudget}) async {
     // runGrid's own teardown order: unmount the tree, run the orphan sweep on
     // the STILL-LIVE delegate (the shell's closure — it must reach the live
     // delegate, never a retired corpse, and the sweep reaps over the
     // boot-assembled runtime dispose unwinds), THEN dispose the delegate.
+    await drainTrajectory();
     events.add('grid.teardown');
     orphanSweepBudgets.add(orphanSweepBudget);
-    await orphanSweep();
+    try {
+      final sweep = orphanSweep();
+      if (orphanSweepBudget case final budget?) {
+        await sweep.timeout(budget);
+      } else {
+        await sweep;
+      }
+    } on TimeoutException catch (error, stackTrace) {
+      onError(
+        GridHookError('orphanSweep', delegate.runtimeType, error, stackTrace),
+      );
+    }
     delegate.dispose();
   }
 }
@@ -1762,7 +1805,7 @@ void main() {
   });
 
   test(
-    'resident exit detaches a never-completing VM-service listener',
+    'dev-mode disposal keeps first position and cannot hold terminal unwind',
     () async {
       final h = await _Harness.create(
         devMode: true,
@@ -1775,7 +1818,7 @@ void main() {
       expect(
         await h.run(
           untimed: true,
-          unwindDuration: const Duration(milliseconds: 80),
+          unwindDuration: const Duration(milliseconds: 5600),
         ),
         0,
       );
@@ -1785,9 +1828,48 @@ void main() {
       expect(h.exitCodes, [0]);
       expect(h.events, contains('devMode.dispose'));
       expect(
-        h.unwindRecords.last.outstanding,
-        contains('dev-mode listener ws://vm (detached)'),
+        h.unwindRecords.any(
+          (record) => record.outstanding.contains('dev-mode dispose'),
+        ),
+        isTrue,
       );
+      expect(
+        h.events.indexOf('devMode.dispose'),
+        lessThan(h.events.indexOf('control.dispose')),
+      );
+    },
+  );
+
+  test(
+    'trajectory drain completes before the resident deadline starts',
+    () async {
+      final h = await _Harness.create(
+        failAt: 'control.dispose.hang',
+        signalShutdown: true,
+        trajectoryDrainDelay: const Duration(milliseconds: 150),
+      );
+      addTearDown(h.dispose);
+      final watch = Stopwatch()..start();
+
+      expect(
+        await h.run(
+          untimed: true,
+          unwindDuration: const Duration(milliseconds: 5350),
+        ),
+        0,
+      );
+      watch.stop();
+
+      expect(
+        h.events,
+        containsAllInOrder([
+          'trajectory.drain.start',
+          'trajectory.drain.done',
+          'control.dispose',
+        ]),
+      );
+      expect(watch.elapsed, greaterThan(const Duration(milliseconds: 200)));
+      expect(watch.elapsed, lessThan(const Duration(seconds: 1)));
     },
   );
 
@@ -1819,23 +1901,57 @@ void main() {
       expect(
         await h.run(
           untimed: true,
-          unwindDuration: const Duration(milliseconds: 50),
+          unwindDuration: const Duration(milliseconds: 5600),
         ),
         0,
       );
 
       expect(
         h.unwindRecords.map((record) => record.step),
-        containsAllInOrder([
-          'control dispose',
-          'grid teardown',
-          'diagnostics dispose',
-          'lock release',
-        ]),
+        containsAllInOrder(['control dispose', 'grid teardown']),
       );
       expect(h.unwindRecords.every((record) => record.startedAt.isUtc), isTrue);
       expect(h.unwindRecords.last.outstanding, contains('control dispose'));
       expect(h.exitCodes, [0]);
+    },
+  );
+
+  test('resident records the production orphanSweep label and preserves the '
+      'lock reserve', () async {
+    final h = await _Harness.create(failAt: 'sweep.hang', signalShutdown: true);
+    addTearDown(h.dispose);
+
+    expect(
+      await h.run(
+        untimed: true,
+        unwindDuration: const Duration(milliseconds: 5600),
+      ),
+      0,
+    );
+
+    expect(h.orphanSweepBudgets.single, lessThan(kOrphanSweepBudget));
+    expect(
+      h.unwindRecords.any(
+        (record) => record.outstanding.contains('orphanSweep'),
+      ),
+      isTrue,
+    );
+    expect(h.exitCodes, [0]);
+  });
+
+  test(
+    'an unwind ownership refusal is published once then suppressed',
+    () async {
+      final h = await _Harness.create(
+        failAt: 'lock.unwind',
+        signalShutdown: true,
+      );
+      addTearDown(h.dispose);
+
+      expect(await h.run(untimed: true), 0);
+
+      expect(h.events.where((event) => event == 'lock.unwind'), hasLength(1));
+      expect('unwind ownership refused'.allMatches(h.stderrText), hasLength(1));
     },
   );
 
@@ -1849,6 +1965,42 @@ void main() {
     expect(h.lockExistedAtExit, isFalse);
     expect(File(h.heldLockPath!).existsSync(), isFalse);
     expect(h.exitCodes, [0]);
+  });
+
+  test('resident releases the station lock when the non-release deadline is '
+      'exhausted', () async {
+    final h = await _Harness.create(signalShutdown: true, useRealLock: true);
+    addTearDown(h.dispose);
+
+    expect(await h.run(untimed: true, unwindDuration: Duration.zero), 0);
+
+    expect(h.heldLockPath, isNotNull);
+    expect(File(h.heldLockPath!).existsSync(), isFalse);
+    expect(h.lockExistedAtExit, isFalse);
+    expect(h.exitCodes, [0]);
+  });
+
+  test('UpCommand returns by default and invokes an injected exiter only after '
+      'release', () async {
+    final returning = await _Harness.create(
+      signalShutdown: true,
+      useRealLock: true,
+    );
+    final exiting = await _Harness.create(
+      signalShutdown: true,
+      useRealLock: true,
+    );
+    addTearDown(returning.dispose);
+    addTearDown(exiting.dispose);
+
+    expect(await returning.run(untimed: true, injectExiter: false), 0);
+    expect(returning.exitCodes, isEmpty);
+    expect(File(returning.heldLockPath!).existsSync(), isFalse);
+
+    expect(await exiting.run(untimed: true), 0);
+    expect(exiting.exitCodes, [0]);
+    expect(exiting.lockExistedAtExit, isFalse);
+    expect(File(exiting.heldLockPath!).existsSync(), isFalse);
   });
 
   group('hot restart routes the live-delegate holder at the COMMIT seam', () {

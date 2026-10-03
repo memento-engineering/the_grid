@@ -133,4 +133,39 @@ void main() {
     expect(record.unwind, isNull);
     expect(record.toJson().containsKey('unwind'), isFalse);
   });
+
+  test(
+    'malformed optional unwind degrades to absent without hiding identity',
+    () {
+      for (final malformed in <Object?>[
+        7,
+        'stuck',
+        <String, Object?>{},
+        <String, Object?>{
+          'step': 'grid teardown',
+          'startedAt': 'not-a-date',
+          'outstanding': <Object?>[],
+        },
+        <String, Object?>{
+          'step': 'grid teardown',
+          'startedAt': '2026-09-17T07:30:00.000Z',
+          'outstanding': <Object?>[7],
+        },
+      ]) {
+        final record = StationLockRecord.fromJson(<String, Object?>{
+          'pid': 41,
+          'pgid': 41,
+          'startedAt': startedAt.toIso8601String(),
+          'controlUrl': 'http://127.0.0.1:8080',
+          'token': 'secret',
+          'unwind': malformed,
+        });
+
+        expect(record.pid, 41);
+        expect(record.controlUrl, 'http://127.0.0.1:8080');
+        expect(record.token, 'secret');
+        expect(record.unwind, isNull);
+      }
+    },
+  );
 }

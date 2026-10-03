@@ -109,6 +109,35 @@ void main() {
   }
 
   test(
+    'timeout ignores a malformed nested unwind on a readable lock',
+    () async {
+      final lock = StationLockRecord(
+        pid: 42,
+        pgid: 42,
+        startedAt: DateTime.utc(2026, 9, 17),
+      ).toJson();
+      lock['unwind'] = <String, Object?>{
+        'step': 'grid teardown',
+        'startedAt': 'broken',
+        'outstanding': <Object?>[],
+      };
+      File(
+        StationLockService.lockPath(temp.path),
+      ).writeAsStringSync(jsonEncode(lock));
+
+      final outcome = await run(const TimedOut(42));
+
+      expect(outcome.code, 1);
+      expect(
+        outcome.err,
+        'lunar down: SIGTERM sent to pid 42 but it did not exit and release '
+        'its lock within the grace window — this client never escalates to '
+        'SIGKILL. Investigate pid 42 directly.\n',
+      );
+    },
+  );
+
+  test(
     'timeout prints lock-backed unwind diagnostics in stored order',
     () async {
       _writeLock(

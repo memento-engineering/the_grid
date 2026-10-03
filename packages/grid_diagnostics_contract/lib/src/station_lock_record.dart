@@ -77,15 +77,7 @@ final class StationLockRecord {
         controlUrl: json['controlUrl'] as String?,
         token: json['token'] as String?,
         vmServiceUri: json['vmServiceUri'] as String?,
-        unwind: switch (json['unwind']) {
-          final Map<String, Object?> value => StationUnwindRecord.fromJson(
-            value,
-          ),
-          null => null,
-          final value => throw FormatException(
-            'Malformed station unwind record: $value',
-          ),
-        },
+        unwind: _unwindFromJson(json['unwind']),
       );
 
   /// The station process id.
@@ -174,6 +166,15 @@ final class StationLockRecord {
     vmServiceUri: vmServiceUri,
     unwind: unwind,
   );
+}
+
+StationUnwindRecord? _unwindFromJson(Object? value) {
+  if (value == null) return null;
+  try {
+    return StationUnwindRecord.fromJson(value as Map<String, Object?>);
+  } on Object {
+    return null;
+  }
 }
 
 StationLifecyclePhase _phaseFromJson(Map<String, Object?> json) {

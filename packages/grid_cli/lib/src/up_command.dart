@@ -118,8 +118,16 @@ abstract interface class LockResource {
 
 /// The mounted grid operations consumed by the resident shell.
 abstract interface class GridResource {
+  /// Rebuilds the mounted grid against the current code.
   Future<ReassembleReport> hotReload();
+
+  /// Replaces the mounted grid's delegate with a freshly booted generation.
   Future<ReassembleReport> hotRestart();
+
+  /// Awaits the delegate-owned trajectory drain on its own configured budget.
+  Future<void> drainTrajectory();
+
+  /// Tears down the mounted grid, optionally clamping its orphan sweep.
   Future<void> teardown({Duration? orphanSweepBudget});
 }
 
@@ -183,7 +191,11 @@ typedef DevModeArmer =
 typedef VmServiceReader = Future<String?> Function();
 typedef ShutdownWaiter = Future<void> Function();
 
-/// Terminates the resident process after its bounded unwind.
+/// Terminates the resident process after confirmed lock release.
+///
+/// Library callers omit this and receive the computed return code. A composing
+/// executable may inject process termination so detached development listeners
+/// or subprocess handles cannot keep its resident isolate alive.
 typedef ProcessExiter = void Function(int code);
 
 /// Supplies wall-clock timestamps for lock-backed unwind diagnostics.
@@ -257,7 +269,7 @@ class UpCommand extends Command<int> {
        _readStateStoreTypes =
            readStateStoreTypes ?? _defaultReadStateStoreTypes,
        _waitForShutdown = waitForShutdown ?? _waitForTerminationSignal,
-       _exiter = exiter ?? exit,
+       _exiter = exiter,
        _unwindDuration = unwindDuration,
        _clock = clock ?? DateTime.now {
     if (_harnessAllowList.isEmpty) {
@@ -292,7 +304,7 @@ class UpCommand extends Command<int> {
   final PrimaryCheckoutInspector _inspectPrimaryCheckout;
   final StateStoreTypesReader _readStateStoreTypes;
   final ShutdownWaiter _waitForShutdown;
-  final ProcessExiter _exiter;
+  final ProcessExiter? _exiter;
   final Duration _unwindDuration;
   final StationClock _clock;
 
@@ -541,12 +553,21 @@ class UpCommand extends Command<int> {
     // disposed only after the tree unmounts.
     final diagnostics = StationDiagnosticsReporter(writeLine: stderr.writeln);
     final treeProjector = diagnostics.treeProjector;
+    List<String>? activeUnwindOutstanding;
 
     final GridResource grid;
     try {
       grid = await _runMountedGrid(
         delegate,
-        onError: (refusal) => diagnostics.flare(refusal.name, refusal.data),
+        onError: (refusal) {
+          diagnostics.flare(refusal.name, refusal.data);
+          if (refusal.hook == 'orphanSweep') {
+            final outstanding = activeUnwindOutstanding;
+            if (outstanding != null && !outstanding.contains(refusal.hook)) {
+              outstanding.add(refusal.hook);
+            }
+          }
+        },
         onFlushed: () => live.afterFlush(),
         orphanSweep: () => live.sweepOrphans(),
         onDelegateSwapped: (next) => live = next,
@@ -570,21 +591,39 @@ class UpCommand extends Command<int> {
       return 64;
     }
 
-    // Runs the shell-owned terminal unwind under one total deadline, releases
-    // the lock last, then terminates the process explicitly. The trajectory
-    // drain remains owned by the delegate on its configured budget; the
-    // caller-supplied budget clamps the orphan sweep before that drain starts.
+    // Runs the shell-owned terminal unwind. The delegate-owned trajectory
+    // drain finishes first on its own configured budget; only then does the
+    // total resident deadline begin for the remaining steps. A fixed share is
+    // reserved for lock release throughout that tail.
     Future<int> terminalUnwind({
       required int exitCode,
       ControlResource? control,
       DevModeResource? devMode,
     }) async {
-      final deadline = UnwindDeadline(_unwindDuration);
       final outstanding = <String>[];
       final stores = List<StoreConnection>.of(live.openStores);
+      activeUnwindOutstanding = outstanding;
+
+      await settle(
+        'trajectory drain',
+        grid.drainTrajectory,
+        onRefusal: reportUnwindRefusal,
+      );
+
+      final deadline = UnwindDeadline(_unwindDuration);
+      var publishEnabled = true;
 
       Future<void> publish(String step) async {
-        await settle(
+        if (!publishEnabled) return;
+        final budget = deadline.budget(
+          const Duration(milliseconds: 250),
+          reserve: kUnwindStepBudget,
+        );
+        if (budget == Duration.zero) {
+          publishEnabled = false;
+          return;
+        }
+        final published = await settle(
           'lock unwind update ($step)',
           () => stationLock.updateUnwind(
             StationUnwindRecord(
@@ -593,50 +632,55 @@ class UpCommand extends Command<int> {
               outstanding: outstanding,
             ),
           ),
-          within: deadline.budget(kUnwindStepBudget),
+          within: budget,
           onRefusal: reportUnwindRefusal,
         );
+        if (!published) publishEnabled = false;
       }
 
       Future<void> boundedStep(
         String name,
-        FutureOr<void> Function() action,
-      ) async {
+        FutureOr<void> Function() action, {
+        Duration within = kUnwindStepBudget,
+        bool reserveDiagnostic = true,
+      }) async {
         await publish(name);
         await settle(
           name,
           action,
-          within: deadline.budget(kUnwindStepBudget),
+          within: deadline.budget(
+            within,
+            reserve: reserveDiagnostic
+                ? kUnwindStepBudget + const Duration(milliseconds: 250)
+                : kUnwindStepBudget,
+          ),
           onRefusal: reportUnwindRefusal,
-          onTimeout: (step, _) => outstanding.add(step),
+          onTimeout: (step, _) {
+            if (!outstanding.contains(step)) outstanding.add(step);
+          },
         );
       }
 
       if (devMode case final host?) {
-        final listener = 'dev-mode listener ${host.vmServiceUri} (detached)';
-        outstanding.add(listener);
-        unawaited(
-          Future<void>.sync(host.dispose).then<void>(
-            (_) => outstanding.remove(listener),
-            onError: (Object error, StackTrace stackTrace) {
-              reportUnwindRefusal(
-                'unwind step "dev-mode dispose" failed: $error',
-              );
-            },
-          ),
+        await boundedStep(
+          'dev-mode dispose',
+          host.dispose,
+          within: const Duration(milliseconds: 250),
         );
       }
       if (control != null) {
         await boundedStep('control dispose', control.dispose);
       }
 
-      await publish('grid teardown');
-      await settle(
+      await boundedStep(
         'grid teardown',
         () => grid.teardown(
-          orphanSweepBudget: deadline.budget(kOrphanSweepBudget),
+          orphanSweepBudget: deadline.budget(
+            kOrphanSweepBudget,
+            reserve: kUnwindStepBudget + const Duration(milliseconds: 250),
+          ),
         ),
-        onRefusal: reportUnwindRefusal,
+        reserveDiagnostic: false,
       );
 
       await boundedStep('diagnostics dispose', diagnostics.dispose);
@@ -646,6 +690,7 @@ class UpCommand extends Command<int> {
         final storeReport = await closeStoreConnections(
           stores,
           deadline: deadline,
+          reserve: kUnwindStepBudget,
           onRefusal: reportUnwindRefusal,
         );
         for (final line in storeReport.narrative) {
@@ -657,14 +702,17 @@ class UpCommand extends Command<int> {
       }
 
       await publish('lock release');
-      await settle(
+      final released = await settle(
         'lock release',
         stationLock.release,
-        within: deadline.remaining,
+        within: kUnwindStepBudget,
         onRefusal: reportUnwindRefusal,
-        onTimeout: (step, _) => outstanding.add(step),
+        onTimeout: (step, _) {
+          if (!outstanding.contains(step)) outstanding.add(step);
+        },
       );
-      _exiter(exitCode);
+      activeUnwindOutstanding = null;
+      if (released) _exiter?.call(exitCode);
       return exitCode;
     }
 
@@ -975,6 +1023,8 @@ final class _GridResource implements GridResource {
   Future<ReassembleReport> hotReload() => _handle.hotReload();
   @override
   Future<ReassembleReport> hotRestart() => _handle.hotRestart();
+  @override
+  Future<void> drainTrajectory() => _handle.drainTrajectory();
   @override
   Future<void> teardown({Duration? orphanSweepBudget}) =>
       _handle.teardown(orphanSweepBudget: orphanSweepBudget);

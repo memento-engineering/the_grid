@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -334,6 +335,67 @@ void main() {
         expect(_readRecord(handle.path).pid, 8888);
       },
     );
+
+    test('a late unwind publish is serialized before terminal release and '
+        'cannot resurrect the lock', () async {
+      final store = _tempStore();
+      final updateEntered = Completer<void>();
+      final allowUpdate = Completer<void>();
+      final events = <String>[];
+      var modeCalls = 0;
+      final handle =
+          await StationLockService(
+            isPidAlive: (_) => true,
+            log: (_) {},
+            prepareProcessGroup: (stationPid) async => stationPid,
+            setMode: (path) async {
+              modeCalls++;
+              if (modeCalls == 2) {
+                events.add('update entered');
+                updateEntered.complete();
+                await allowUpdate.future;
+                events.add('update released');
+              } else if (modeCalls == 3) {
+                events.add('release entered');
+              }
+              await defaultChmod600(path);
+            },
+          ).acquire(
+            stateWorkspaceDir: store.path,
+            pid: 7777,
+            now: DateTime.utc(2026, 7, 2, 12),
+          );
+
+      final update = handle.updateUnwind(
+        StationUnwindRecord(
+          step: 'grid teardown',
+          startedAt: DateTime.utc(2026, 9, 17),
+          outstanding: const [],
+        ),
+      );
+      await updateEntered.future;
+      final release = handle.release();
+      await expectLater(
+        handle.updateUnwind(
+          StationUnwindRecord(
+            step: 'too late',
+            startedAt: DateTime.utc(2026, 9, 17),
+            outstanding: const [],
+          ),
+        ),
+        throwsStateError,
+      );
+      expect(events, ['update entered']);
+
+      allowUpdate.complete();
+      await update;
+      await release;
+
+      expect(events, ['update entered', 'update released', 'release entered']);
+      expect(File(handle.path).existsSync(), isFalse);
+      await Future<void>.delayed(Duration.zero);
+      expect(File(handle.path).existsSync(), isFalse);
+    });
 
     test('group preparation failure is loud and writes no lock', () async {
       final store = _tempStore();

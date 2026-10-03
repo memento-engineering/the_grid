@@ -343,6 +343,8 @@ class StationLockHandle {
   final ModeSetter _applyMode;
   final void Function(String) _log;
   StationLockRecord _record;
+  Future<void> _operations = Future<void>.value();
+  Future<void>? _release;
 
   /// The lock file path.
   String get path => _file.path;
@@ -356,11 +358,11 @@ class StationLockHandle {
   Future<void> updateControl({
     required String controlUrl,
     required String token,
-  }) => _replace(
-    _record
+  }) => _enqueueRewrite(
+    'updateControl',
+    (record) => record
         .withControl(controlUrl: controlUrl, token: token)
         .withPhase(StationLifecyclePhase.live),
-    'updateControl',
   );
 
   /// Advertises this station's VM service: replaces the lock with
@@ -368,13 +370,33 @@ class StationLockHandle {
   /// auth code, so the replacement is 0600 like every other). A JIT runner
   /// calls it with `grid_exploration`'s `stationVmServiceUri()`; an AOT runner
   /// never does. Throws a [StationRefusal] when the on-disk record is not ours.
-  Future<void> updateVmService(String vmServiceUri) =>
-      _replace(_record.withVmService(vmServiceUri), 'updateVmService');
+  Future<void> updateVmService(String vmServiceUri) => _enqueueRewrite(
+    'updateVmService',
+    (record) => record.withVmService(vmServiceUri),
+  );
 
   /// Publishes the resident's current terminal-unwind state, preserving the
   /// lock identity and every control or development advertisement.
   Future<void> updateUnwind(StationUnwindRecord unwind) =>
-      _replace(_record.withUnwind(unwind), 'updateUnwind');
+      _enqueueRewrite('updateUnwind', (record) => record.withUnwind(unwind));
+
+  Future<void> _enqueueRewrite(
+    String verb,
+    StationLockRecord Function(StationLockRecord record) update,
+  ) {
+    if (_release != null) {
+      return Future<void>.error(
+        StateError('station.lock is releasing; $verb is no longer allowed'),
+      );
+    }
+    return _enqueue(() => _replace(update(_record), verb));
+  }
+
+  Future<void> _enqueue(Future<void> Function() operation) {
+    final next = _operations.then((_) => operation());
+    _operations = next.then<void>((_) {}, onError: (_, _) {});
+    return next;
+  }
 
   /// Ownership-verified atomic replacement: re-read the lock, refuse LOUDLY
   /// unless it is still ours, then publish [next] by temp + chmod + rename.
@@ -408,7 +430,9 @@ class StationLockHandle {
   /// unreadable record is left alone with a LOUD line: deleting it would evict
   /// the supervisor that re-minted it. Idempotent — the graceful path and the
   /// start-throw unwind may both reach it.
-  Future<void> release() async {
+  Future<void> release() => _release ??= _enqueue(_release0);
+
+  Future<void> _release0() async {
     if (!await _file.exists()) return;
     final disk = await readStationLockRecord(_file);
     if (!_isOurs(disk)) {
