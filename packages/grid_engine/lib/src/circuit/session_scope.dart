@@ -281,6 +281,10 @@ class SessionScopeState extends State<SessionScope>
         sessionId: sessionId,
         reapMolecule: _isMolecule,
         services: _services,
+        beforeAttemptRelease: () => _retireAttemptBeforeRelease(
+          sessionId: sessionId,
+          reason: 'reworked',
+        ),
       );
       // §2.3's `attempt.round.retired` row, second observation site: the
       // command handler saw the re-key, this scope sees the retired round
@@ -320,6 +324,7 @@ class SessionScopeState extends State<SessionScope>
   /// is why nothing below ever asks whether the trajectory is up.
   StationTrajectoryRecorder _recorder =
       TrajectoryRecorderScope.disabled.recorder;
+  final Map<String, Future<void>> _attemptRetirementsBySessionId = {};
 
   /// The ambient [ServiceBundle] captured off `build` (D-H rule 1: re-read on
   /// every `didChangeDependencies`, never `??=`-cached) — held so the off-build
@@ -820,6 +825,10 @@ class SessionScopeState extends State<SessionScope>
             deadSession: dead,
             reason: _voidReason,
             services: _services,
+            beforeAttemptRelease: () => _retireAttemptBeforeRelease(
+              sessionId: deadId,
+              reason: _voidReason,
+            ),
           );
           if (refusal != null) {
             _mintAttempts--;
@@ -830,17 +839,6 @@ class SessionScopeState extends State<SessionScope>
             });
             return;
           }
-          // §2.3's `attempt.terminal(lost)` row: the DEAD KEY's terminal, and
-          // the round it retires. The record carries the ORIGINAL work bead id
-          // while the legacy write is re-keying the dead session onto
-          // `#void-<sessionId>` — intact keys are the whole point of the row.
-          await _recordTerminal(
-            _recorder.sessionVoided(
-              sessionId: deadId,
-              workBeadId: seed.bead.id,
-              reason: _voidReason,
-            ),
-          );
           // The retired round is DERIVED, never a bare 0 default (§2.1's
           // recoverable-only rule): the dead projection's own work_bead key
           // carries the `#rN` shape when the void landed on a reworked round
@@ -972,15 +970,12 @@ class SessionScopeState extends State<SessionScope>
         sessionId: id,
         rootCrumbs: root.crumbs,
         services: _services,
-      );
-    } on StationMintVoided catch (voided) {
-      await _recordTerminal(
-        _recorder.sessionVoided(
-          sessionId: voided.retiredSessionId,
-          workBeadId: voided.workBeadId,
+        beforeAttemptRelease: () => _retireAttemptBeforeRelease(
+          sessionId: id!,
           reason: kMintTimeoutVoidReason,
         ),
       );
+    } on StationMintVoided catch (voided) {
       _recorder.roundRetired(
         sessionId: voided.retiredSessionId,
         cause: RoundRetireCause.voided,
@@ -1242,15 +1237,15 @@ class SessionScopeState extends State<SessionScope>
       reservationToken: reservationToken,
       services: _services,
       blockUntilFreshReady: blockUntilFreshReady,
-    );
-    if (retiredMintSessionId != null) {
-      await _recordTerminal(
-        _recorder.sessionVoided(
-          sessionId: retiredMintSessionId,
-          workBeadId: seed.bead.id,
+      beforeAttemptRelease: switch (_moleculeSessionId) {
+        final sessionId? => () => _retireAttemptBeforeRelease(
+          sessionId: sessionId,
           reason: 'mint-abandoned',
         ),
-      );
+        null => null,
+      },
+    );
+    if (retiredMintSessionId != null) {
       _recorder.roundRetired(
         sessionId: retiredMintSessionId,
         cause: RoundRetireCause.voided,
@@ -1831,6 +1826,10 @@ class SessionScopeState extends State<SessionScope>
         sessionId: sessionId,
         rootCrumbs: root.crumbs,
         services: _services,
+        beforeAttemptRelease: () => _retireAttemptBeforeRelease(
+          sessionId: sessionId,
+          reason: kMintTimeoutVoidReason,
+        ),
       );
     } on Object catch (error) {
       // Same terminal park as the fresh-mint path: the session bead EXISTS
@@ -2220,6 +2219,20 @@ class SessionScopeState extends State<SessionScope>
       recordClass: 'attempt.terminal',
     );
   }
+
+  Future<void> _retireAttemptBeforeRelease({
+    required String sessionId,
+    required String reason,
+  }) => _attemptRetirementsBySessionId.putIfAbsent(
+    sessionId,
+    () => _recordTerminal(
+      _recorder.sessionVoided(
+        sessionId: sessionId,
+        workBeadId: seed.bead.id,
+        reason: reason,
+      ),
+    ),
+  );
 
   @override
   void dispose() {
