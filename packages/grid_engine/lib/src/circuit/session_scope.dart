@@ -276,25 +276,19 @@ class SessionScopeState extends State<SessionScope>
 
   Future<void> _closeRetiredReworkSession(String sessionId) async {
     try {
+      final retiringRound = switch (_retiredReworkRound) {
+        final round? when round > 0 => round - 1,
+        _ => throw StateError(
+          'rework retirement requires the captured predecessor round',
+        ),
+      };
       await _ctx!.admission.closeRetiredReworkSession(
         workBeadId: seed.bead.id,
         sessionId: sessionId,
+        retiredRound: retiringRound,
         reapMolecule: _isMolecule,
         services: _services,
       );
-      // §2.3's `attempt.round.retired` row, second observation site: the
-      // command handler saw the re-key, this scope sees the retired round
-      // CLOSE. One retire, two observers, ONE record — the idem key is
-      // `round-retired:<session>:<oldRound>`, so whichever lands first wins
-      // and the other dedupes. `_retiredReworkRound` is the NEW round the
-      // `#rN` key names, so the round being retired is one below it.
-      if (_retiredReworkRound case final round?) {
-        _recorder.roundRetired(
-          sessionId: sessionId,
-          cause: RoundRetireCause.rework,
-          oldRound: round - 1,
-        );
-      }
     } on Object catch (error) {
       _flare('gate.autoCloseFailed', {
         'sessionId': sessionId,
@@ -830,17 +824,6 @@ class SessionScopeState extends State<SessionScope>
             });
             return;
           }
-          // §2.3's `attempt.terminal(lost)` row: the DEAD KEY's terminal, and
-          // the round it retires. The record carries the ORIGINAL work bead id
-          // while the legacy write is re-keying the dead session onto
-          // `#void-<sessionId>` — intact keys are the whole point of the row.
-          await _recordTerminal(
-            _recorder.sessionVoided(
-              sessionId: deadId,
-              workBeadId: seed.bead.id,
-              reason: _voidReason,
-            ),
-          );
           // The retired round is DERIVED, never a bare 0 default (§2.1's
           // recoverable-only rule): the dead projection's own work_bead key
           // carries the `#rN` shape when the void landed on a reworked round
@@ -974,13 +957,6 @@ class SessionScopeState extends State<SessionScope>
         services: _services,
       );
     } on StationMintVoided catch (voided) {
-      await _recordTerminal(
-        _recorder.sessionVoided(
-          sessionId: voided.retiredSessionId,
-          workBeadId: voided.workBeadId,
-          reason: kMintTimeoutVoidReason,
-        ),
-      );
       _recorder.roundRetired(
         sessionId: voided.retiredSessionId,
         cause: RoundRetireCause.voided,
@@ -1244,13 +1220,6 @@ class SessionScopeState extends State<SessionScope>
       blockUntilFreshReady: blockUntilFreshReady,
     );
     if (retiredMintSessionId != null) {
-      await _recordTerminal(
-        _recorder.sessionVoided(
-          sessionId: retiredMintSessionId,
-          workBeadId: seed.bead.id,
-          reason: 'mint-abandoned',
-        ),
-      );
       _recorder.roundRetired(
         sessionId: retiredMintSessionId,
         cause: RoundRetireCause.voided,

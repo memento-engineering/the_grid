@@ -6,7 +6,7 @@
 //
 //   1. the record derives AFTER the legacy write it shadows returned
 //      successfully — the shadow never leads the incumbent;
-//   2. ordinary observations remain enqueue-only; the five decision-bearing
+//   2. ordinary observations remain enqueue-only; the six decision-bearing
 //      sites await the bounded sealed acknowledgement after their legacy write;
 //   3. it is NON-FATAL — a recorder that REFUSES (latched/degraded/disabled)
 //      or THROWS leaves the legacy path byte-identical. That is the falsifier
@@ -1364,7 +1364,8 @@ void main() {
       'a LIVE re-key retires the round the #rN key names, minus one',
       () async {
         final sink = _CapturingSink();
-        final fakes = buildFakes();
+        final recorder = _recorderOver(sink);
+        final fakes = buildFakes(trajectoryRecorder: recorder);
         fakes.runner.exportBeads = const [
           Bead(
             id: 'tgdog-s',
@@ -1379,7 +1380,12 @@ void main() {
             sessions: {'tg-1': live('tgdog-s', 'tg-1')},
           ),
         );
-        final owner = _mountFull(joined: joined, ctx: fakes.ctx, sink: sink);
+        final owner = _mountFull(
+          joined: joined,
+          ctx: fakes.ctx,
+          sink: sink,
+          recorder: recorder,
+        );
         addTearDown(owner.dispose);
 
         // The operator's `grid rework` re-keyed the session onto `tg-1#r2`;
@@ -1537,8 +1543,8 @@ void main() {
     test('a VOID retire derives old_round from recoverable state (§2.1), never '
         'a bare 0 default', () async {
       final sink = _CapturingSink();
-      final fakes = buildFakes();
       final recorder = _recorderOver(sink);
+      final fakes = buildFakes(trajectoryRecorder: recorder);
       // The recoverable state: this boot observed the dead session's round
       // (the recorder\'s round ladder — seeded at mint, or by boot
       // recovery from the log).

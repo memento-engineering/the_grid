@@ -279,6 +279,19 @@ final class _UnsnapshottedReservation {
   bool minting = false;
 }
 
+typedef _RetirementIdentity = ({
+  String sessionId,
+  String recordClass,
+  String discriminator,
+});
+
+final class _RetirementFence {
+  const _RetirementFence({required this.identity, required this.future});
+
+  final _RetirementIdentity identity;
+  final Future<void> future;
+}
+
 final class _LostSessionRetirement {
   _LostSessionRetirement({required this.workBeadId, required this.attemptId})
     : completer = Completer<String>() {
@@ -412,6 +425,10 @@ final class StationAdmissionAuthority {
   // In-flight liveness-loss cuts are unavailable from JoinedSnapshot.
   final Map<String, _LostSessionRetirement> _lostSessionRetirements =
       <String, _LostSessionRetirement>{};
+  // Durable retirements fence only successor creation. The entry is keyed by
+  // work bead so it also covers the window before a replacement reservation.
+  final Map<String, _RetirementFence> _retirementFencesByWorkBead =
+      <String, _RetirementFence>{};
   // Cancellation quarantine persists until a later snapshot proves readiness.
   final Set<String> _blockedUntilFreshReady = <String>{};
   // Operator voids in flight or awaiting their first unlinked observation are
@@ -1353,16 +1370,33 @@ final class StationAdmissionAuthority {
     }
     final deadId = deadSession.sessionId ?? '';
     if (deadId.isEmpty) return null;
-    await _writer.update(
-      deadId,
-      metadata: voidRetireMetadata(
+    await _retireWithFence(
+      workBeadId: workBead.id,
+      identity: (
+        sessionId: deadId,
+        recordClass: 'attempt.terminal',
+        discriminator: reason,
+      ),
+      retire: () async {
+        await _writer.update(
+          deadId,
+          metadata: voidRetireMetadata(
+            workBeadId: workBead.id,
+            deadSessionId: deadId,
+            reason: reason,
+          ),
+        );
+      },
+      release: () {
+        _releaseSession(workBead.id, deadId);
+        _notifyListeners();
+      },
+      acknowledge: () => _trajectoryRecorder.sessionVoided(
+        sessionId: deadId,
         workBeadId: workBead.id,
-        deadSessionId: deadId,
         reason: reason,
       ),
     );
-    _releaseSession(workBead.id, deadId);
-    _notifyListeners();
     return null;
   }
 
@@ -1375,6 +1409,7 @@ final class StationAdmissionAuthority {
     required String title,
     required Map<String, String> metadata,
   }) async {
+    await _consumeRetirementFence(candidate.bead.id);
     final live = <String, SessionProjection>{};
     final linked = _effectiveLinkedSessions(snapshot, candidate.bead.id);
     for (var index = 0; index < linked.length; index += 1) {
@@ -1637,22 +1672,113 @@ final class StationAdmissionAuthority {
     required ServiceBundle services,
     required bool retryAfterClose,
   }) async {
-    await _bestEffortReap(sessionId, reason, services);
-    await _writer.update(
-      sessionId,
-      metadata: voidRetireMetadata(
+    await _retireWithFence(
+      workBeadId: workBeadId,
+      identity: (
+        sessionId: sessionId,
+        recordClass: 'attempt.terminal',
+        discriminator: reason,
+      ),
+      retire: () async {
+        await _bestEffortReap(sessionId, reason, services);
+        await _writer.update(
+          sessionId,
+          metadata: voidRetireMetadata(
+            workBeadId: workBeadId,
+            deadSessionId: sessionId,
+            reason: reason,
+          ),
+        );
+        await _writer.close(sessionId, reason: reason);
+      },
+      release: () {
+        _releaseSession(workBeadId, sessionId);
+        if (retryAfterClose) {
+          _scheduleRetryInvalidation(workBeadId);
+        }
+        _notifyListeners();
+      },
+      acknowledge: () => _trajectoryRecorder.sessionVoided(
+        sessionId: sessionId,
         workBeadId: workBeadId,
-        deadSessionId: sessionId,
         reason: reason,
       ),
     );
-    await _writer.close(sessionId, reason: reason);
-    _releaseSession(workBeadId, sessionId);
-    if (retryAfterClose) {
-      _scheduleRetryInvalidation(workBeadId);
-    }
-    _notifyListeners();
     return sessionId;
+  }
+
+  Future<void> _retireWithFence({
+    required String workBeadId,
+    required _RetirementIdentity identity,
+    required Future<void> Function() retire,
+    required void Function() release,
+    required Future<TrajectoryAppendResult> Function() acknowledge,
+  }) {
+    final previous = _retirementFencesByWorkBead[workBeadId];
+    if (previous?.identity == identity) return previous!.future;
+    final completer = Completer<void>();
+    final fence = _RetirementFence(
+      identity: identity,
+      future: completer.future,
+    );
+    _retirementFencesByWorkBead[workBeadId] = fence;
+    unawaited(() async {
+      try {
+        final retirement = _performRetirement(
+          retire: retire,
+          release: release,
+          acknowledge: acknowledge,
+          recordClass: identity.recordClass,
+        );
+        final prior = previous?.future;
+        if (prior == null) {
+          await retirement;
+        } else {
+          await Future.wait<void>([prior, retirement], eagerError: true);
+        }
+        completer.complete();
+      } on Object catch (error, stackTrace) {
+        if (identical(_retirementFencesByWorkBead[workBeadId], fence)) {
+          _retirementFencesByWorkBead.remove(workBeadId);
+        }
+        completer.completeError(error, stackTrace);
+      }
+    }());
+    return completer.future;
+  }
+
+  Future<void> _performRetirement({
+    required Future<void> Function() retire,
+    required void Function() release,
+    required Future<TrajectoryAppendResult> Function() acknowledge,
+    required String recordClass,
+  }) async {
+    await retire();
+    release();
+    final result = await acknowledge();
+    final halt = _trajectoryAdmissionHalt;
+    if (halt == null) return;
+    await halt.handleTerminalResult(result, recordClass: recordClass);
+    switch (result) {
+      case Acked():
+        return;
+      case Dropped():
+        throw StateError('$recordClass acknowledgement was dropped');
+      case Suppressed():
+        throw StateError('$recordClass acknowledgement was suppressed');
+    }
+  }
+
+  Future<void> _consumeRetirementFence(String workBeadId) async {
+    while (true) {
+      final fence = _retirementFencesByWorkBead[workBeadId];
+      if (fence == null) return;
+      await fence.future;
+      if (identical(_retirementFencesByWorkBead[workBeadId], fence)) {
+        _retirementFencesByWorkBead.remove(workBeadId);
+        return;
+      }
+    }
   }
 
   /// Writes [outcomeMetadata] when [outcomeMarked] is false; on the true call,
@@ -1685,23 +1811,41 @@ final class StationAdmissionAuthority {
   Future<void> closeRetiredReworkSession({
     required String workBeadId,
     required String sessionId,
+    required int retiredRound,
     required bool reapMolecule,
     required ServiceBundle services,
   }) async {
-    if (reapMolecule) {
-      await _bestEffortReap(sessionId, 'reworked', services);
-    }
-    await _writer.closeSessionAndOpenGatesForTerminal(
-      sessionId: sessionId,
-      closeReason: 'reworked',
-      trigger: GateCloseCause.supersededRound,
+    await _retireWithFence(
+      workBeadId: workBeadId,
+      identity: (
+        sessionId: sessionId,
+        recordClass: 'attempt.round.retired',
+        discriminator: '$retiredRound',
+      ),
+      retire: () async {
+        if (reapMolecule) {
+          await _bestEffortReap(sessionId, 'reworked', services);
+        }
+        await _writer.closeSessionAndOpenGatesForTerminal(
+          sessionId: sessionId,
+          closeReason: 'reworked',
+          trigger: GateCloseCause.supersededRound,
+        );
+      },
+      release: () {
+        final reservation = _reservations[workBeadId];
+        if (reservation?.reclaimedSessionId == sessionId) {
+          reservation!.reclaimedSessionClosed = true;
+        }
+        _releaseSession(workBeadId, sessionId);
+        _notifyListeners();
+      },
+      acknowledge: () => _trajectoryRecorder.roundRetiredAcked(
+        sessionId: sessionId,
+        cause: RoundRetireCause.rework,
+        oldRound: retiredRound,
+      ),
     );
-    final reservation = _reservations[workBeadId];
-    if (reservation?.reclaimedSessionId == sessionId) {
-      reservation!.reclaimedSessionClosed = true;
-    }
-    _releaseSession(workBeadId, sessionId);
-    _notifyListeners();
   }
 
   /// Settles a live session whose work bead went terminal, including its gate

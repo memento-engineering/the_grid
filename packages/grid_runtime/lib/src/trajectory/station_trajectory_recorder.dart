@@ -14,9 +14,9 @@
 ///     legacy write it shadows has returned successfully (the recorder appends
 ///     only on legacy success, so the shadow never leads the incumbent);
 ///   * ordinary observations remain synchronous `void`; only `stepRunning`,
-///     `stepRearmed`, and the three decision-bearing session terminals expose
-///     an acknowledgement, while all other sites retain enqueue-never-await
-///     semantics;
+///     `stepRearmed`, the three decision-bearing session terminals, and
+///     `roundRetiredAcked` expose an acknowledgement, while all other sites
+///     retain enqueue-never-await semantics;
 ///   * every method is NON-FATAL by construction — derivation is wrapped, a
 ///     throw is counted and flared (`trajectory.deriveFailed`), and the legacy
 ///     path is entirely unaffected (§3).
@@ -940,20 +940,32 @@ class StationTrajectoryRecorder {
     DateTime? occurredAt,
   }) {
     _observe('roundRetired', () {
-      final old = oldRound ?? _rounds[sessionId] ?? 0;
-      final next = old + 1;
-      _rounds[sessionId] = next;
-      _enqueue(
-        AttemptRoundRetired(
-          sessionId: sessionId,
-          oldRound: old,
-          newRound: next,
-          cause: cause,
-        ),
-        occurredAt: occurredAt,
+      final derived = _deriveRoundRetired(
+        sessionId: sessionId,
+        cause: cause,
+        oldRound: oldRound,
       );
+      _enqueue(derived.record, occurredAt: occurredAt);
     });
   }
+
+  /// The decision-bearing form of [roundRetired]. Under the cut, callers wait
+  /// for the existing record's sealed append disposition before admitting a
+  /// successor; shadow keeps the harness-owned enqueue-only latency policy.
+  Future<TrajectoryAppendResult> roundRetiredAcked({
+    required String sessionId,
+    required RoundRetireCause cause,
+    int? oldRound,
+    DateTime? occurredAt,
+  }) => _observeAcked(
+    'roundRetiredAcked',
+    () => _deriveRoundRetired(
+      sessionId: sessionId,
+      cause: cause,
+      oldRound: oldRound,
+    ),
+    occurredAt: occurredAt,
+  );
 
   /// `attempt.rework_declined` — after the HELD merge.
   void reworkDeclined({
@@ -1877,6 +1889,24 @@ class StationTrajectoryRecorder {
   );
 
   // ── internals ────────────────────────────────────────────────────────────
+
+  DerivedRecord _deriveRoundRetired({
+    required String sessionId,
+    required RoundRetireCause cause,
+    int? oldRound,
+  }) {
+    final old = oldRound ?? _rounds[sessionId] ?? 0;
+    final next = old + 1;
+    _rounds[sessionId] = next;
+    return DerivedRecord(
+      AttemptRoundRetired(
+        sessionId: sessionId,
+        oldRound: old,
+        newRound: next,
+        cause: cause,
+      ),
+    );
+  }
 
   /// The non-fatal wrapper every observation rides (§3): skipped when the
   /// sink is latched/disabled, counted + flared on a derivation throw, never

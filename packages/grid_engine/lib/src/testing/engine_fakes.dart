@@ -824,6 +824,7 @@ Fakes buildFakes({
   List<String>? eventLog,
   int maxConcurrentWork = kDefaultMaxConcurrentWork,
   WorkBeadLandGate? deliveryGate,
+  StationTrajectoryRecorder? trajectoryRecorder,
 }) {
   final runner = RecordingBdRunner(createdId: createdId, eventLog: eventLog);
   final provider = FakeRuntimeProvider();
@@ -849,6 +850,7 @@ Fakes buildFakes({
       workSignal: workSignal,
       // The fresh-status delivery gate (tg-b1t8) — null leaves it inert.
       deliveryGate: deliveryGate,
+      trajectoryRecorder: trajectoryRecorder,
     ),
     runner: runner,
     provider: provider,

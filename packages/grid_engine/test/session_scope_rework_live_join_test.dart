@@ -78,7 +78,11 @@ final class _ThrowingGateUpdateRunner extends RecordingBdRunner {
   }
 }
 
-Fakes _fakesOver(RecordingBdRunner runner, {ExplorationTransport? transport}) {
+Fakes _fakesOver(
+  RecordingBdRunner runner, {
+  ExplorationTransport? transport,
+  StationTrajectoryRecorder? trajectoryRecorder,
+}) {
   final provider = FakeRuntimeProvider();
   final git = RecordingGitRunner();
   final pr = FakePrOpener();
@@ -92,6 +96,7 @@ Fakes _fakesOver(RecordingBdRunner runner, {ExplorationTransport? transport}) {
         onFlare: transport?.flare,
       ),
       stateSubstation: stateSubstation,
+      trajectoryRecorder: trajectoryRecorder,
     ),
     runner: runner,
     provider: provider,
@@ -512,7 +517,6 @@ void main() {
       () async {
         final runner = RecordingBdRunner(createdId: 'tgdog-round2');
         final transport = _RecordingTransport();
-        final f = _fakesOver(runner, transport: transport);
         final registry = RecordingCapabilityRegistry(circuits: const {});
         final retired = Bead(
           id: 'tgdog-round1',
@@ -537,6 +541,11 @@ void main() {
               cause: RoundRetireCause.rework,
               oldRound: 0,
             );
+        final f = _fakesOver(
+          runner,
+          transport: transport,
+          trajectoryRecorder: recorder,
+        );
         final workSrc = FakeSnapshotSource(
           _work(const [_approvedWorkBead], {'tg-1'}),
         );

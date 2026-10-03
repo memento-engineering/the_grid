@@ -1,16 +1,20 @@
+import 'dart:async';
+
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
-import 'package:grid_sdk/grid_sdk.dart';
+import 'package:grid_sdk/grid_sdk.dart' hide SubstationConfig;
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:test/test.dart';
 
 final class _AckSink implements TrajectoryAckRecordSink {
-  _AckSink({List<TrajectoryAppendResult>? results})
+  _AckSink({List<TrajectoryAppendResult>? results, this.onAppend})
     : results = results ?? [const TrajectoryAppendResult.acked()];
 
   final List<TrajectoryAppendResult> results;
+  final Future<TrajectoryAppendResult> Function(TrajectoryRecord record)?
+  onAppend;
   final List<TrajectoryRecord> enqueued = <TrajectoryRecord>[];
   final List<TrajectoryRecord> acknowledged = <TrajectoryRecord>[];
 
@@ -36,6 +40,8 @@ final class _AckSink implements TrajectoryAckRecordSink {
     required bool decisionBearing,
   }) async {
     acknowledged.add(record);
+    final callback = onAppend;
+    if (callback != null) return callback(record);
     return results.removeAt(0);
   }
 }
@@ -71,6 +77,23 @@ Bead _session(
   metadata: {SessionBeadKeys.workBead: workKey},
 );
 
+Bead _work(String id) =>
+    Bead(id: id, issueType: IssueType.task, status: BeadStatus.open);
+
+JoinedSnapshot _joined(Bead work, {SessionProjection? session}) =>
+    JoinedSnapshot(
+      graph: _snapshot([work]),
+      sessionsByWorkBead: session == null ? const {} : {work.id: session},
+    );
+
+const _config = SubstationConfig(
+  substationId: 'tg',
+  ownedSubstations: {'tg'},
+  maxConcurrentWork: 1,
+);
+
+Future<void> _pump() => Future<void>.delayed(Duration.zero);
+
 ({
   StationServices services,
   StationTrajectoryRecorder recorder,
@@ -86,6 +109,11 @@ _build({
 }) {
   final runner = RecordingBdRunner();
   final provider = FakeRuntimeProvider();
+  final resolvedSink = sink ?? _AckSink();
+  final recorder = StationTrajectoryRecorder(
+    sink: resolvedSink,
+    substationPrefixes: const {'tg'},
+  );
   final writer = StationBeadWriter(
     bd: BdCliService(runner),
     reader: runner,
@@ -101,11 +129,7 @@ _build({
     writer: writer,
     stateSubstation: 'tg',
     trajectoryAdmissionHalt: halt,
-  );
-  final resolvedSink = sink ?? _AckSink();
-  final recorder = StationTrajectoryRecorder(
-    sink: resolvedSink,
-    substationPrefixes: const {'tg'},
+    trajectoryRecorder: recorder,
   );
   final adapter = StationAttemptLivenessRecovery(
     services: () => services,
@@ -214,6 +238,100 @@ void main() {
     });
   });
 
+  test(
+    'liveness retirement releases capacity but fences a successor create',
+    () async {
+      final acknowledgementEntered = Completer<void>();
+      final releaseAcknowledgement = Completer<TrajectoryAppendResult>();
+      final sink = _AckSink(
+        onAppend: (record) {
+          acknowledgementEntered.complete();
+          return releaseAcknowledgement.future;
+        },
+      );
+      final work = _work('tg-work');
+      var state = _snapshot([_session('tg-session', work.id)]);
+      final h = _build(snapshot: () => state, sink: sink);
+      addTearDown(h.services.dispose);
+      addTearDown(h.provider.close);
+      addTearDown(() {
+        if (!releaseAcknowledgement.isCompleted) {
+          releaseAcknowledgement.complete(const TrajectoryAppendResult.acked());
+        }
+      });
+      const predecessor = SessionProjection(
+        workBeadId: 'tg-work',
+        sessionId: 'tg-session',
+      );
+      final liveJoined = _joined(work, session: predecessor);
+      final adopted = h.services.admission.admitPending(
+        liveJoined,
+        _config,
+        const ServiceBundle(),
+        [StationAdmissionCandidate(bead: work, session: predecessor)],
+      );
+      expect(adopted.admitted.single.sessionId, 'tg-session');
+      h.adapter.activate();
+
+      final retirement = h.adapter.handle(
+        attemptId: 'attempt-1',
+        sessionId: 'tg-session',
+        workBeadId: work.id,
+      );
+      await acknowledgementEntered.future;
+
+      expect(h.runner.callsFor('close'), hasLength(1));
+      expect(h.services.admission.admissionStatus.reservations, isEmpty);
+
+      await Future<void>.delayed(
+        Backoff.standard.delayFor(1) + const Duration(milliseconds: 50),
+      );
+
+      state = _snapshot([
+        _session(
+          'tg-session',
+          voidKeyFor(work.id, 'tg-session'),
+          status: BeadStatus.closed,
+        ),
+      ]);
+      final successorJoined = _joined(work);
+      final successor = StationAdmissionCandidate(bead: work, session: null);
+      final admitted = h.services.admission.admitPending(
+        successorJoined,
+        _config,
+        const ServiceBundle(),
+        [successor],
+      );
+      expect(admitted.admitted, hasLength(1));
+      final create = h.services.admission.createSessionAttempt(
+        successorJoined,
+        successor,
+        title: 'grid session ${work.id}',
+        metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
+      );
+      await _pump();
+      expect(
+        h.runner
+            .callsFor('create')
+            .where((call) => call.contains(GridIssueTypes.session.wire)),
+        isEmpty,
+      );
+
+      releaseAcknowledgement.complete(const TrajectoryAppendResult.acked());
+      await retirement;
+      final created = await create;
+
+      expect(created.refusal, isNull);
+      expect(created.sessionId, isNotNull);
+      expect(
+        h.runner
+            .callsFor('create')
+            .where((call) => call.contains(GridIssueTypes.session.wire)),
+        hasLength(1),
+      );
+    },
+  );
+
   test('a dropped terminal latches the halt and retries an already-void row '
       'without losing its original rework round', () async {
     var snapshot = _snapshot([_session('tg-session', 'tg-work#r2')]);
@@ -238,7 +356,14 @@ void main() {
     );
     expect(h.services.trajectoryAdmissionHalt!.halted, isTrue);
     expect(h.sink.enqueued, isEmpty, reason: 'no round retires without an ack');
-    final updates = h.runner.callsFor('update').length;
+    final voidUpdates = h.runner
+        .callsFor('update')
+        .where(
+          (call) => call.contains(
+            '${SessionBeadKeys.voidedReason}=attempt-liveness-lost',
+          ),
+        )
+        .length;
     final closes = h.runner.callsFor('close').length;
 
     snapshot = _snapshot([
@@ -254,8 +379,18 @@ void main() {
       workBeadId: 'tg-work',
     );
 
-    expect(h.runner.callsFor('update'), hasLength(updates));
-    expect(h.runner.callsFor('close'), hasLength(closes));
+    expect(
+      h.runner
+          .callsFor('update')
+          .where(
+            (call) => call.contains(
+              '${SessionBeadKeys.voidedReason}=attempt-liveness-lost',
+            ),
+          ),
+      hasLength(voidUpdates + 1),
+    );
+    expect(h.runner.callsFor('close'), hasLength(closes + 1));
+    expect(h.sink.acknowledged, hasLength(2));
     final retired = h.sink.enqueued.single as AttemptRoundRetired;
     expect(retired.oldRound, 2);
     expect(retired.newRound, 3);

@@ -10,7 +10,7 @@
 /// Binding constraints (stage1-wiring, restated where the code enforces them):
 ///
 ///   * **Non-fatal with a narrow acknowledgement seam.** [enqueue] remains
-///     synchronous for ordinary observations. The five decision-bearing
+///     synchronous for ordinary observations. The six decision-bearing
 ///     recorder sites use one harness-owned policy: cut awaits [appendAcked],
 ///     whose queue wait has a one-tick writer-stall detector and a 60-tick
 ///     residence cap; shadow enqueues fire-and-forget and releases the caller

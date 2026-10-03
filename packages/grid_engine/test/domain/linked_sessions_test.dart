@@ -86,10 +86,17 @@ void main() {
     });
 
     test('an open row: adopt, and a SECOND open row is a reported rival', () {
-      final verdict = linkedSessionVerdictOf([
-        _row('live-old', terminal: false, startedAt: DateTime.utc(2026, 9, 1)),
-        _row('live-new', terminal: false, startedAt: DateTime.utc(2026, 9, 2)),
-      ]);
+      final predecessor = _row(
+        'live-old',
+        terminal: false,
+        startedAt: DateTime.utc(2026, 9, 1),
+      );
+      final successor = _row(
+        'live-new',
+        terminal: false,
+        startedAt: DateTime.utc(2026, 9, 2),
+      );
+      final verdict = linkedSessionVerdictOf([predecessor, successor]);
       expect(
         verdict,
         isA<AdoptLinkedSession>()
@@ -99,6 +106,17 @@ void main() {
             ]),
       );
       expect(verdict.winner?.sessionId, 'live-new');
+
+      final afterPredecessorTerminal = linkedSessionVerdictOf([
+        predecessor.copyWith(isTerminal: true),
+        successor,
+      ]);
+      expect(
+        afterPredecessorTerminal,
+        isA<AdoptLinkedSession>()
+            .having((v) => v.session.sessionId, 'session', 'live-new')
+            .having((v) => v.rivals, 'rivals', isEmpty),
+      );
     });
 
     test('a done or held row blocks, even beside a dead key', () {

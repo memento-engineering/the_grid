@@ -104,6 +104,7 @@ void main() {
         '_retryTimers',
         '_mountAttemptWrites',
         '_lostSessionRetirements',
+        '_retirementFencesByWorkBead',
         '_blockedUntilFreshReady',
         '_rivalCleanupsInFlight',
         '_operatorVoids',
@@ -126,6 +127,8 @@ void main() {
         '_mountAttemptWrites': 'Writes not yet represented by JoinedSnapshot',
         '_lostSessionRetirements':
             'In-flight liveness-loss cuts are unavailable',
+        '_retirementFencesByWorkBead':
+            'work bead so it also covers the window before a replacement',
         '_blockedUntilFreshReady': 'Cancellation quarantine persists',
         '_rivalCleanupsInFlight': 'rival-cleanup microtasks are unavailable',
         '_operatorVoids': 'command-door fact the snapshot cannot carry',

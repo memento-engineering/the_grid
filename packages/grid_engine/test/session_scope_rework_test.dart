@@ -45,6 +45,40 @@ class _RecordingTransport implements ExplorationTransport {
       flares.where((flare) => flare.name == name).toList();
 }
 
+final class _GatedTerminalSink implements TrajectoryAckRecordSink {
+  final entered = Completer<void>();
+  final release = Completer<void>();
+  final List<TrajectoryRecord> records = [];
+
+  @override
+  bool get accepting => true;
+
+  @override
+  void enqueue(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+  }) {}
+
+  @override
+  Future<TrajectoryAppendResult> appendAcked(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+    required bool decisionBearing,
+  }) async {
+    expect(decisionBearing, isTrue);
+    records.add(record);
+    if (!entered.isCompleted) entered.complete();
+    await release.future;
+    return const TrajectoryAppendResult.acked();
+  }
+}
+
 class _GatedCloseRunner extends RecordingBdRunner {
   final closeEntered = Completer<void>();
   final releaseClose = Completer<void>();
@@ -194,6 +228,7 @@ JoinedSnapshot _joined({
   required DateTime capturedAt,
   List<BeadDependency> dependencies = const [],
   Map<String, SessionProjection> sessions = const {},
+  Map<String, List<SessionProjection>> surplus = const {},
 }) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
     beads: beads,
@@ -202,6 +237,7 @@ JoinedSnapshot _joined({
     capturedAt: capturedAt,
   ),
   sessionsByWorkBead: sessions,
+  surplusSessionsByWorkBead: surplus,
 );
 
 Bead _task(String id, {BeadStatus status = BeadStatus.open}) =>
@@ -255,6 +291,7 @@ const _voidedSession = SessionProjection(
 StationServices _servicesFor(
   RecordingBdRunner runner, {
   int maxConcurrentWork = kDefaultMaxConcurrentWork,
+  StationTrajectoryRecorder? trajectoryRecorder,
 }) => StationServices(
   provider: FakeRuntimeProvider(),
   writer: StationBeadWriter(
@@ -264,6 +301,7 @@ StationServices _servicesFor(
   ),
   stateSubstation: stateSubstation,
   maxConcurrentWork: maxConcurrentWork,
+  trajectoryRecorder: trajectoryRecorder,
 );
 
 ({TreeOwner owner, Branch root}) _mountFull({
@@ -273,6 +311,7 @@ StationServices _servicesFor(
   required RootCircuitFor rootCircuit,
   ExplorationTransport? transport,
   SubstationConfig config = _tgConfig,
+  TrajectoryRecorderScope? trajectoryScope,
 }) {
   final owner = TreeOwner();
   final root = owner.mountRoot(
@@ -285,13 +324,16 @@ StationServices _servicesFor(
             value: registry,
             child: InheritedSeed<SessionResolver>(
               value: CircuitResolver(rootCircuit),
-              child: Station([
-                SubstationScope(
-                  configNotifier: SubstationConfigNotifier(config),
-                  services: ServiceBundle(transport: transport),
-                  key: const ValueKey('scope.tg'),
-                ),
-              ]),
+              child: InheritedSeed<TrajectoryRecorderScope>(
+                value: trajectoryScope ?? TrajectoryRecorderScope.disabled,
+                child: Station([
+                  SubstationScope(
+                    configNotifier: SubstationConfigNotifier(config),
+                    services: ServiceBundle(transport: transport),
+                    key: const ValueKey('scope.tg'),
+                  ),
+                ]),
+              ),
             ),
           ),
         ),
@@ -303,6 +345,332 @@ StationServices _servicesFor(
 
 void main() {
   group('SessionScope rework re-arm (tg-x1j v2) — the gated case re-mints', () {
+    test(
+      'terminal acknowledgement fences rework remint and first dispatch',
+      () async {
+        final runner = RecordingBdRunner(createdId: 'tgdog-round2');
+        final sink = _GatedTerminalSink();
+        addTearDown(() {
+          if (!sink.release.isCompleted) sink.release.complete();
+        });
+        final recorder = StationTrajectoryRecorder(
+          sink: sink,
+          substationPrefixes: const {stateSubstation},
+        );
+        final station = _servicesFor(runner, trajectoryRecorder: recorder);
+        addTearDown(station.dispose);
+        final registry = RecordingCapabilityRegistry(circuits: const {});
+        final beforeDecision = DateTime.now().subtract(
+          const Duration(seconds: 1),
+        );
+        final afterDecision = DateTime.now().add(const Duration(seconds: 1));
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            capturedAt: beforeDecision,
+            sessions: const {
+              'tg-1': SessionProjection(
+                workBeadId: 'tg-1',
+                sessionId: 'tgdog-round1',
+                cursor: {'tg-1/route': NodeCursor(state: StepState.gated)},
+              ),
+            },
+          ),
+        );
+        final mounted = _mountFull(
+          joined: joined,
+          ctx: station,
+          registry: registry,
+          rootCircuit: (_) => _code,
+          trajectoryScope: TrajectoryRecorderScope(recorder),
+        );
+        addTearDown(mounted.owner.dispose);
+
+        joined.push(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            capturedAt: beforeDecision,
+            sessions: const {
+              'tg-1#r1': SessionProjection(
+                workBeadId: 'tg-1#r1',
+                sessionId: 'tgdog-round1',
+                cursor: {'tg-1/route': NodeCursor(state: StepState.gated)},
+              ),
+            },
+          ),
+        );
+        mounted.owner.flush();
+        await sink.entered.future;
+
+        expect(runner.callsFor('close'), hasLength(1));
+        expect(sink.records.map((record) => record.recordType), [
+          'attempt.round.retired',
+        ]);
+        expect(
+          sink.records.where(
+            (record) => record.recordType == 'attempt.terminal',
+          ),
+          isEmpty,
+        );
+        expect(runner.workCreates, isEmpty);
+        expect(runner.graphApplyCalls, isEmpty);
+        expect(
+          registry.events,
+          isNot(contains('START agent(tgdog-round2/tg-1/agent)')),
+        );
+
+        joined.push(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            capturedAt: afterDecision,
+            sessions: const {
+              'tg-1#r1': SessionProjection(
+                workBeadId: 'tg-1#r1',
+                sessionId: 'tgdog-round1',
+                cursor: {'tg-1/route': NodeCursor(state: StepState.gated)},
+              ),
+            },
+          ),
+        );
+        mounted.owner.flush();
+        await _pump();
+        expect(runner.workCreates, isEmpty);
+
+        sink.release.complete();
+        await _pumpUntil(
+          mounted.owner,
+          () => runner.graphApplyCalls.isNotEmpty,
+        );
+        expect(
+          runner.workCreates.where(
+            (call) => _isPlainCreateOf(call, GridIssueTypes.session.wire),
+          ),
+          hasLength(1),
+        );
+        expect(runner.graphApplyCalls, hasLength(1));
+        expect(
+          registry.events,
+          isNot(contains('START agent(tgdog-round2/tg-1/agent)')),
+          reason: 'the joined pour still lags',
+        );
+
+        joined.push(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            capturedAt: afterDecision,
+            sessions: {
+              'tg-1#r1': const SessionProjection(
+                workBeadId: 'tg-1#r1',
+                sessionId: 'tgdog-round1',
+              ),
+              'tg-1': _freshProjection(
+                workBeadId: 'tg-1',
+                sessionId: 'tgdog-round2',
+              ),
+            },
+          ),
+        );
+        mounted.owner.flush();
+        await _pumpUntil(
+          mounted.owner,
+          () =>
+              registry.events.contains('START agent(tgdog-round2/tg-1/agent)'),
+        );
+
+        expect(
+          registry.events,
+          contains('START agent(tgdog-round2/tg-1/agent)'),
+        );
+      },
+    );
+
+    test(
+      'terminal acknowledgement fences post-pour abandonment and remint',
+      () async {
+        final events = <String>[];
+        final runner = _StageGatedRunner(
+          gateCall: (args) =>
+              args.length > 1 && args[0] == 'create' && args[1] == '--graph',
+          eventLog: events,
+        );
+        addTearDown(() {
+          if (!runner.release.isCompleted) runner.release.complete();
+        });
+        final sink = _GatedTerminalSink();
+        addTearDown(() {
+          if (!sink.release.isCompleted) sink.release.complete();
+        });
+        final recorder = StationTrajectoryRecorder(
+          sink: sink,
+          substationPrefixes: const {stateSubstation},
+        );
+        final station = _servicesFor(runner, trajectoryRecorder: recorder);
+        addTearDown(station.dispose);
+        final transport = _RecordingTransport(events);
+        final firstJoined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            capturedAt: DateTime.utc(2026, 9, 22),
+          ),
+        );
+        final firstTree = _mountFull(
+          joined: firstJoined,
+          ctx: station,
+          registry: RecordingCapabilityRegistry(circuits: const {}),
+          rootCircuit: (_) => _code,
+          transport: transport,
+          trajectoryScope: TrajectoryRecorderScope(recorder),
+        );
+
+        await _pumpUntil(firstTree.owner, () => runner.entered.isCompleted);
+        expect(runner.entered.isCompleted, isTrue);
+        firstTree.owner.dispose();
+        runner.release.complete();
+        await sink.entered.future;
+
+        expect(runner.callsFor('close'), hasLength(1));
+        expect(sink.records.map((record) => record.recordType), [
+          'attempt.terminal',
+        ]);
+        expect(
+          runner.workCreates.where(
+            (call) => _isPlainCreateOf(call, GridIssueTypes.session.wire),
+          ),
+          hasLength(1),
+        );
+        expect(runner.graphApplyCalls, hasLength(1));
+        expect(transport.named('session.mintAbandoned'), isEmpty);
+        expect(
+          station.admission.admissionStatus.reservations,
+          isEmpty,
+          reason: 'the durable close releases capacity before its ack',
+        );
+
+        sink.release.complete();
+        await _waitUntil(
+          () => transport.named('session.mintAbandoned').isNotEmpty,
+        );
+        _expectAbandonment(
+          transport,
+          retiredSessionId: 'tgdog-round2',
+          stage: 'molecule-poured',
+          reason: anyOf('cancelled', 'unmounted'),
+        );
+
+        final replacementRegistry = RecordingCapabilityRegistry(
+          circuits: const {},
+        );
+        final replacementJoined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            capturedAt: DateTime.utc(2026, 9, 22, 0, 0, 1),
+          ),
+        );
+        final replacementTree = _mountFull(
+          joined: replacementJoined,
+          ctx: station,
+          registry: replacementRegistry,
+          rootCircuit: (_) => _code,
+        );
+        addTearDown(replacementTree.owner.dispose);
+        await _pumpUntil(
+          replacementTree.owner,
+          () => runner.graphApplyCalls.length == 2,
+        );
+        expect(
+          runner.workCreates.where(
+            (call) => _isPlainCreateOf(call, GridIssueTypes.session.wire),
+          ),
+          hasLength(2),
+        );
+
+        replacementJoined.push(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            capturedAt: DateTime.utc(2026, 9, 22, 0, 0, 2),
+            sessions: {
+              'tg-1': _freshProjection(
+                workBeadId: 'tg-1',
+                sessionId: 'tgdog-round3',
+              ),
+            },
+          ),
+        );
+        replacementTree.owner.flush();
+        await _pumpUntil(
+          replacementTree.owner,
+          () => replacementRegistry.events.contains(
+            'START agent(tgdog-round3/tg-1/agent)',
+          ),
+        );
+
+        expect(replacementRegistry.events, [
+          'START agent(tgdog-round3/tg-1/agent)',
+        ]);
+      },
+    );
+
+    test('a late predecessor terminal starts an already-poured successor on '
+        'one flush', () async {
+      const predecessor = SessionProjection(
+        workBeadId: 'tg-1',
+        sessionId: 'tgdog-round1',
+        startedAt: null,
+      );
+      final successor = _freshProjection(
+        workBeadId: 'tg-1',
+        sessionId: 'tgdog-round2',
+      ).copyWith(startedAt: DateTime.utc(2026, 9, 22));
+      final runner = RecordingBdRunner();
+      final station = _servicesFor(runner);
+      addTearDown(station.dispose);
+      final registry = RecordingCapabilityRegistry(circuits: const {});
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          capturedAt: DateTime.utc(2026, 9, 22),
+          sessions: {'tg-1': successor},
+          surplus: const {
+            'tg-1': [predecessor],
+          },
+        ),
+      );
+      final mounted = _mountFull(
+        joined: joined,
+        ctx: station,
+        registry: registry,
+        rootCircuit: (_) => _code,
+      );
+      addTearDown(mounted.owner.dispose);
+      await _pump();
+      expect(registry.events, isEmpty, reason: 'the predecessor is a rival');
+
+      joined.push(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          capturedAt: DateTime.utc(2026, 9, 22, 0, 0, 1),
+          sessions: {'tg-1': successor},
+          surplus: {
+            'tg-1': [predecessor.copyWith(isTerminal: true)],
+          },
+        ),
+      );
+      mounted.owner.flush();
+      await _pump();
+
+      expect(registry.events, contains('START agent(tgdog-round2/tg-1/agent)'));
+      expect(runner.workCreates, isEmpty);
+    });
+
     test(
       'pre-session abandonment returns its grant and frees capacity',
       () async {

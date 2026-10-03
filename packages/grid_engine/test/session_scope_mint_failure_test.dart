@@ -394,6 +394,7 @@ StationServices _ctxOver(
   BdRunner runner, {
   BeadProbeReader reader = const EmptyBeadProbeReader(),
   int maxConcurrentWork = kDefaultMaxConcurrentWork,
+  StationTrajectoryRecorder? trajectoryRecorder,
 }) => StationServices(
   provider: FakeRuntimeProvider(),
   writer: StationBeadWriter(
@@ -403,6 +404,7 @@ StationServices _ctxOver(
   ),
   stateSubstation: stateSubstation,
   maxConcurrentWork: maxConcurrentWork,
+  trajectoryRecorder: trajectoryRecorder,
 );
 
 ({TreeOwner owner, Branch root}) _mountFull({
@@ -1215,17 +1217,16 @@ void main() {
           ),
           eventLog: events,
         );
-        final ctx = _ctxOver(runner);
-        addTearDown(ctx.dispose);
         final transport = _RecordingTransport(events);
         final reg = RecordingCapabilityRegistry(circuits: const {});
         final sink = _CapturingTrajectorySink();
-        final trajectoryScope = TrajectoryRecorderScope(
-          StationTrajectoryRecorder(
-            sink: sink,
-            substationPrefixes: const {'tg', 'tgdog'},
-          ),
+        final recorder = StationTrajectoryRecorder(
+          sink: sink,
+          substationPrefixes: const {'tg', 'tgdog'},
         );
+        final ctx = _ctxOver(runner, trajectoryRecorder: recorder);
+        addTearDown(ctx.dispose);
+        final trajectoryScope = TrajectoryRecorderScope(recorder);
         final workBead = bead('tg-1');
         final snapshot = JoinedSnapshot(graph: _work([workBead], {'tg-1'}));
         const config = SubstationConfig(
