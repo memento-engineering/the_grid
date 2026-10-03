@@ -2282,8 +2282,8 @@ void main() {
     });
 
     test(
-      'GridHandle.teardown names an orphan sweep that outlives its budget and '
-      'still disposes the delegate',
+      'GridHandle.teardown drops a never-completing bd send-metrics child at '
+      'the remaining budget',
       () async {
         final refusals = <GridHookError>[];
         final delegate = _BareDelegate();
@@ -2291,10 +2291,11 @@ void main() {
           delegate,
           onError: refusals.add,
           orphanSweep: () => Completer<void>().future,
-          orphanSweepBudget: const Duration(milliseconds: 50),
         );
 
-        await handle.teardown().timeout(const Duration(seconds: 5));
+        await handle
+            .teardown(orphanSweepBudget: const Duration(milliseconds: 50))
+            .timeout(const Duration(seconds: 5));
 
         expect(handle.isTornDown, isTrue);
         final refusal = refusals.single;
@@ -2310,6 +2311,36 @@ void main() {
           throwsA(isA<Error>()),
           reason: 'the delegate was disposed after the abandoned sweep',
         );
+      },
+    );
+
+    test(
+      'GridHandle.teardown uses the smaller call-time orphan-sweep budget',
+      () async {
+        final refusals = <GridHookError>[];
+        final delegate = _BareDelegate();
+        final handle = await runGrid(
+          delegate,
+          onError: refusals.add,
+          orphanSweep: () => Completer<void>().future,
+          orphanSweepBudget: const Duration(seconds: 15),
+        );
+        final watch = Stopwatch()..start();
+
+        final first = handle.teardown(
+          orphanSweepBudget: const Duration(milliseconds: 40),
+        );
+        final second = handle.teardown(
+          orphanSweepBudget: const Duration(seconds: 1),
+        );
+        await first.timeout(const Duration(seconds: 5));
+        watch.stop();
+
+        expect(second, same(first));
+        expect(watch.elapsed, lessThan(const Duration(milliseconds: 500)));
+        final cause = refusals.single.cause as TimeoutException;
+        expect(cause.duration, const Duration(milliseconds: 40));
+        expect(cause.message, contains('within 40ms'));
       },
     );
 

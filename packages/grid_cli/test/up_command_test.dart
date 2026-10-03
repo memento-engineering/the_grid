@@ -164,6 +164,8 @@ final class _Harness {
     required this.monitor,
     required this.admission,
     required this.trajectory,
+    required this.hangDevModeDispose,
+    required this.useRealLock,
   });
 
   static Future<_Harness> create({
@@ -181,6 +183,8 @@ final class _Harness {
     WedgeMonitor? monitor,
     StationAdmissionStatus? admission,
     Map<String, Object?> trajectory = const <String, Object?>{},
+    bool hangDevModeDispose = false,
+    bool useRealLock = false,
     Map<String, PrimaryCheckoutFreshness> checkoutFreshness =
         const <String, PrimaryCheckoutFreshness>{},
   }) async {
@@ -209,6 +213,8 @@ final class _Harness {
       monitor: monitor,
       admission: admission,
       trajectory: trajectory,
+      hangDevModeDispose: hangDevModeDispose,
+      useRealLock: useRealLock,
     );
   }
 
@@ -230,8 +236,15 @@ final class _Harness {
   final WedgeMonitor? monitor;
   final StationAdmissionStatus? admission;
   final Map<String, Object?> trajectory;
+  final bool hangDevModeDispose;
+  final bool useRealLock;
   final events = <String>[];
   final controlFlares = <({String name, Map<String, String> data})>[];
+  final unwindRecords = <StationUnwindRecord>[];
+  final orphanSweepBudgets = <Duration?>[];
+  final exitCodes = <int>[];
+  String? heldLockPath;
+  bool? lockExistedAtExit;
   final _stdout = ByteConsumer();
   final _stderr = ByteConsumer();
 
@@ -274,6 +287,7 @@ final class _Harness {
   Future<int?> run({
     List<String> extra = const [],
     bool untimed = false,
+    Duration unwindDuration = kUnwindDeadline,
     AssetCatalogResolver assetCatalogResolver = const AssetCatalogResolver(),
   }) async {
     final stdoutSink = RecordingStdout(_stdout);
@@ -313,7 +327,21 @@ final class _Harness {
             if (failAt == 'lock') {
               throw const StationRefusal('held', code: 64);
             }
-            return _Lock(events, failAt: failAt);
+            if (useRealLock) {
+              final handle =
+                  await StationLockService(
+                    isPidAlive: (_) => true,
+                    log: (_) {},
+                    prepareProcessGroup: (stationPid) async => stationPid,
+                  ).acquire(
+                    stateWorkspaceDir: stateWorkspaceDir,
+                    pid: pid,
+                    now: now,
+                  );
+              heldLockPath = handle.path;
+              return _HeldLock(events, handle);
+            }
+            return _Lock(events, unwindRecords: unwindRecords, failAt: failAt);
           },
       runMountedGrid:
           (
@@ -342,6 +370,7 @@ final class _Harness {
               events,
               delegate,
               orphanSweep: orphanSweep,
+              orphanSweepBudgets: orphanSweepBudgets,
               delegateFactory: delegateFactory,
               onDelegateSwapped: onDelegateSwapped,
             );
@@ -375,7 +404,9 @@ final class _Harness {
             _throwIf('devMode');
             devHotRestart = hotRestart;
             devReadPath = readPath;
-            return devMode ? _DevMode(events) : null;
+            return devMode
+                ? _DevMode(events, hangsOnDispose: hangDevModeDispose)
+                : null;
           },
       readVmServiceUri: () async {
         _throwIf('vmService');
@@ -410,6 +441,12 @@ final class _Harness {
           throw StateError('unexpected signal wait');
         }
       },
+      exiter: (code) {
+        exitCodes.add(code);
+        final path = heldLockPath;
+        if (path != null) lockExistedAtExit = File(path).existsSync();
+      },
+      unwindDuration: unwindDuration,
     );
     final runner = CommandRunner<int>('lunar', 'test')..addCommand(command);
     final arguments = <String>[
@@ -435,8 +472,9 @@ final class _Harness {
 }
 
 final class _Lock implements LockResource {
-  _Lock(this.events, {this.failAt});
+  _Lock(this.events, {this.unwindRecords, this.failAt});
   final List<String> events;
+  final List<StationUnwindRecord>? unwindRecords;
   final String? failAt;
 
   @override
@@ -458,8 +496,43 @@ final class _Lock implements LockResource {
   }
 
   @override
+  Future<void> updateUnwind(StationUnwindRecord unwind) async {
+    unwindRecords?.add(unwind);
+  }
+
+  @override
   Future<void> release() async {
     events.add('lock.release');
+  }
+}
+
+final class _HeldLock implements LockResource {
+  _HeldLock(this.events, this.handle);
+
+  final List<String> events;
+  final StationLockHandle handle;
+
+  @override
+  String get path => handle.path;
+
+  @override
+  Future<void> updateControl({
+    required String controlUrl,
+    required String token,
+  }) => handle.updateControl(controlUrl: controlUrl, token: token);
+
+  @override
+  Future<void> updateVmService(String vmServiceUri) =>
+      handle.updateVmService(vmServiceUri);
+
+  @override
+  Future<void> updateUnwind(StationUnwindRecord unwind) =>
+      handle.updateUnwind(unwind);
+
+  @override
+  Future<void> release() async {
+    events.add('lock.release');
+    await handle.release();
   }
 }
 
@@ -468,6 +541,7 @@ final class _Grid implements GridResource {
     this.events,
     this.delegate, {
     required this.orphanSweep,
+    required this.orphanSweepBudgets,
     this.delegateFactory,
     this.onDelegateSwapped,
   });
@@ -478,6 +552,7 @@ final class _Grid implements GridResource {
   /// factory's fresh one, mirroring `GridHandle`.
   GridDelegate delegate;
   final Future<void> Function() orphanSweep;
+  final List<Duration?> orphanSweepBudgets;
   final GridDelegate Function()? delegateFactory;
   final void Function(GridDelegate next)? onDelegateSwapped;
   var _generation = 0;
@@ -515,12 +590,13 @@ final class _Grid implements GridResource {
   }
 
   @override
-  Future<void> teardown() async {
+  Future<void> teardown({Duration? orphanSweepBudget}) async {
     // runGrid's own teardown order: unmount the tree, run the orphan sweep on
     // the STILL-LIVE delegate (the shell's closure — it must reach the live
     // delegate, never a retired corpse, and the sweep reaps over the
     // boot-assembled runtime dispose unwinds), THEN dispose the delegate.
     events.add('grid.teardown');
+    orphanSweepBudgets.add(orphanSweepBudget);
     await orphanSweep();
     delegate.dispose();
   }
@@ -541,6 +617,9 @@ final class _Control implements ControlResource {
   @override
   Future<void> dispose() async {
     events.add('control.dispose');
+    if (failAt == 'control.dispose.hang') {
+      await Completer<void>().future;
+    }
     if (failAt == 'control.dispose') {
       throw StateError('boom at control.dispose');
     }
@@ -548,8 +627,9 @@ final class _Control implements ControlResource {
 }
 
 final class _DevMode implements DevModeResource {
-  _DevMode(this.events);
+  _DevMode(this.events, {this.hangsOnDispose = false});
   final List<String> events;
+  final bool hangsOnDispose;
   @override
   String get vmServiceUri => 'ws://vm';
   @override
@@ -557,6 +637,7 @@ final class _DevMode implements DevModeResource {
   @override
   Future<void> dispose() async {
     events.add('devMode.dispose');
+    if (hangsOnDispose) await Completer<void>().future;
   }
 }
 
@@ -1582,6 +1663,9 @@ void main() {
         'lock.release',
       ]);
       expect(h.stderrText, startsWith('lunar up:'));
+      expect(h.exitCodes, [
+        1,
+      ], reason: 'the existing arming-failure code exits');
     });
 
     test('a dev-mode arming failure disposes the registered seat '
@@ -1675,6 +1759,96 @@ void main() {
     expect(h.events, isNot(contains('devMode.register')));
     expect(h.events, isNot(contains('lock.vm')));
     expect(h.events, isNot(contains('devMode.dispose')));
+  });
+
+  test(
+    'resident exit detaches a never-completing VM-service listener',
+    () async {
+      final h = await _Harness.create(
+        devMode: true,
+        signalShutdown: true,
+        hangDevModeDispose: true,
+      );
+      addTearDown(h.dispose);
+      final watch = Stopwatch()..start();
+
+      expect(
+        await h.run(
+          untimed: true,
+          unwindDuration: const Duration(milliseconds: 80),
+        ),
+        0,
+      );
+      watch.stop();
+
+      expect(watch.elapsed, lessThan(const Duration(seconds: 1)));
+      expect(h.exitCodes, [0]);
+      expect(h.events, contains('devMode.dispose'));
+      expect(
+        h.unwindRecords.last.outstanding,
+        contains('dev-mode listener ws://vm (detached)'),
+      );
+    },
+  );
+
+  test(
+    'resident passes the remaining unwind deadline to the orphan sweep',
+    () async {
+      final h = await _Harness.create(signalShutdown: true);
+      addTearDown(h.dispose);
+      const deadline = Duration(milliseconds: 90);
+
+      expect(await h.run(untimed: true, unwindDuration: deadline), 0);
+
+      final budget = h.orphanSweepBudgets.single;
+      expect(budget, isNotNull);
+      expect(budget, lessThanOrEqualTo(deadline));
+      expect(budget, lessThan(kOrphanSweepBudget));
+    },
+  );
+
+  test(
+    'resident writes unwind step start time and outstanding names',
+    () async {
+      final h = await _Harness.create(
+        failAt: 'control.dispose.hang',
+        signalShutdown: true,
+      );
+      addTearDown(h.dispose);
+
+      expect(
+        await h.run(
+          untimed: true,
+          unwindDuration: const Duration(milliseconds: 50),
+        ),
+        0,
+      );
+
+      expect(
+        h.unwindRecords.map((record) => record.step),
+        containsAllInOrder([
+          'control dispose',
+          'grid teardown',
+          'diagnostics dispose',
+          'lock release',
+        ]),
+      );
+      expect(h.unwindRecords.every((record) => record.startedAt.isUtc), isTrue);
+      expect(h.unwindRecords.last.outstanding, contains('control dispose'));
+      expect(h.exitCodes, [0]);
+    },
+  );
+
+  test('resident releases the station lock before process exit', () async {
+    final h = await _Harness.create(signalShutdown: true, useRealLock: true);
+    addTearDown(h.dispose);
+
+    expect(await h.run(untimed: true), 0);
+
+    expect(h.heldLockPath, isNotNull);
+    expect(h.lockExistedAtExit, isFalse);
+    expect(File(h.heldLockPath!).existsSync(), isFalse);
+    expect(h.exitCodes, [0]);
   });
 
   group('hot restart routes the live-delegate holder at the COMMIT seam', () {

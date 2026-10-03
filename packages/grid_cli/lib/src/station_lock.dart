@@ -32,7 +32,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
-    show StationLifecyclePhase, StationLockRecord;
+    show StationLifecyclePhase, StationLockRecord, StationUnwindRecord;
 import 'package:grid_runtime/grid_runtime.dart'
     show establishStationProcessGroup;
 import 'package:grid_sdk/grid_sdk.dart' show StationRefusal;
@@ -370,6 +370,11 @@ class StationLockHandle {
   /// never does. Throws a [StationRefusal] when the on-disk record is not ours.
   Future<void> updateVmService(String vmServiceUri) =>
       _replace(_record.withVmService(vmServiceUri), 'updateVmService');
+
+  /// Publishes the resident's current terminal-unwind state, preserving the
+  /// lock identity and every control or development advertisement.
+  Future<void> updateUnwind(StationUnwindRecord unwind) =>
+      _replace(_record.withUnwind(unwind), 'updateUnwind');
 
   /// Ownership-verified atomic replacement: re-read the lock, refuse LOUDLY
   /// unless it is still ours, then publish [next] by temp + chmod + rename.

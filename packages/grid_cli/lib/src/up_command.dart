@@ -21,6 +21,8 @@ import 'package:genesis_foundation/genesis_foundation.dart'
         ReferenceKind,
         TreeNode,
         TreeSnapshot;
+import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
+    show StationUnwindRecord;
 import 'package:grid_engine/grid_engine.dart'
     show
         ExplorationTransport,
@@ -57,9 +59,13 @@ import 'package:grid_sdk/grid_sdk.dart'
         StoreRefusal,
         SubstationWorkSpec,
         TreeProjector,
+        UnwindDeadline,
         closeStoreConnections,
         describeStoreDeadlines,
         kNotWedged,
+        kOrphanSweepBudget,
+        kUnwindDeadline,
+        kUnwindStepBudget,
         runGrid,
         settle;
 import 'package:meta/meta.dart';
@@ -106,6 +112,7 @@ abstract interface class LockResource {
     required String token,
   });
   Future<void> updateVmService(String vmServiceUri);
+  Future<void> updateUnwind(StationUnwindRecord unwind);
   Future<void> release();
 }
 
@@ -113,7 +120,7 @@ abstract interface class LockResource {
 abstract interface class GridResource {
   Future<ReassembleReport> hotReload();
   Future<ReassembleReport> hotRestart();
-  Future<void> teardown();
+  Future<void> teardown({Duration? orphanSweepBudget});
 }
 
 /// The control resource owned by a resident boot.
@@ -175,6 +182,13 @@ typedef DevModeArmer =
     });
 typedef VmServiceReader = Future<String?> Function();
 typedef ShutdownWaiter = Future<void> Function();
+
+/// Terminates the resident process after its bounded unwind.
+typedef ProcessExiter = void Function(int code);
+
+/// Supplies wall-clock timestamps for lock-backed unwind diagnostics.
+typedef StationClock = DateTime Function();
+
 typedef PrimaryCheckoutInspector =
     Future<PrimaryCheckoutFreshness> Function(SubstationWorkSpec substation);
 typedef StateStoreTypesReader =
@@ -222,6 +236,9 @@ class UpCommand extends Command<int> {
     DevModeArmer? armDevelopmentMode,
     VmServiceReader? readVmServiceUri,
     ShutdownWaiter? waitForShutdown,
+    ProcessExiter? exiter,
+    Duration unwindDuration = kUnwindDeadline,
+    StationClock? clock,
     PrimaryCheckoutInspector? inspectPrimaryCheckout,
     StateStoreTypesReader? readStateStoreTypes,
     this.assetCatalogResolver = const AssetCatalogResolver(),
@@ -239,7 +256,10 @@ class UpCommand extends Command<int> {
            inspectPrimaryCheckout ?? _defaultInspectPrimaryCheckout,
        _readStateStoreTypes =
            readStateStoreTypes ?? _defaultReadStateStoreTypes,
-       _waitForShutdown = waitForShutdown ?? _waitForTerminationSignal {
+       _waitForShutdown = waitForShutdown ?? _waitForTerminationSignal,
+       _exiter = exiter ?? exit,
+       _unwindDuration = unwindDuration,
+       _clock = clock ?? DateTime.now {
     if (_harnessAllowList.isEmpty) {
       throw ArgumentError.value(harnessAllowList, 'harnessAllowList');
     }
@@ -272,6 +292,9 @@ class UpCommand extends Command<int> {
   final PrimaryCheckoutInspector _inspectPrimaryCheckout;
   final StateStoreTypesReader _readStateStoreTypes;
   final ShutdownWaiter _waitForShutdown;
+  final ProcessExiter _exiter;
+  final Duration _unwindDuration;
+  final StationClock _clock;
 
   static Future<PrimaryCheckoutFreshness> _defaultInspectPrimaryCheckout(
     SubstationWorkSpec substation,
@@ -382,26 +405,6 @@ class UpCommand extends Command<int> {
     void reportUnwindRefusal(String message) =>
         stderr.writeln('$prefix: $message');
 
-    // The socket half of the unwind: every store connection the live delegate
-    // opened is closed here — state store first (it is the last writer) — each
-    // on its own bounded budget. A throwing or hung close is loud and strands
-    // neither the closes beneath it nor the lock release.
-    //
-    // The primitive is grid_sdk's `closeStoreConnections` — the same pass
-    // `StationWorkRuntime.shutdown` confirms with — so the budget, the step
-    // names and the narrative exist once. A handle that did not confirm is
-    // named with its endpoint on stdout, beside the count.
-    Future<void> closeStores(List<StoreConnection> stores) async {
-      if (stores.isEmpty) return;
-      final report = await closeStoreConnections(
-        stores,
-        onRefusal: reportUnwindRefusal,
-      );
-      for (final line in report.narrative) {
-        stdout.writeln('$prefix: $line');
-      }
-    }
-
     final List<
       ({SubstationWorkSpec substation, PrimaryCheckoutFreshness value})
     >
@@ -471,7 +474,7 @@ class UpCommand extends Command<int> {
       return 1;
     }
 
-    final startedAt = DateTime.now();
+    final startedAt = _clock();
     final LockResource stationLock;
     try {
       final acquire =
@@ -567,6 +570,104 @@ class UpCommand extends Command<int> {
       return 64;
     }
 
+    // Runs the shell-owned terminal unwind under one total deadline, releases
+    // the lock last, then terminates the process explicitly. The trajectory
+    // drain remains owned by the delegate on its configured budget; the
+    // caller-supplied budget clamps the orphan sweep before that drain starts.
+    Future<int> terminalUnwind({
+      required int exitCode,
+      ControlResource? control,
+      DevModeResource? devMode,
+    }) async {
+      final deadline = UnwindDeadline(_unwindDuration);
+      final outstanding = <String>[];
+      final stores = List<StoreConnection>.of(live.openStores);
+
+      Future<void> publish(String step) async {
+        await settle(
+          'lock unwind update ($step)',
+          () => stationLock.updateUnwind(
+            StationUnwindRecord(
+              step: step,
+              startedAt: _clock(),
+              outstanding: outstanding,
+            ),
+          ),
+          within: deadline.budget(kUnwindStepBudget),
+          onRefusal: reportUnwindRefusal,
+        );
+      }
+
+      Future<void> boundedStep(
+        String name,
+        FutureOr<void> Function() action,
+      ) async {
+        await publish(name);
+        await settle(
+          name,
+          action,
+          within: deadline.budget(kUnwindStepBudget),
+          onRefusal: reportUnwindRefusal,
+          onTimeout: (step, _) => outstanding.add(step),
+        );
+      }
+
+      if (devMode case final host?) {
+        final listener = 'dev-mode listener ${host.vmServiceUri} (detached)';
+        outstanding.add(listener);
+        unawaited(
+          Future<void>.sync(host.dispose).then<void>(
+            (_) => outstanding.remove(listener),
+            onError: (Object error, StackTrace stackTrace) {
+              reportUnwindRefusal(
+                'unwind step "dev-mode dispose" failed: $error',
+              );
+            },
+          ),
+        );
+      }
+      if (control != null) {
+        await boundedStep('control dispose', control.dispose);
+      }
+
+      await publish('grid teardown');
+      await settle(
+        'grid teardown',
+        () => grid.teardown(
+          orphanSweepBudget: deadline.budget(kOrphanSweepBudget),
+        ),
+        onRefusal: reportUnwindRefusal,
+      );
+
+      await boundedStep('diagnostics dispose', diagnostics.dispose);
+
+      if (stores.isNotEmpty) {
+        await publish('store connections close');
+        final storeReport = await closeStoreConnections(
+          stores,
+          deadline: deadline,
+          onRefusal: reportUnwindRefusal,
+        );
+        for (final line in storeReport.narrative) {
+          stdout.writeln('$prefix: $line');
+        }
+        outstanding.addAll(
+          storeReport.outstanding.map((handle) => handle.describe()),
+        );
+      }
+
+      await publish('lock release');
+      await settle(
+        'lock release',
+        stationLock.release,
+        within: deadline.remaining,
+        onRefusal: reportUnwindRefusal,
+        onTimeout: (step, _) => outstanding.add(step),
+      );
+      _exiter(exitCode);
+      return exitCode;
+    }
+
     // The ONE post-mount arming unwind: every shell resource created so far is
     // disposed in reverse creation order — including the resource whose OWN
     // arming step threw (a bound control socket or a registered dev-mode host
@@ -576,39 +677,8 @@ class UpCommand extends Command<int> {
       ControlResource? control,
       DevModeResource? devMode,
     }) async {
-      final stores = List<StoreConnection>.of(live.openStores);
-      if (devMode != null) {
-        await settle(
-          'dev-mode dispose',
-          devMode.dispose,
-          onRefusal: reportUnwindRefusal,
-        );
-      }
-      if (control != null) {
-        await settle(
-          'control dispose',
-          control.dispose,
-          onRefusal: reportUnwindRefusal,
-        );
-      }
-      await settle(
-        'grid teardown',
-        grid.teardown,
-        onRefusal: reportUnwindRefusal,
-      );
-      await settle(
-        'diagnostics dispose',
-        diagnostics.dispose,
-        onRefusal: reportUnwindRefusal,
-      );
-      await closeStores(stores);
-      await settle(
-        'lock release',
-        stationLock.release,
-        onRefusal: reportUnwindRefusal,
-      );
       stderr.writeln('$prefix: $error');
-      return 1;
+      return terminalUnwind(exitCode: 1, control: control, devMode: devMode);
     }
 
     final token = mintControlToken();
@@ -691,54 +761,13 @@ class UpCommand extends Command<int> {
         'control: ${control.url}  ·  token: (see ${stationLock.path}, 0600)',
       );
 
-    // The shell's own resources (dev-mode host, the control socket) close
-    // first — they are process concerns that never entered the tree.
-    // Each step is settled independently: a throwing dispose is loud but
-    // never strands the steps beneath it — the lock release always runs last.
-    Future<void> unwind() async {
-      // Read while the delegate is still live: `grid.teardown()` disposes it.
-      // The closes run after that teardown on purpose — the tree, the orphan
-      // sweep and the trajectory all read their stores on the way down.
-      final stores = List<StoreConnection>.of(live.openStores);
-      if (devMode case final host?) {
-        await settle(
-          'dev-mode dispose',
-          host.dispose,
-          onRefusal: reportUnwindRefusal,
-        );
-      }
-      await settle(
-        'control dispose',
-        control.dispose,
-        onRefusal: reportUnwindRefusal,
-      );
-      await settle(
-        'grid teardown',
-        grid.teardown,
-        onRefusal: reportUnwindRefusal,
-      );
-      await settle(
-        'diagnostics dispose',
-        diagnostics.dispose,
-        onRefusal: reportUnwindRefusal,
-      );
-      await closeStores(stores);
-      await settle(
-        'lock release',
-        stationLock.release,
-        onRefusal: reportUnwindRefusal,
-      );
-    }
-
     if (config.runFor case final runFor?) {
       await Future<void>.delayed(runFor);
-      await unwind();
-      return 0;
+      return terminalUnwind(exitCode: 0, control: control, devMode: devMode);
     }
     await _waitForShutdown();
     stdout.writeln('\n$prefix: shutting down…');
-    await unwind();
-    return 0;
+    return terminalUnwind(exitCode: 0, control: control, devMode: devMode);
   }
 
   /// Builds the `/status` snapshot off the LIVE delegate's vended [view].
@@ -907,6 +936,9 @@ final class _StationLockResource implements LockResource {
   Future<void> updateVmService(String vmServiceUri) =>
       _handle.updateVmService(vmServiceUri);
   @override
+  Future<void> updateUnwind(StationUnwindRecord unwind) =>
+      _handle.updateUnwind(unwind);
+  @override
   Future<void> release() => _handle.release();
 }
 
@@ -944,7 +976,8 @@ final class _GridResource implements GridResource {
   @override
   Future<ReassembleReport> hotRestart() => _handle.hotRestart();
   @override
-  Future<void> teardown() => _handle.teardown();
+  Future<void> teardown({Duration? orphanSweepBudget}) =>
+      _handle.teardown(orphanSweepBudget: orphanSweepBudget);
 }
 
 final class _ControlResource implements ControlResource {

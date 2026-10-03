@@ -719,11 +719,14 @@ class GridHandle {
   /// is NO LONGER awaited (tg-supq): the delegate disposes and the caller's
   /// unwind continues to its lock release instead of parking on a bd child.
   ///
-  /// Idempotent: a second call returns the SAME future; the rails and the sweep
-  /// run exactly once.
-  Future<void> teardown() => _teardown ??= _runTeardown();
+  /// [orphanSweepBudget] lets the resident shell clamp the sweep to what
+  /// remains of its total unwind deadline. The first call fixes that budget
+  /// into the idempotent teardown future; later calls return the SAME future
+  /// without rerunning rails or changing the selected budget.
+  Future<void> teardown({Duration? orphanSweepBudget}) =>
+      _teardown ??= _runTeardown(orphanSweepBudget ?? _orphanSweepBudget);
 
-  Future<void> _runTeardown() async {
+  Future<void> _runTeardown(Duration orphanSweepBudget) async {
     // Set synchronously (an async body runs to its first await eagerly): the
     // flush loop reads it to stop scheduling into a dying tree.
     _tornDown = true;
@@ -750,7 +753,7 @@ class GridHandle {
     final sweep = _orphanSweep;
     if (sweep != null) {
       try {
-        await sweep().timeout(_orphanSweepBudget);
+        await sweep().timeout(orphanSweepBudget);
       } on TimeoutException catch (e, st) {
         _report(
           GridHookError(
@@ -758,9 +761,9 @@ class GridHandle {
             _delegate.runtimeType,
             TimeoutException(
               'the orphan sweep did not settle within '
-              '${_orphanSweepBudget.inMilliseconds}ms — no longer awaited; '
+              '${orphanSweepBudget.inMilliseconds}ms — no longer awaited; '
               'the delegate disposes now (${e.message ?? 'pending'})',
-              _orphanSweepBudget,
+              orphanSweepBudget,
             ),
             st,
           ),

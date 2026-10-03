@@ -7,6 +7,7 @@ import 'package:args/command_runner.dart';
 
 import 'state_workspace.dart';
 import 'station_attach.dart';
+import 'station_lock.dart';
 
 /// Gracefully stops a composed resident station through its lock.
 class DownCommand extends Command<int> {
@@ -52,7 +53,7 @@ class DownCommand extends Command<int> {
     return switch (await _attach.stop(stateWorkspaceDir: home)) {
       AlreadyDown() => _alreadyDown(home),
       Stopped(:final pid) => _stopped(pid),
-      TimedOut(:final pid) => _timedOut(pid),
+      TimedOut(:final pid) => _timedOut(home, pid),
     };
   }
 
@@ -70,12 +71,26 @@ class DownCommand extends Command<int> {
     return 0;
   }
 
-  int _timedOut(int pid) {
+  Future<int> _timedOut(String home, int pid) async {
     stderr.writeln(
       '$stationName down: SIGTERM sent to pid $pid but it did not exit and '
       'release its lock within the grace window — this client never escalates '
       'to SIGKILL. Investigate pid $pid directly.',
     );
+    final record = await readStationLockRecord(
+      File(StationLockService.lockPath(home)),
+    );
+    if (record?.unwind case final unwind?) {
+      stderr.writeln(
+        '$stationName down: resident unwind step: ${unwind.step} '
+        '(started at ${unwind.startedAt.toUtc().toIso8601String()}).',
+      );
+      for (final outstanding in unwind.outstanding) {
+        stderr.writeln(
+          '$stationName down: resident unwind outstanding: $outstanding.',
+        );
+      }
+    }
     return 1;
   }
 }
