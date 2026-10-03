@@ -417,6 +417,8 @@ final class StationAdmissionAuthority {
   // Operator voids in flight or awaiting their first unlinked observation are
   // a command-door fact the snapshot cannot carry (tg-5snt).
   final Map<String, _OperatorVoid> _operatorVoids = <String, _OperatorVoid>{};
+  // Provisional runtime effects are unavailable from snapshots and provider.
+  final Map<String, int> _runtimeEffects = <String, int>{};
   // This flag represents one queued capacity invalidation operation.
   bool _capacityRecheckScheduled = false;
   bool _disposed = false;
@@ -1243,16 +1245,46 @@ final class StationAdmissionAuthority {
     });
   }
 
-  /// The runtimes this station's process transport holds IN MEMORY under
-  /// [sessionId] — every step whose effect the resident has started, whether
-  /// or not its `running` state has reached the session's durable cursor yet
-  /// (tg-5snt). Provider names are `<sessionId>/<nodePath>`
-  /// ([AllocationAddress.providerName]); the provider reserves a name
-  /// synchronously when a start begins, so a step that is spawning but not
-  /// yet durable is listed. The same census [retireLostSession] and rival
-  /// cleanup stop before they retire a session.
-  List<String> liveRuntimesOf(String sessionId) =>
-      _provider.listRunning('$sessionId/').toList()..sort();
+  /// Marks [providerName] live from process-effect entry, before provisioning.
+  ///
+  /// Acquires may overlap at one allocation address, so callers pair every
+  /// invocation with exactly one [endRuntimeEffect].
+  void beginRuntimeEffect(String providerName) {
+    if (_disposed) return;
+    _runtimeEffects.update(
+      providerName,
+      (count) => count + 1,
+      ifAbsent: () => 1,
+    );
+  }
+
+  /// Ends one process-effect span opened by [beginRuntimeEffect].
+  void endRuntimeEffect(String providerName) {
+    final count = _runtimeEffects[providerName];
+    if (count == null) return;
+    if (count == 1) {
+      _runtimeEffects.remove(providerName);
+    } else {
+      _runtimeEffects[providerName] = count - 1;
+    }
+  }
+
+  /// The runtime effects live IN MEMORY under [sessionId], continuously from
+  /// effect entry through workspace provisioning, provider reservation, and
+  /// eventual provider stop (tg-5snt). Provider names are
+  /// `<sessionId>/<nodePath>` ([AllocationAddress.providerName]). The union
+  /// de-duplicates overlapping provisional effects and provider-held names.
+  /// The same census [retireLostSession] and rival cleanup stop before they
+  /// retire a session.
+  List<String> liveRuntimesOf(String sessionId) {
+    final prefix = '$sessionId/';
+    final names = <String>{
+      for (final name in _runtimeEffects.keys)
+        if (name.startsWith(prefix)) name,
+      ..._provider.listRunning(prefix),
+    };
+    return names.toList()..sort();
+  }
 
   /// Tells the resident that an operator `grid session void` is about to
   /// re-key [sessionId] off [workBeadId]'s join (tg-5snt). Call it BEFORE the
@@ -2122,6 +2154,7 @@ final class StationAdmissionAuthority {
     _retryTimers.clear();
     _blockedUntilFreshReady.clear();
     _operatorVoids.clear();
+    _runtimeEffects.clear();
     _capacityRecheckScheduled = false;
     _mountAttemptWrites.clear();
     _lastScopeByBead.clear();

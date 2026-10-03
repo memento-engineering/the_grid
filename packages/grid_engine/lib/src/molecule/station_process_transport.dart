@@ -66,6 +66,7 @@ Future<ProcessHandle> stationProcessSpawner(
 }) async {
   final inputs = request.inputs;
   final name = inputs.address.providerName;
+  final stationServices = context.read<StationServices>();
   final token = inputs.env['GRID_INSTANCE_TOKEN'] ?? '';
   // The incarnation's trajectory name, read off the SAME env overlay as the
   // freshness token (stage1-wiring §2.1): the host mints both once per mount,
@@ -106,6 +107,7 @@ Future<ProcessHandle> stationProcessSpawner(
     }
   });
   var handedOff = false;
+  stationServices?.admission.beginRuntimeEffect(name);
   try {
     // Take synchronous `read<T>()` EFFECT snapshots without subscribing this
     // branch, then materialize the workspace BEFORE spawning into it (idempotent; the
@@ -200,6 +202,7 @@ Future<ProcessHandle> stationProcessSpawner(
     // it is closed here.
     unawaited(sub.cancel());
     if (!handedOff) unawaited(tap.close());
+    stationServices?.admission.endRuntimeEffect(name);
   }
 }
 

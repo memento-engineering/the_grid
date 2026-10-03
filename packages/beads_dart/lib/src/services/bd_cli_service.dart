@@ -465,6 +465,12 @@ class BdCliService {
 
     /// Receives the once-per-process receipt when requested guards are unsupported.
     void Function(String name, Map<String, String> data)? onGuardDegraded,
+
+    /// Refuses instead of retrying without guards when bd cannot honor them.
+    ///
+    /// At least one of [ifAssignee] or [ifStatus] is required when true. The
+    /// default preserves the compatibility fallback for existing callers.
+    bool requireGuardedWrite = false,
     String? title,
     BeadStatus? status,
     int? priority,
@@ -490,6 +496,11 @@ class BdCliService {
   }) async {
     if (notes != null && appendNotes != null && appendNotes.isNotEmpty) {
       throw ArgumentError('notes and appendNotes are mutually exclusive');
+    }
+    if (requireGuardedWrite && ifAssignee == null && ifStatus == null) {
+      throw ArgumentError(
+        'requireGuardedWrite requires ifAssignee or ifStatus',
+      );
     }
     final wantedLabels = addLabels.toList(growable: false);
     var expectedNotes = '';
@@ -572,6 +583,9 @@ class BdCliService {
           requestedGuard && capability != _CapabilitySupport.unsupported;
       if (requestedGuard && !guarded) {
         _emitGuardedWriteDegraded(onGuardDegraded);
+        if (requireGuardedWrite) {
+          throw BdGuardedWriteUnavailable(call: call);
+        }
       }
 
       Future<void> runUpdate({required bool guarded}) async {
@@ -606,6 +620,9 @@ class BdCliService {
           _CapabilitySupport.unsupported,
         );
         _emitGuardedWriteDegraded(onGuardDegraded);
+        if (requireGuardedWrite) {
+          throw BdGuardedWriteUnavailable(call: call);
+        }
         await runUpdate(guarded: false);
       }
     } finally {

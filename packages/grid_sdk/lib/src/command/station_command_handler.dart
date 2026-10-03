@@ -1397,10 +1397,17 @@ final class StationCommandHandler implements GridCommandHandler {
           sessionId: sessionId,
           rawKey: rawKey,
         );
-        // Unless the restore landed, the session is off its bare key (closed
-        // or open on the void key) and the bead's mount must still be dropped
-        // and re-offered: the sanction stays.
-        landed = rollback != _VoidRollback.restored;
+        // The sanction lands only when the refreshed row is CLOSED. An OPEN
+        // or unknown row remains an unresolved operator failure, so ordinary
+        // admission handling resumes instead of treating the void as landed.
+        landed = switch (rollback) {
+          _VoidRollback.closed ||
+          _VoidRollback.guardedWriteDegradedClosed => true,
+          _VoidRollback.restored ||
+          _VoidRollback.failed ||
+          _VoidRollback.guardedWriteDegradedOpen ||
+          _VoidRollback.guardedWriteDegradedUnknown => false,
+        };
         final code = error is OwnershipRefused || error is OwnershipGuardRefused
             ? 'ownership_refused'
             : 'void_close_failed';
@@ -1415,11 +1422,27 @@ final class StationCommandHandler implements GridCommandHandler {
                 '`work_bead` key remains; "$workBeadId" re-mounts from the '
                 'frontier.',
           _VoidRollback.failed =>
-            'Could not close session "$sessionId" for void ($error), and '
-                'its re-key could not be rolled back: it is OPEN on '
-                '"$retiredKey", unlinked from "$workBeadId", so the bead '
-                're-mounts from the frontier. The row is no longer the '
-                'bead\'s round; close it by hand.',
+            'Session "$sessionId" remains OPEN and re-keyed on its void key '
+                '"$retiredKey". The void close FAILED: $error. The rollback '
+                'FAILED, and the operator-void sanction was withdrawn.',
+          _VoidRollback.guardedWriteDegradedOpen =>
+            'Session "$sessionId" remains OPEN and re-keyed on its void key '
+                '"$retiredKey". The void close FAILED: $error. The rollback '
+                'was SKIPPED because bd.guardedWriteDegraded means the '
+                '`--if-status open` guard cannot be honored; the '
+                'operator-void sanction was withdrawn.',
+          _VoidRollback.guardedWriteDegradedClosed =>
+            'Session "$sessionId" is CLOSED on its void key "$retiredKey", '
+                'but the close did not complete cleanly: $error. The rollback '
+                'was SKIPPED because bd.guardedWriteDegraded means the '
+                '`--if-status open` guard cannot be honored. No bare '
+                '`work_bead` was restored.',
+          _VoidRollback.guardedWriteDegradedUnknown =>
+            'Session "$sessionId" has unknown refreshed status on its void '
+                'key "$retiredKey". The void close FAILED: $error. The '
+                'rollback was SKIPPED because bd.guardedWriteDegraded means '
+                'the `--if-status open` guard cannot be honored; the '
+                'operator-void sanction was withdrawn.',
         });
       }
       landed = true;
@@ -1514,9 +1537,19 @@ final class StationCommandHandler implements GridCommandHandler {
         sessionId,
         metadata: {SessionBeadKeys.workBead: rawKey},
         ifStatus: BeadStatus.open,
+        requireGuardedWrite: true,
       );
       await _refreshState();
       return _VoidRollback.restored;
+    } on BdGuardedWriteUnavailable {
+      await _refreshState();
+      final session = _stateSource.current?.bead(sessionId);
+      if (session == null) return _VoidRollback.guardedWriteDegradedUnknown;
+      if (session.isClosed) return _VoidRollback.guardedWriteDegradedClosed;
+      if (session.status == BeadStatus.open) {
+        return _VoidRollback.guardedWriteDegradedOpen;
+      }
+      return _VoidRollback.guardedWriteDegradedUnknown;
     } on Object {
       return _VoidRollback.failed;
     }
@@ -2429,4 +2462,13 @@ enum _VoidRollback {
 
   /// The restore did not land: the session is open on its void key.
   failed,
+
+  /// Guard support degraded, so restore was skipped; refresh found OPEN.
+  guardedWriteDegradedOpen,
+
+  /// Guard support degraded, so restore was skipped; refresh found CLOSED.
+  guardedWriteDegradedClosed,
+
+  /// Guard support degraded, so restore was skipped; status is unavailable.
+  guardedWriteDegradedUnknown,
 }

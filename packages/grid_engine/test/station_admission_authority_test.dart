@@ -367,8 +367,8 @@ void main() {
   group('operator session void (tg-5snt)', () {
     const live = SessionProjection(workBeadId: 'tg-1', sessionId: 'tgdog-s1');
 
-    test('liveRuntimesOf names only the runtimes held under that session, '
-        'from the in-memory transport', () async {
+    test('liveRuntimesOf reference-counts provisional effects and returns a '
+        'sorted de-duplicated union with the provider', () async {
       final provider = FakeRuntimeProvider();
       addTearDown(provider.close);
       final station = _stationOver(RecordingBdRunner(), provider: provider);
@@ -377,12 +377,30 @@ void main() {
       await provider.start('tgdog-s1/tg-1/land', config);
       await provider.start('tgdog-s1/tg-1/agent', config);
       await provider.start('tgdog-s10/tg-9/agent', config);
+      station.admission
+        ..beginRuntimeEffect('tgdog-s1/tg-1/verify')
+        ..beginRuntimeEffect('tgdog-s1/tg-1/verify')
+        ..beginRuntimeEffect('tgdog-s1/tg-1/agent');
 
       expect(station.admission.liveRuntimesOf('tgdog-s1'), [
         'tgdog-s1/tg-1/agent',
         'tgdog-s1/tg-1/land',
+        'tgdog-s1/tg-1/verify',
       ]);
       expect(station.admission.liveRuntimesOf('tgdog-s2'), isEmpty);
+
+      station.admission.endRuntimeEffect('tgdog-s1/tg-1/verify');
+      expect(
+        station.admission.liveRuntimesOf('tgdog-s1'),
+        contains('tgdog-s1/tg-1/verify'),
+      );
+      station.admission
+        ..endRuntimeEffect('tgdog-s1/tg-1/verify')
+        ..endRuntimeEffect('tgdog-s1/tg-1/agent');
+      expect(station.admission.liveRuntimesOf('tgdog-s1'), [
+        'tgdog-s1/tg-1/agent',
+        'tgdog-s1/tg-1/land',
+      ]);
     });
 
     test(

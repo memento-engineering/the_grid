@@ -1,19 +1,27 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/grid_engine.dart'
     as engine
     show Station, SubstationConfig, SubstationScope;
+import 'package:grid_engine/src/molecule/process_lease_vendor.dart'
+    show ProcessLeaseRequest;
+import 'package:grid_engine/src/molecule/station_process_transport.dart'
+    show stationProcessSpawner;
 import 'package:grid_engine/testing.dart'
     show
         FakeSnapshotSource,
+        FakeTreeContext,
         Fakes,
         RecordingBdRunner,
         RecordingCapabilityRegistry,
         RecordingExplorationTransport,
-        buildFakes;
+        buildFakes,
+        stepArgs,
+        testWorkspace;
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
@@ -3574,6 +3582,76 @@ void _shipObserverGroup() {
       expect(await harness.handler(request), isA<GridCommandCompleted>());
     });
 
+    test('tg-wd4n AC-1: provisioning runtime refuses session void before '
+        'transport start', () async {
+      final harness = _VoidAdmissionHarness([
+        _session('tgdog-session', open: true),
+      ]);
+      addTearDown(harness.dispose);
+      final workspaceDir = Directory.systemTemp
+          .createTempSync('grid-sdk-void-provisioning-')
+          .path;
+      addTearDown(() => Directory(workspaceDir).deleteSync(recursive: true));
+      final sourceControl = _VoidProvisioningSourceControl();
+      final context = FakeTreeContext()
+        ..provide<StationServices>(harness.fakes.ctx)
+        ..provide<ServiceBundle>(ServiceBundle(sourceControl: sourceControl))
+        ..provide<Workspace>(
+          testWorkspace(
+            'tg-1',
+            workspaceDir: workspaceDir,
+            branch: 'grid/tg-1',
+          ),
+        );
+      final spawning = stationProcessSpawner(
+        ProcessLeaseRequest(
+          stepBeadId: 'tgdog-session-agent',
+          capability: const _VoidProcessCapability(),
+          inputs: AllocationInputs(
+            args: stepArgs('tg-1/agent'),
+            transport: harness.fakes.provider,
+            address: const AllocationAddress('tgdog-session', 'tg-1/agent'),
+            env: const {'GRID_INSTANCE_TOKEN': 'void-provisioning'},
+            sink: (_) {},
+          ),
+        ),
+        context,
+        stepArgs('tg-1/agent'),
+      );
+      await sourceControl.entered.future;
+
+      final result = await harness.handler(request);
+
+      expect(
+        result,
+        isA<GridCommandRefused>()
+            .having((value) => value.code, 'code', 'session_step_live')
+            .having(
+              (value) => value.message,
+              'message',
+              contains('tgdog-session/tg-1/agent'),
+            ),
+      );
+      expect(harness.state.calls, isEmpty);
+      expect(harness.work.calls, isEmpty);
+      expect(harness.fakes.provider.started, isEmpty);
+      expect(harness.fakes.provider.stopped, isEmpty);
+
+      sourceControl.release.complete();
+      while (harness.fakes.provider.started.isEmpty) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      harness.fakes.provider.emit(
+        const SessionStarted(
+          name: 'tgdog-session/tg-1/agent',
+          pid: 10,
+          pgid: 20,
+        ),
+      );
+      await spawning;
+      await harness.fakes.provider.stop('tgdog-session/tg-1/agent');
+    });
+
     test('MEDIUM-3: a session with NO molecule step beads (no durable cursor '
         'at all) is still refused while the resident holds a runtime under '
         'it', () async {
@@ -3705,6 +3783,96 @@ void _shipObserverGroup() {
       final voided = projectSession(harness.state.bead('tgdog-session')!);
       expect(voided.isTerminal, isTrue);
       expect(voided.workBeadId, retiredKey);
+    });
+
+    test('tg-wd4n AC-2: close and rollback failures report the open void key '
+        'and withdraw sanction', () async {
+      final harness = _VoidAdmissionHarness([
+        _session('tgdog-session', open: true),
+      ]);
+      addTearDown(harness.dispose);
+      harness.state
+        ..throwOnClose = true
+        ..throwOnBareKeyRestore = true;
+
+      final result = await harness.handler(request);
+
+      expect(
+        result,
+        isA<GridCommandRefused>()
+            .having((value) => value.code, 'code', 'void_close_failed')
+            .having(
+              (value) => value.message,
+              'message',
+              allOf(
+                contains('remains OPEN'),
+                contains(retiredKey),
+                contains('close FAILED'),
+                contains('rollback FAILED'),
+                contains('sanction was withdrawn'),
+                isNot(contains('frontier')),
+              ),
+            ),
+      );
+      final session = harness.state.bead('tgdog-session')!;
+      expect(session.isClosed, isFalse);
+      expect(session.metadata[SessionBeadKeys.workBead], retiredKey);
+
+      final nextPass = await harness.admit();
+      expect(
+        nextPass.workBeads.map((work) => work.bead.id),
+        ['tg-1'],
+        reason: 'the failed void withdrew its operator-void sanction',
+      );
+    });
+
+    test('tg-wd4n AC-3: degraded guarded write skips rollback after the '
+        'close race', () async {
+      final harness = _VoidAdmissionHarness([
+        _session('tgdog-session', open: true),
+      ]);
+      addTearDown(harness.dispose);
+      harness.state
+        ..throwOnClose = true
+        ..guardedWriteSupported = false
+        ..closeOnGuardCapabilityProbe = true;
+
+      final result = await harness.handler(request);
+
+      expect(
+        result,
+        isA<GridCommandRefused>()
+            .having((value) => value.code, 'code', 'void_close_failed')
+            .having(
+              (value) => value.message,
+              'message',
+              allOf(
+                contains('CLOSED'),
+                contains(retiredKey),
+                contains('rollback was SKIPPED'),
+                contains('bd.guardedWriteDegraded'),
+                contains('No bare `work_bead` was restored'),
+              ),
+            ),
+      );
+      final session = harness.state.bead('tgdog-session')!;
+      expect(session.isClosed, isTrue);
+      expect(session.metadata[SessionBeadKeys.workBead], retiredKey);
+      expect(_closedOnBareKey(harness.state.beads, 'tg-1'), isEmpty);
+      expect(
+        harness.state.calls.where(
+          (call) => call.first == 'update' && call.contains('work_bead=tg-1'),
+        ),
+        isEmpty,
+        reason: 'strict degradation never issues a bare-key restore',
+      );
+
+      final nextPass = await harness.admit();
+      expect(
+        nextPass.workBeads,
+        isEmpty,
+        reason: 'the refreshed CLOSED row leaves the landed sanction armed',
+      );
     });
 
     test(
@@ -4344,6 +4512,46 @@ GraphSnapshot _durableSnapshot(
   capturedAt: DateTime.utc(2026, 9, 25),
 );
 
+final class _VoidProvisioningSourceControl implements SourceControl {
+  final Completer<void> entered = Completer<void>();
+  final Completer<void> release = Completer<void>();
+
+  @override
+  String workspaceFor(String beadId) => '/work/$beadId';
+
+  @override
+  String branchFor(String beadId) => 'grid/$beadId';
+
+  @override
+  String get baseBranch => 'main';
+
+  @override
+  String? baseShaFor(String beadId) => null;
+
+  @override
+  Future<void> provisionWorkspace({
+    required String beadId,
+    required String workspaceDir,
+  }) async {
+    Directory('$workspaceDir/.git').createSync(recursive: true);
+    entered.complete();
+    await release.future;
+  }
+}
+
+final class _VoidProcessCapability extends ProcessCapability {
+  const _VoidProcessCapability();
+
+  @override
+  RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
+    workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
+    command: 'agent',
+  );
+
+  @override
+  StepSignal interpretEvent(RuntimeEvent event) => StepSignal.none;
+}
+
 /// A bd store that APPLIES the writes it receives, so a command's effect is
 /// the durable state the next admission pass reads (not a replayed argv).
 final class _DurableStore implements BdRunner, BeadProbeReader {
@@ -4362,6 +4570,15 @@ final class _DurableStore implements BdRunner, BeadProbeReader {
 
   /// Fails every non-probe `bd update` without applying it.
   bool throwOnUpdate = false;
+
+  /// Fails only the rollback that restores the bare `work_bead` key.
+  bool throwOnBareKeyRestore = false;
+
+  /// Whether the `bd update --help` capability probe reports guard support.
+  bool guardedWriteSupported = true;
+
+  /// Closes the session while the rollback's capability probe is in flight.
+  bool closeOnGuardCapabilityProbe = false;
 
   List<Bead> get beads => _beads.values.toList(growable: false);
 
@@ -4408,9 +4625,17 @@ final class _DurableStore implements BdRunner, BeadProbeReader {
       stderr: '',
     );
     if (args.length >= 2 && args[0] == 'update' && args[1] == '--help') {
-      return const BdResult(
+      if (closeOnGuardCapabilityProbe) {
+        final session = _beads['tgdog-session'];
+        if (session != null) {
+          _beads['tgdog-session'] = session.copyWith(status: BeadStatus.closed);
+        }
+      }
+      return BdResult(
         exitCode: 0,
-        stdout: 'Flags:\n  --if-assignee string\n  --if-status string\n',
+        stdout: guardedWriteSupported
+            ? 'Flags:\n  --if-assignee string\n  --if-status string\n'
+            : 'Flags:\n  --actor string\n',
         stderr: '',
       );
     }
@@ -4424,6 +4649,9 @@ final class _DurableStore implements BdRunner, BeadProbeReader {
       return ok;
     }
     if (args.length >= 2 && args[0] == 'update') {
+      if (throwOnBareKeyRestore && args.contains('work_bead=tg-1')) {
+        throw StateError('injected bare-key restore failure');
+      }
       if (throwOnUpdate) throw StateError('injected update failure');
       final bead = _beads[args[1]];
       if (bead == null) return ok;
