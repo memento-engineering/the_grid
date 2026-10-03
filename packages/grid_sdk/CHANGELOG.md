@@ -1,3 +1,7 @@
+## 0.4.0-dev.10
+
+ - **FIX**(runtime): harden session void safety (#522).
+
 ## 0.4.0-dev.9
 
  - **FIX**(engine,runtime,sdk,trajectory): re-arm the P6 mirror and degrade admission while it is dead (tg-6n18) (#520).
