@@ -19,7 +19,7 @@ import 'substation_config.dart';
 /// The v2 `buildServices`/`buildSources` hook split **died** with the
 /// code-as-config pivot: framework-owned layering is gone, because assets mount
 /// in the tree at the right scope. What survives is exactly three things, with
-/// five lifecycle rails:
+/// six lifecycle rails:
 ///
 ///  1. **Being the observable.** A `GridDelegate` *is* a
 ///     `StateNotifier<GridConfiguration>` (a thin plain value, Q6). Its state is
@@ -28,9 +28,10 @@ import 'substation_config.dart';
 ///     observed change — no restart, no re-parse.
 ///  2. **The lifecycle rails** — [didLaunch] (synchronous pre-tree), [boot]
 ///     (awaited pre-tree assembly), [initGrid] (post-mount async kickoff,
-///     unawaited), [onReady], [onTeardown]. A rail that throws is captured,
-///     **attributed, and surfaced loud** as a [GridHookError] — a named refusal,
-///     never a bare stack trace from library plumbing (the guard principle).
+///     unawaited), [onReady], [drainTrajectory], [onTeardown]. A rail that
+///     throws is captured, **attributed, and surfaced loud** as a
+///     [GridHookError] — a named refusal, never a bare stack trace from library
+///     plumbing (the guard principle).
 ///  3. **The master [build]** `(context, configuration) → Seed` — returns the
 ///     station tree (v3 §2). §2's `SpaceStationAsASeed.build` *is* this method
 ///     in delegate clothing; a full station overrides it wholesale.
@@ -211,6 +212,17 @@ abstract class GridDelegate extends StateNotifier<GridConfiguration> {
   /// teardown proceeds regardless (an effect must never leak because a rail
   /// threw). Default: no-op. (Override to run; `runGrid` calls it.)
   void onTeardown() {}
+
+  /// Drains trajectory work that must reach its configured shutdown boundary
+  /// before the resident starts its bounded teardown tail.
+  ///
+  /// The default is already complete, so delegates without a trajectory keep
+  /// the existing teardown contract. A station whose boot assembled a
+  /// trajectory overrides this with that trajectory's own bounded drain. This
+  /// is deliberately NOT the rejected asynchronous socket-close rail from
+  /// `resident-unwind-closes-store-sockets`: store handles remain vended via
+  /// [openStores] and closed by the resident shell's one bounded close locus.
+  Future<void> drainTrajectory() async {}
 
   List<SubstationWorkSpec> _armed = const <SubstationWorkSpec>[];
   List<SubstationWorkSpec> _attached = const <SubstationWorkSpec>[];

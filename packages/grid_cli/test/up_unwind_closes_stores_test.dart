@@ -73,9 +73,10 @@ final class _Delegate extends GridDelegate {
 }
 
 final class _Lock implements LockResource {
-  _Lock(this.events);
+  _Lock(this.events, this.unwindRecords);
 
   final List<String> events;
+  final List<StationUnwindRecord> unwindRecords;
 
   @override
   String get path => '/fake/station.lock';
@@ -90,6 +91,11 @@ final class _Lock implements LockResource {
   Future<void> updateVmService(String vmServiceUri) async {}
 
   @override
+  Future<void> updateUnwind(StationUnwindRecord unwind) async {
+    unwindRecords.add(unwind);
+  }
+
+  @override
   Future<void> release() async => events.add('lock.release');
 }
 
@@ -99,6 +105,7 @@ final class _Grid implements GridResource {
   final List<String> events;
   final GridDelegate delegate;
   final Future<void> Function() orphanSweep;
+  Future<void>? _trajectoryDrain;
 
   @override
   Future<ReassembleReport> hotReload() => throw UnimplementedError();
@@ -107,7 +114,12 @@ final class _Grid implements GridResource {
   Future<ReassembleReport> hotRestart() => throw UnimplementedError();
 
   @override
-  Future<void> teardown() async {
+  Future<void> drainTrajectory() =>
+      _trajectoryDrain ??= delegate.drainTrajectory();
+
+  @override
+  Future<void> teardown({Duration? orphanSweepBudget}) async {
+    await drainTrajectory();
     events.add('grid.teardown');
     await orphanSweep();
     delegate.dispose();
@@ -129,7 +141,13 @@ final class _Control implements ControlResource {
   Future<void> dispose() async => events.add('control.dispose');
 }
 
-typedef _Outcome = ({int? code, List<String> events, String out, String err});
+typedef _Outcome = ({
+  int? code,
+  List<String> events,
+  List<StationUnwindRecord> unwindRecords,
+  String out,
+  String err,
+});
 
 Future<_Outcome> _runUp(
   List<StoreConnection> Function(List<String> events) storesFor,
@@ -144,6 +162,7 @@ Future<_Outcome> _runUp(
   seedStore(workRoot);
 
   final events = <String>[];
+  final unwindRecords = <StationUnwindRecord>[];
   final stores = storesFor(events);
   final outConsumer = ByteConsumer();
   final errConsumer = ByteConsumer();
@@ -160,7 +179,7 @@ Future<_Outcome> _runUp(
     validateHarness: (_) => null,
     acquireLock:
         ({required stateWorkspaceDir, required pid, required now}) async =>
-            _Lock(events),
+            _Lock(events, unwindRecords),
     runMountedGrid:
         (
           delegate, {
@@ -200,6 +219,7 @@ Future<_Outcome> _runUp(
       ],
     },
     waitForShutdown: () async {},
+    exiter: (_) {},
   );
   final runner = CommandRunner<int>('lunar', 'test')..addCommand(command);
   final code = await IOOverrides.runZoned(
@@ -212,6 +232,7 @@ Future<_Outcome> _runUp(
   return (
     code: code,
     events: events,
+    unwindRecords: unwindRecords,
     out: outConsumer.text,
     err: errConsumer.text,
   );
@@ -270,6 +291,13 @@ void main() {
           '${kStoreCloseTimeout.inMilliseconds}ms',
         ),
       );
+      expect(
+        outcome.unwindRecords.last.outstanding,
+        contains(
+          '"slow" ((endpoint not vended)) — close did not confirm within '
+          '${kStoreCloseTimeout.inMilliseconds}ms',
+        ),
+      );
     },
     timeout: const Timeout(Duration(seconds: 60)),
   );
@@ -283,6 +311,13 @@ void main() {
     // a second `kStoreCloseTimeout` declaration in grid_cli would make this
     // name ambiguous and the file would not compile.
     expect(kStoreCloseTimeout, const Duration(seconds: 2));
+    final source = File('lib/src/up_command.dart').readAsStringSync();
+    expect(
+      'closeStoreConnections('.allMatches(source),
+      hasLength(1),
+      reason: 'the resident shell delegates to the one SDK close primitive',
+    );
+    expect(source, isNot(contains('Future<void> closeStores(')));
   });
 
   test('a station vending no stores prints no store line', () async {
