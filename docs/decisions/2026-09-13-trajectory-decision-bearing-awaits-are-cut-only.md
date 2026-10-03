@@ -19,6 +19,7 @@ register:
     - "trajectory-queue-deadline-follows-writer-progress"
   obsoleted-by: null
   updated-by:
+    - projection-authority-selects-structural-graph-reads
     - retirement-acknowledgements-fence-successor-mints
   bead: tg-f0fn
   legacy-id: null

@@ -103,6 +103,9 @@ List<UnclaimedRequirement> stationUnclaimedFrontier(
       stationFacts: stationFacts,
       circuitById: registry.circuit,
       now: now,
+      dependencyPathsFor: session.trajectoryGraph?.isAuthoritative ?? false
+          ? session.trajectoryGraph!.blockersFor
+          : null,
     );
     for (final step in steps) {
       unclaimed.add(

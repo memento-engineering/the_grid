@@ -38,6 +38,145 @@ const _burn = Circuit(
   ],
 );
 
+const _projectionBlockerCircuit = Circuit(
+  id: 'projection-blockers',
+  terminalStepId: 'remote',
+  steps: [
+    CapabilityStep(stepId: 'declared-blocker', capabilityId: 'declared'),
+    CapabilityStep(stepId: 'projected-blocker', capabilityId: 'projected'),
+    CapabilityStep(
+      stepId: 'remote',
+      capabilityId: 'remote',
+      dependsOn: {'declared-blocker'},
+      requires: _linuxRequirement,
+    ),
+  ],
+);
+
+const _blockerCursor = <String, NodeCursor>{
+  'tg-blocked/declared-blocker': NodeCursor(state: StepState.complete),
+  'tg-blocked/projected-blocker': NodeCursor(state: StepState.pending),
+  'tg-blocked/remote': NodeCursor(state: StepState.pending),
+};
+
+ProjectionGraphRead _blockerGraph({required bool authoritative}) =>
+    ProjectionGraphRead(
+      sessionId: 'tgdog-blocked',
+      round: 0,
+      steps: const _BlockerSteps([
+        _BlockerStep(path: 'tg-blocked/declared-blocker', state: 'complete'),
+        _BlockerStep(path: 'tg-blocked/projected-blocker', state: 'pending'),
+        _BlockerStep(path: 'tg-blocked/remote', state: 'pending'),
+      ]),
+      edges: const _BlockerEdges([
+        _BlockerEdge(
+          from: 'tg-blocked/remote',
+          to: 'tg-blocked/projected-blocker',
+        ),
+      ]),
+      processIdentities: const _NoProcesses(),
+      isAuthoritative: authoritative,
+    );
+
+final class _BlockerStep implements StepCursorView {
+  const _BlockerStep({required this.path, required this.state});
+  final String path;
+  final String state;
+  @override
+  String get sessionId => 'tgdog-blocked';
+  @override
+  int get round => 0;
+  @override
+  String get stepPath => path;
+  @override
+  int get stepRound => 0;
+  @override
+  String get stepState => state;
+  @override
+  int get incarnation => 0;
+  @override
+  String? get attemptId => null;
+  @override
+  int? get supersededByStepRound => null;
+  @override
+  DateTime? get cooldownUntil => null;
+  @override
+  int? get restartBudget => null;
+  @override
+  DateTime? get startedAt => null;
+  @override
+  DateTime? get readyAt => null;
+  @override
+  DateTime? get completedAt => null;
+  @override
+  String? get failureClass => null;
+  @override
+  int get lastSeq => 1;
+}
+
+final class _BlockerSteps implements TrajectoryStepSnapshot {
+  const _BlockerSteps(this.rows);
+  final List<StepCursorView> rows;
+  @override
+  Iterable<StepCursorView> byP2SessionId(String sessionId) => rows;
+  @override
+  int get version => 1;
+  @override
+  TrajectorySnapshotHealth get health => TrajectorySnapshotHealth.live;
+  @override
+  DateTime? get seededAt => null;
+  @override
+  DateTime? get firstEpochClaimedAt => null;
+}
+
+final class _BlockerEdge implements TrajectoryStepEdgeView {
+  const _BlockerEdge({required this.from, required this.to});
+  final String from;
+  final String to;
+  @override
+  String get sessionId => 'tgdog-blocked';
+  @override
+  int get round => 0;
+  @override
+  String get fromPath => from;
+  @override
+  String get toPath => to;
+  @override
+  String get kind => 'blocks';
+}
+
+final class _BlockerEdges implements TrajectoryStepEdgeSnapshot {
+  const _BlockerEdges(this.rows);
+  @override
+  final List<TrajectoryStepEdgeView> rows;
+  @override
+  Iterable<TrajectoryStepEdgeView> bySessionId(String sessionId) => rows;
+  @override
+  int get version => 1;
+  @override
+  TrajectorySnapshotHealth get health => TrajectorySnapshotHealth.live;
+  @override
+  DateTime? get seededAt => null;
+}
+
+final class _NoProcesses implements TrajectoryProcessIdentitySnapshot {
+  const _NoProcesses();
+  @override
+  Iterable<ProcessIdentityView> bySessionId(String sessionId) => const [];
+  @override
+  Iterable<ProcessIdentityView> get rows => const [];
+  @override
+  int get version => 1;
+  @override
+  TrajectorySnapshotHealth get health => TrajectorySnapshotHealth.live;
+  @override
+  DateTime? get seededAt => null;
+  @override
+  DateTime? get lastTickAt => null;
+  @override
+  bool get tickStalled => false;
+}
+
 Bead _task(String id) =>
     Bead(id: id, issueType: IssueType.task, status: BeadStatus.open);
 
@@ -50,6 +189,58 @@ GraphSnapshot _graph(List<Bead> beads) => GraphSnapshot.fromParts(
 
 void main() {
   group('stationUnclaimedFrontier', () {
+    test(
+      'projection graph blockers use authoritative projected dependencies',
+      () {
+        final registry = RecordingCapabilityRegistry(clock: DateTime(2026));
+        final snapshot = JoinedSnapshot(
+          graph: _graph([_task('tg-blocked')]),
+          sessionsByWorkBead: {
+            'tg-blocked': SessionProjection(
+              workBeadId: 'tg-blocked',
+              sessionId: 'tgdog-blocked',
+              cursor: _blockerCursor,
+              trajectoryGraph: _blockerGraph(authoritative: true),
+            ),
+          },
+        );
+
+        final unclaimed = stationUnclaimedFrontier(
+          snapshot,
+          rootCircuitFor: (_) => _projectionBlockerCircuit,
+          registry: registry,
+          stationFacts: _macos,
+        );
+
+        expect(unclaimed, isEmpty);
+      },
+    );
+
+    test('projection graph blockers fall back to declared dependencies', () {
+      final registry = RecordingCapabilityRegistry(clock: DateTime(2026));
+      final snapshot = JoinedSnapshot(
+        graph: _graph([_task('tg-blocked')]),
+        sessionsByWorkBead: {
+          'tg-blocked': SessionProjection(
+            workBeadId: 'tg-blocked',
+            sessionId: 'tgdog-blocked',
+            cursor: _blockerCursor,
+            trajectoryGraph: _blockerGraph(authoritative: false),
+          ),
+        },
+      );
+
+      final unclaimed = stationUnclaimedFrontier(
+        snapshot,
+        rootCircuitFor: (_) => _projectionBlockerCircuit,
+        registry: registry,
+        stationFacts: _macos,
+      );
+
+      expect(unclaimed, hasLength(1));
+      expect(unclaimed.single.step.nodePath, 'tg-blocked/remote');
+    });
+
     test('aggregates the unclaimed step across ONE live session', () {
       final registry = RecordingCapabilityRegistry(clock: DateTime(2026));
       final snapshot = JoinedSnapshot(

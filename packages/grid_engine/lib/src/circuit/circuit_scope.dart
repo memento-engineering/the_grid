@@ -46,6 +46,7 @@ class CircuitScope extends StatelessSeed with GridDiagnosticable {
     this.circuitRoundsByPath = const {},
     this.adoptedFailures = const {},
     this.onAdoptedLatch,
+    this.dependencyPathsFor,
     super.key,
   });
 
@@ -62,6 +63,7 @@ class CircuitScope extends StatelessSeed with GridDiagnosticable {
 
   /// Session circuit incarnation by full step node path.
   final Map<String, int> circuitRoundsByPath;
+  final DependencyPathsFor? dependencyPathsFor;
 
   /// Exhausted durable failures selected by SessionScope for adoption-time
   /// re-evaluation, keyed by exact full node path.
@@ -126,6 +128,7 @@ class CircuitScope extends StatelessSeed with GridDiagnosticable {
       nodePath,
       circuitById: registry.circuit,
       now: registry.now(),
+      dependencyPathsFor: dependencyPathsFor,
     ).map((step) => stepPath(nodePath, step.stepId)).toSet();
 
     final activeChildren = <Seed>[];
@@ -190,6 +193,7 @@ class CircuitScope extends StatelessSeed with GridDiagnosticable {
                 circuitRoundsByPath: circuitRoundsByPath,
                 adoptedFailures: adoptedFailures,
                 onAdoptedLatch: onAdoptedLatch,
+                dependencyPathsFor: dependencyPathsFor,
                 key: ValueKey('$path/scope'),
               );
             }

@@ -2537,13 +2537,13 @@ void main() {
       );
       expect(
         source,
-        contains('''onProcessIdentityChanges: !dualReadArmed
+        contains('''onProcessIdentityChanges: !(dualReadArmed || g2ReadArmed)
         ? null
         : (listener) => trajectory.onProcessIdentitiesChanged(
             listener,
             fireImmediately: false,
           ),'''),
-        reason: 'P6 rejoins only while the dual read is armed',
+        reason: 'P6 rejoins while either dual read or G2 reading is armed',
       );
       for (final retired in [
         'workBundleOverrides',

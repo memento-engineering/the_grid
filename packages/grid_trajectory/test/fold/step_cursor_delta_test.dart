@@ -34,6 +34,58 @@ void main() {
   );
 
   group('stepCursorDeltaFor', () {
+    test('two-deep supersede chain is ordered and rearm leaves no hole', () {
+      final rows = <StepCursorKey, StepCursorRow>{};
+      var seq = 0;
+      void apply(TrajectoryEnvelope record) {
+        final delta = stepCursorDeltaFor(record);
+        expect(delta, isNotNull);
+        applyStepCursorDelta(rows, delta!, lastSeq: ++seq);
+      }
+
+      apply(transition(stepRound: 0));
+      apply(
+        envelope(
+          recordType: 'step.superseded',
+          family: TrajectoryFamily.step,
+          sessionId: 'tranquility-1',
+          round: 1,
+          stepPath: 'work.build',
+          stepRound: 1,
+          payload: const {
+            'cause': 'validation-failed',
+            'budget_remaining': 2,
+            'old_step_round': 0,
+            'new_step_round': 1,
+          },
+        ),
+      );
+      apply(transition(stepRound: 1));
+      apply(
+        envelope(
+          recordType: 'step.superseded',
+          family: TrajectoryFamily.step,
+          sessionId: 'tranquility-1',
+          round: 1,
+          stepPath: 'work.build',
+          stepRound: 2,
+          payload: const {
+            'cause': 'validation-failed',
+            'budget_remaining': 1,
+            'old_step_round': 1,
+            'new_step_round': 2,
+          },
+        ),
+      );
+      apply(transition(stepRound: 2));
+      apply(transition(state: 'pending', stepRound: 3, cause: 'gate_cleared'));
+
+      final chain = rows.values.toList()
+        ..sort((a, b) => a.stepRound.compareTo(b.stepRound));
+      expect(chain.map((row) => row.stepRound), [0, 1, 2, 3]);
+      expect(chain.map((row) => row.supersededByStepRound), [1, 2, 3, null]);
+    });
+
     test('step.transition upserts on the two-ladder key with exactly the '
         'carried columns', () {
       final delta = stepCursorDeltaFor(

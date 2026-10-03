@@ -23,6 +23,7 @@
 library;
 
 import '../sdk/cursor.dart';
+import '../domain/projection_graph_read.dart';
 import 'bead_path_key.dart';
 
 /// The ambient molecule-session context a `CapabilityHost` reads to target its
@@ -42,6 +43,7 @@ class InheritedCircuit {
     required this.root,
     required this.beadIdByNodePath,
     required this.cursor,
+    this.projectedLeases = const {},
   });
 
   /// The canonical breadcrumb identifying this molecule instance (R7) — work
@@ -61,7 +63,10 @@ class InheritedCircuit {
   /// unchanged.
   final CircuitCursor cursor;
 
-  /// Structural equality over ([root], [cursor]) ONLY — deliberately NOT
+  /// Exact P2/P6 lease readings by node path; empty on legacy/shadow reads.
+  final Map<String, ProjectionAttemptLeaseRead> projectedLeases;
+
+  /// Structural equality over ([root], [cursor], [projectedLeases]) — but NOT
   /// [beadIdByNodePath] (Decided conflict 4, `DESIGN-tg-pm6.md` §3): the
   /// lookup is a derived, topology-stable view of the SAME molecule beads
   /// `cursor` already reflects, so it never disagrees with `cursor` about
@@ -73,12 +78,14 @@ class InheritedCircuit {
   bool operator ==(Object other) =>
       other is InheritedCircuit &&
       other.root == root &&
-      _cursorEquals(other.cursor, cursor);
+      _cursorEquals(other.cursor, cursor) &&
+      _leaseMapEquals(other.projectedLeases, projectedLeases);
 
   /// Consistent with [operator ==]: hashes exactly the fields equality
   /// compares, so two equal instances never disagree in a `Set`/`Map` key.
   @override
-  int get hashCode => Object.hash(root, _cursorHash(cursor));
+  int get hashCode =>
+      Object.hash(root, _cursorHash(cursor), _leaseMapHash(projectedLeases));
 
   @override
   String toString() => 'InheritedCircuit(root: $root, cursor: $cursor)';
@@ -106,6 +113,26 @@ bool _cursorEquals(CircuitCursor a, CircuitCursor b) {
 int _cursorHash(CircuitCursor cursor) {
   var hash = 0;
   for (final entry in cursor.entries) {
+    hash ^= Object.hash(entry.key, entry.value);
+  }
+  return hash;
+}
+
+bool _leaseMapEquals(
+  Map<String, ProjectionAttemptLeaseRead> a,
+  Map<String, ProjectionAttemptLeaseRead> b,
+) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  for (final entry in a.entries) {
+    if (b[entry.key] != entry.value) return false;
+  }
+  return true;
+}
+
+int _leaseMapHash(Map<String, ProjectionAttemptLeaseRead> leases) {
+  var hash = 0;
+  for (final entry in leases.entries) {
     hash ^= Object.hash(entry.key, entry.value);
   }
   return hash;

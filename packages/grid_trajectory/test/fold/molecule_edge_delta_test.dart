@@ -1,6 +1,7 @@
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:test/test.dart';
 
+import '../support/scripted_db.dart';
 import '../support/scripted_reader.dart';
 
 void main() {
@@ -114,4 +115,76 @@ void main() {
     expect(rows, once);
     expect(rows, hasLength(1));
   });
+
+  test('scan reads one deterministic primary-key ordered seed', () async {
+    final db = ScriptedDb()
+      ..on(
+        'FROM proj_step_edges',
+        result: const SqlResult(
+          rows: [
+            {
+              'session_id': 'session-1',
+              'round': '3',
+              'from_path': 'work/b',
+              'to_path': 'work/a',
+              'kind': 'blocks',
+            },
+          ],
+        ),
+      );
+
+    final rows = await scanMoleculeEdges(db);
+
+    expect(db.log, hasLength(1));
+    expect(db.log.single.sql, scanMoleculeEdgesSql);
+    expect(
+      db.log.single.sql,
+      contains('session_id, round, from_path, to_path, kind'),
+    );
+    expect(rows.single.kind, 'blocks');
+  });
+
+  test(
+    'two supersedes leave only blocks and validates edges without collision',
+    () {
+      final rows = <MoleculeEdgeKey, MoleculeEdgeRow>{};
+      applyMoleculeEdgeDelta(
+        rows,
+        moleculeEdgeDeltaFor(
+          poured(
+            edges: const [
+              {'from_path': 'work/b', 'to_path': 'work/a', 'kind': 'blocks'},
+              {'from_path': 'work/c', 'to_path': 'work/b', 'kind': 'validates'},
+            ],
+          ),
+        )!,
+      );
+      for (final stepRound in [1, 2]) {
+        expect(
+          moleculeEdgeDeltaFor(
+            envelope(
+              recordType: 'step.superseded',
+              family: TrajectoryFamily.step,
+              sessionId: 'session-1',
+              round: 3,
+              stepPath: 'work/b',
+              stepRound: stepRound,
+              payload: {
+                'cause': 'validation-failed',
+                'budget_remaining': 2 - stepRound,
+                'old_step_round': stepRound - 1,
+                'new_step_round': stepRound,
+              },
+            ),
+          ),
+          isNull,
+        );
+      }
+      expect(rows.values.map((row) => row.kind).toSet(), {
+        'blocks',
+        'validates',
+      });
+      expect(rows, hasLength(2));
+    },
+  );
 }

@@ -108,6 +108,7 @@ export 'src/domain/session_disposition.dart';
 export 'src/domain/stranded_work.dart';
 export 'src/domain/substation_config.dart';
 export 'src/domain/session_projection.dart';
+export 'src/domain/projection_graph_read.dart';
 // The trajectory dual-read's TYPE SEAM (cut-wiring C1): the engine declares
 // the fold READ interfaces + the winner rule in its own domain layer, and
 // grid_sdk implements them over grid_trajectory's fold row types — so the
