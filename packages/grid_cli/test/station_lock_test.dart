@@ -1,9 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:grid_cli/src/station_lock.dart';
 import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
-    show StationLifecyclePhase, StationLockRecord;
+    show StationLifecyclePhase, StationLockRecord, StationUnwindRecord;
 import 'package:test/test.dart';
 
 /// RS-2 (D-A1, `docs/SCRATCH-resident-station.md` §4): the station lock —
@@ -257,6 +258,143 @@ void main() {
       expect(disk.vmServiceUri, 'http://127.0.0.1:1234/second');
       expect(disk.controlUrl, 'http://127.0.0.1:8137');
       expect(disk.token, 's3cret');
+    });
+
+    test('updateUnwind preserves ownership and every advertisement', () async {
+      final store = _tempStore();
+      final handle =
+          await StationLockService(
+            isPidAlive: (_) => true,
+            log: (_) {},
+            prepareProcessGroup: (stationPid) async => stationPid,
+          ).acquire(
+            stateWorkspaceDir: store.path,
+            pid: 7777,
+            now: DateTime.utc(2026, 7, 2, 12),
+          );
+      await handle.updateControl(
+        controlUrl: 'http://127.0.0.1:8137',
+        token: 's3cret',
+      );
+      await handle.updateVmService('http://127.0.0.1:1234/token=/');
+
+      await handle.updateUnwind(
+        StationUnwindRecord(
+          step: 'grid teardown',
+          startedAt: DateTime.utc(2026, 9, 17, 7, 30),
+          outstanding: const ['bd send-metrics (detached)'],
+        ),
+      );
+
+      final disk = _readRecord(handle.path);
+      expect(disk.pid, 7777);
+      expect(disk.startedAt, DateTime.utc(2026, 7, 2, 12));
+      expect(disk.phase, StationLifecyclePhase.live);
+      expect(disk.controlUrl, 'http://127.0.0.1:8137');
+      expect(disk.token, 's3cret');
+      expect(disk.vmServiceUri, 'http://127.0.0.1:1234/token=/');
+      expect(disk.unwind?.step, 'grid teardown');
+      expect(disk.unwind?.outstanding, ['bd send-metrics (detached)']);
+      expect(_modeOf(handle.path), '600');
+    });
+
+    test(
+      'updateUnwind refuses after a foreign owner replaces the lock',
+      () async {
+        final store = _tempStore();
+        final handle =
+            await StationLockService(
+              isPidAlive: (_) => true,
+              log: (_) {},
+              prepareProcessGroup: (stationPid) async => stationPid,
+            ).acquire(
+              stateWorkspaceDir: store.path,
+              pid: 7777,
+              now: DateTime.utc(2026, 7, 2, 12),
+            );
+        File(handle.path).writeAsStringSync(
+          jsonEncode(
+            StationLockRecord(
+              pid: 8888,
+              pgid: 8888,
+              startedAt: DateTime.utc(2026, 7, 3),
+            ).toJson(),
+          ),
+        );
+
+        await expectLater(
+          handle.updateUnwind(
+            StationUnwindRecord(
+              step: 'grid teardown',
+              startedAt: DateTime.utc(2026, 9, 17),
+              outstanding: const [],
+            ),
+          ),
+          throwsA(isA<StationRefusal>()),
+        );
+        expect(_readRecord(handle.path).pid, 8888);
+      },
+    );
+
+    test('a late unwind publish is serialized before terminal release and '
+        'cannot resurrect the lock', () async {
+      final store = _tempStore();
+      final updateEntered = Completer<void>();
+      final allowUpdate = Completer<void>();
+      final events = <String>[];
+      var modeCalls = 0;
+      final handle =
+          await StationLockService(
+            isPidAlive: (_) => true,
+            log: (_) {},
+            prepareProcessGroup: (stationPid) async => stationPid,
+            setMode: (path) async {
+              modeCalls++;
+              if (modeCalls == 2) {
+                events.add('update entered');
+                updateEntered.complete();
+                await allowUpdate.future;
+                events.add('update released');
+              } else if (modeCalls == 3) {
+                events.add('release entered');
+              }
+              await defaultChmod600(path);
+            },
+          ).acquire(
+            stateWorkspaceDir: store.path,
+            pid: 7777,
+            now: DateTime.utc(2026, 7, 2, 12),
+          );
+
+      final update = handle.updateUnwind(
+        StationUnwindRecord(
+          step: 'grid teardown',
+          startedAt: DateTime.utc(2026, 9, 17),
+          outstanding: const [],
+        ),
+      );
+      await updateEntered.future;
+      final release = handle.release();
+      await expectLater(
+        handle.updateUnwind(
+          StationUnwindRecord(
+            step: 'too late',
+            startedAt: DateTime.utc(2026, 9, 17),
+            outstanding: const [],
+          ),
+        ),
+        throwsStateError,
+      );
+      expect(events, ['update entered']);
+
+      allowUpdate.complete();
+      await update;
+      await release;
+
+      expect(events, ['update entered', 'update released', 'release entered']);
+      expect(File(handle.path).existsSync(), isFalse);
+      await Future<void>.delayed(Duration.zero);
+      expect(File(handle.path).existsSync(), isFalse);
     });
 
     test('group preparation failure is loud and writes no lock', () async {

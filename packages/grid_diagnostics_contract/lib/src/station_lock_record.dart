@@ -16,6 +16,43 @@ enum StationLifecyclePhase {
   releasing,
 }
 
+/// The resident's current terminal-unwind state.
+final class StationUnwindRecord {
+  /// Creates an unwind record.
+  StationUnwindRecord({
+    required this.step,
+    required DateTime startedAt,
+    required List<String> outstanding,
+  }) : startedAt = startedAt.toUtc(),
+       outstanding = List<String>.unmodifiable(outstanding);
+
+  /// Parses an unwind record, tolerating unknown keys.
+  factory StationUnwindRecord.fromJson(Map<String, Object?> json) {
+    final outstanding = json['outstanding'] as List<Object?>;
+    return StationUnwindRecord(
+      step: json['step'] as String,
+      startedAt: DateTime.parse(json['startedAt'] as String),
+      outstanding: outstanding.cast<String>(),
+    );
+  }
+
+  /// The unwind step the resident most recently entered.
+  final String step;
+
+  /// When the resident entered [step], normalized to UTC.
+  final DateTime startedAt;
+
+  /// Work the resident stopped awaiting, in shutdown order.
+  final List<String> outstanding;
+
+  /// Serializes the unwind record.
+  Map<String, Object?> toJson() => <String, Object?>{
+    'step': step,
+    'startedAt': startedAt.toIso8601String(),
+    'outstanding': outstanding,
+  };
+}
+
 /// The web-safe value stored in `.grid/station.lock`.
 final class StationLockRecord {
   /// Creates a station lock record.
@@ -27,6 +64,7 @@ final class StationLockRecord {
     this.controlUrl,
     this.token,
     this.vmServiceUri,
+    this.unwind,
   });
 
   /// Parses a lock record, tolerating unknown keys.
@@ -39,6 +77,7 @@ final class StationLockRecord {
         controlUrl: json['controlUrl'] as String?,
         token: json['token'] as String?,
         vmServiceUri: json['vmServiceUri'] as String?,
+        unwind: _unwindFromJson(json['unwind']),
       );
 
   /// The station process id.
@@ -62,6 +101,9 @@ final class StationLockRecord {
   /// The optional development VM-service URI.
   final String? vmServiceUri;
 
+  /// The optional terminal-unwind state published for a stopping client.
+  final StationUnwindRecord? unwind;
+
   /// Serializes the record, omitting absent optional fields.
   Map<String, Object?> toJson() => <String, Object?>{
     'pid': pid,
@@ -71,6 +113,7 @@ final class StationLockRecord {
     if (controlUrl != null) 'controlUrl': controlUrl,
     if (token != null) 'token': token,
     if (vmServiceUri != null) 'vmServiceUri': vmServiceUri,
+    if (unwind != null) 'unwind': unwind!.toJson(),
   };
 
   /// Returns this record in [phase], preserving every other field.
@@ -82,6 +125,7 @@ final class StationLockRecord {
     controlUrl: controlUrl,
     token: token,
     vmServiceUri: vmServiceUri,
+    unwind: unwind,
   );
 
   /// Returns this identity with its control advertisement.
@@ -96,6 +140,7 @@ final class StationLockRecord {
     controlUrl: controlUrl,
     token: token,
     vmServiceUri: vmServiceUri,
+    unwind: unwind,
   );
 
   /// Returns this identity with its VM-service advertisement.
@@ -107,7 +152,29 @@ final class StationLockRecord {
     controlUrl: controlUrl,
     token: token,
     vmServiceUri: vmServiceUri,
+    unwind: unwind,
   );
+
+  /// Returns this identity with its terminal-unwind advertisement.
+  StationLockRecord withUnwind(StationUnwindRecord unwind) => StationLockRecord(
+    pid: pid,
+    pgid: pgid,
+    startedAt: startedAt,
+    phase: phase,
+    controlUrl: controlUrl,
+    token: token,
+    vmServiceUri: vmServiceUri,
+    unwind: unwind,
+  );
+}
+
+StationUnwindRecord? _unwindFromJson(Object? value) {
+  if (value == null) return null;
+  try {
+    return StationUnwindRecord.fromJson(value as Map<String, Object?>);
+  } on Object {
+    return null;
+  }
 }
 
 StationLifecyclePhase _phaseFromJson(Map<String, Object?> json) {

@@ -261,6 +261,37 @@ final class _BareDelegate extends GridDelegate {
       const _Leaf();
 }
 
+final class _DrainDelegate extends GridDelegate {
+  _DrainDelegate(this.events, {this.gate, this.failure});
+
+  final List<String> events;
+  final Completer<void>? gate;
+  final Object? failure;
+  var drainCalls = 0;
+
+  @override
+  Seed build(TreeContext context, GridConfiguration configuration) =>
+      const _Leaf();
+
+  @override
+  Future<void> drainTrajectory() async {
+    drainCalls++;
+    events.add('trajectory drain');
+    if (gate case final pending?) await pending.future;
+    if (failure case final error?) throw error;
+    events.add('trajectory drained');
+  }
+
+  @override
+  void onTeardown() => events.add('onTeardown');
+
+  @override
+  void dispose() {
+    events.add('delegate dispose');
+    super.dispose();
+  }
+}
+
 final class _GatedGridControllerRuntime extends GridControllerRuntime {
   _GatedGridControllerRuntime({
     required this.label,
@@ -2282,8 +2313,8 @@ void main() {
     });
 
     test(
-      'GridHandle.teardown names an orphan sweep that outlives its budget and '
-      'still disposes the delegate',
+      'GridHandle.teardown drops a never-completing bd send-metrics child at '
+      'the remaining budget',
       () async {
         final refusals = <GridHookError>[];
         final delegate = _BareDelegate();
@@ -2291,10 +2322,11 @@ void main() {
           delegate,
           onError: refusals.add,
           orphanSweep: () => Completer<void>().future,
-          orphanSweepBudget: const Duration(milliseconds: 50),
         );
 
-        await handle.teardown().timeout(const Duration(seconds: 5));
+        await handle
+            .teardown(orphanSweepBudget: const Duration(milliseconds: 50))
+            .timeout(const Duration(seconds: 5));
 
         expect(handle.isTornDown, isTrue);
         final refusal = refusals.single;
@@ -2310,6 +2342,94 @@ void main() {
           throwsA(isA<Error>()),
           reason: 'the delegate was disposed after the abandoned sweep',
         );
+      },
+    );
+
+    test('GridHandle drainTrajectory is idempotent and completes before '
+        'teardown rails', () async {
+      final events = <String>[];
+      final gate = Completer<void>();
+      final delegate = _DrainDelegate(events, gate: gate);
+      final handle = await runGrid(
+        delegate,
+        orphanSweep: () async => events.add('orphan sweep'),
+      );
+
+      final first = handle.drainTrajectory();
+      final second = handle.drainTrajectory();
+      expect(second, same(first));
+      expect(events, ['trajectory drain']);
+
+      gate.complete();
+      await first;
+      await handle.teardown();
+
+      expect(delegate.drainCalls, 1);
+      expect(events, [
+        'trajectory drain',
+        'trajectory drained',
+        'onTeardown',
+        'orphan sweep',
+        'delegate dispose',
+      ]);
+    });
+
+    test(
+      'a trajectory drain failure is attributed and teardown continues',
+      () async {
+        final events = <String>[];
+        final refusals = <GridHookError>[];
+        final delegate = _DrainDelegate(
+          events,
+          failure: StateError('drain exploded'),
+        );
+        final handle = await runGrid(
+          delegate,
+          onError: refusals.add,
+          orphanSweep: () async => events.add('orphan sweep'),
+        );
+
+        await handle.teardown();
+
+        expect(refusals, hasLength(1));
+        expect(refusals.single.hook, 'trajectoryDrain');
+        expect(refusals.single.cause, isA<StateError>());
+        expect(events, [
+          'trajectory drain',
+          'onTeardown',
+          'orphan sweep',
+          'delegate dispose',
+        ]);
+      },
+    );
+
+    test(
+      'GridHandle.teardown uses the smaller call-time orphan-sweep budget',
+      () async {
+        final refusals = <GridHookError>[];
+        final delegate = _BareDelegate();
+        final handle = await runGrid(
+          delegate,
+          onError: refusals.add,
+          orphanSweep: () => Completer<void>().future,
+          orphanSweepBudget: const Duration(seconds: 15),
+        );
+        final watch = Stopwatch()..start();
+
+        final first = handle.teardown(
+          orphanSweepBudget: const Duration(milliseconds: 40),
+        );
+        final second = handle.teardown(
+          orphanSweepBudget: const Duration(seconds: 1),
+        );
+        await first.timeout(const Duration(seconds: 5));
+        watch.stop();
+
+        expect(second, same(first));
+        expect(watch.elapsed, lessThan(const Duration(milliseconds: 500)));
+        final cause = refusals.single.cause as TimeoutException;
+        expect(cause.duration, const Duration(milliseconds: 40));
+        expect(cause.message, contains('within 40ms'));
       },
     );
 

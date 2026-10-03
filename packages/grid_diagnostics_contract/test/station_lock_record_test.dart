@@ -60,12 +60,18 @@ void main() {
   });
 
   test('copy helpers preserve phase and every unrelated field', () {
+    final unwind = StationUnwindRecord(
+      step: 'grid teardown',
+      startedAt: DateTime.utc(2026, 9, 17, 7, 30),
+      outstanding: const ['bd send-metrics (detached)'],
+    );
     final base = StationLockRecord(
       pid: 1,
       pgid: 2,
       startedAt: startedAt,
       phase: StationLifecyclePhase.acquired,
       vmServiceUri: 'http://vm',
+      unwind: unwind,
     );
     final controlled = base.withControl(
       controlUrl: 'http://control',
@@ -86,5 +92,80 @@ void main() {
     expect(releasing.controlUrl, withVm.controlUrl);
     expect(releasing.token, withVm.token);
     expect(releasing.vmServiceUri, withVm.vmServiceUri);
+    expect(releasing.unwind, same(unwind));
   });
+
+  test('unwind state round-trips and owns an immutable UTC list', () {
+    final outstanding = <String>['state store'];
+    final unwind = StationUnwindRecord(
+      step: 'store connections close',
+      startedAt: DateTime.parse('2026-09-17T02:30:00-05:00'),
+      outstanding: outstanding,
+    );
+    outstanding.add('late mutation');
+
+    final record = StationLockRecord(
+      pid: 1,
+      pgid: 2,
+      startedAt: startedAt,
+      unwind: unwind,
+    );
+    final decoded = StationLockRecord.fromJson(record.toJson()).unwind!;
+
+    expect(decoded.step, 'store connections close');
+    expect(decoded.startedAt, DateTime.utc(2026, 9, 17, 7, 30));
+    expect(decoded.outstanding, ['state store']);
+    expect(() => decoded.outstanding.add('mutation'), throwsUnsupportedError);
+    expect(record.toJson()['unwind'], <String, Object?>{
+      'step': 'store connections close',
+      'startedAt': '2026-09-17T07:30:00.000Z',
+      'outstanding': ['state store'],
+    });
+  });
+
+  test('legacy JSON without unwind keeps unwind absent', () {
+    final record = StationLockRecord.fromJson(<String, Object?>{
+      'pid': 1,
+      'pgid': 2,
+      'startedAt': startedAt.toIso8601String(),
+    });
+
+    expect(record.unwind, isNull);
+    expect(record.toJson().containsKey('unwind'), isFalse);
+  });
+
+  test(
+    'malformed optional unwind degrades to absent without hiding identity',
+    () {
+      for (final malformed in <Object?>[
+        7,
+        'stuck',
+        <String, Object?>{},
+        <String, Object?>{
+          'step': 'grid teardown',
+          'startedAt': 'not-a-date',
+          'outstanding': <Object?>[],
+        },
+        <String, Object?>{
+          'step': 'grid teardown',
+          'startedAt': '2026-09-17T07:30:00.000Z',
+          'outstanding': <Object?>[7],
+        },
+      ]) {
+        final record = StationLockRecord.fromJson(<String, Object?>{
+          'pid': 41,
+          'pgid': 41,
+          'startedAt': startedAt.toIso8601String(),
+          'controlUrl': 'http://127.0.0.1:8080',
+          'token': 'secret',
+          'unwind': malformed,
+        });
+
+        expect(record.pid, 41);
+        expect(record.controlUrl, 'http://127.0.0.1:8080');
+        expect(record.token, 'secret');
+        expect(record.unwind, isNull);
+      }
+    },
+  );
 }

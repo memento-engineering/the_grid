@@ -87,9 +87,10 @@ T runWithGridErrorAttribution<T>({
 ///     on success `delegate.onReady()` fires. A failure in either is captured,
 ///     attributed, and reported loudly via [onError] — the running grid stands.
 ///
-/// Returns a [GridHandle]: `await teardown()` runs `onTeardown`, unmounts the
-/// tree (every mounted effect tears down with it), runs [orphanSweep] — the
-/// teardown-vs-spawn reap — and only then disposes the delegate: the sweep
+/// Returns a [GridHandle]: `await teardown()` awaits the opt-in trajectory
+/// drain, runs `onTeardown`, unmounts the tree (every mounted effect tears down
+/// with it), runs [orphanSweep] — the teardown-vs-spawn reap — and only then
+/// disposes the delegate: the sweep
 /// reconciles over the delegate's boot-assembled runtime, so the delegate must
 /// still be LIVE to serve it. [orphanSweep] is null by default (a station with
 /// no process transport has nothing to sweep); a runner with work machinery
@@ -382,6 +383,7 @@ class GridHandle {
   bool _tornDown = false;
   bool _flushScheduled = false;
   Future<void>? _teardown;
+  Future<void>? _trajectoryDrain;
 
   /// The retry clock for [_rearmAfterFailedFlush] — injectable so the re-arm is
   /// driven deterministically offline.
@@ -691,8 +693,9 @@ class GridHandle {
   }
 
   /// Tears the grid down: runs `onTeardown` (loud on failure, non-aborting),
-  /// unmounts the tree (every mounted effect tears down), runs the ORPHAN
-  /// SWEEP when one is wired, and ENDS by disposing the delegate. The sweep
+  /// after first awaiting the delegate's trajectory drain, unmounts the tree
+  /// (every mounted effect tears down), runs the ORPHAN SWEEP when one is
+  /// wired, and ENDS by disposing the delegate. The sweep
   /// precedes the dispose BY CONTRACT: it is the teardown-vs-spawn reap on the
   /// delegate's boot-assembled runtime, and `dispose` unwinds exactly that
   /// machinery — a sweep served off a disposed delegate would silently
@@ -719,11 +722,38 @@ class GridHandle {
   /// is NO LONGER awaited (tg-supq): the delegate disposes and the caller's
   /// unwind continues to its lock release instead of parking on a bd child.
   ///
-  /// Idempotent: a second call returns the SAME future; the rails and the sweep
-  /// run exactly once.
-  Future<void> teardown() => _teardown ??= _runTeardown();
+  /// [orphanSweepBudget] lets the resident shell clamp the sweep to what
+  /// remains of its total unwind deadline. The first call fixes that budget
+  /// into the idempotent teardown future; later calls return the SAME future
+  /// without rerunning rails or changing the selected budget.
+  Future<void> teardown({Duration? orphanSweepBudget}) =>
+      _teardown ??= _runTeardown(orphanSweepBudget ?? _orphanSweepBudget);
 
-  Future<void> _runTeardown() async {
+  /// Awaits the live delegate's trajectory drain exactly once.
+  ///
+  /// A failure is reported as a [GridHookError] on `trajectoryDrain` and is
+  /// contained: teardown still proceeds. This opt-in, default-completed rail
+  /// coordinates the trajectory's own shutdown budget only. It does not close
+  /// stores and does not move socket ownership out of the resident shell.
+  Future<void> drainTrajectory() => _trajectoryDrain ??= _runTrajectoryDrain();
+
+  Future<void> _runTrajectoryDrain() async {
+    final delegate = _delegate;
+    try {
+      await delegate.drainTrajectory();
+    } catch (error, stackTrace) {
+      _report(
+        GridHookError(
+          'trajectoryDrain',
+          delegate.runtimeType,
+          error,
+          stackTrace,
+        ),
+      );
+    }
+  }
+
+  Future<void> _runTeardown(Duration orphanSweepBudget) async {
     // Set synchronously (an async body runs to its first await eagerly): the
     // flush loop reads it to stop scheduling into a dying tree.
     _tornDown = true;
@@ -732,6 +762,7 @@ class GridHandle {
     // An in-flight reassemble will never see its flush — fail it LOUDLY rather
     // than leave the caller's future hanging forever.
     _failWaiters();
+    await drainTrajectory();
     try {
       _delegate.onTeardown();
     } catch (e, st) {
@@ -750,7 +781,7 @@ class GridHandle {
     final sweep = _orphanSweep;
     if (sweep != null) {
       try {
-        await sweep().timeout(_orphanSweepBudget);
+        await sweep().timeout(orphanSweepBudget);
       } on TimeoutException catch (e, st) {
         _report(
           GridHookError(
@@ -758,9 +789,9 @@ class GridHandle {
             _delegate.runtimeType,
             TimeoutException(
               'the orphan sweep did not settle within '
-              '${_orphanSweepBudget.inMilliseconds}ms — no longer awaited; '
+              '${orphanSweepBudget.inMilliseconds}ms — no longer awaited; '
               'the delegate disposes now (${e.message ?? 'pending'})',
-              _orphanSweepBudget,
+              orphanSweepBudget,
             ),
             st,
           ),
