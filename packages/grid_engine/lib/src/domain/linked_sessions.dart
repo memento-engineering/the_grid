@@ -102,8 +102,8 @@ sealed class LinkedSessionVerdict with _$LinkedSessionVerdict {
   /// [session] is the published one; it rides down to `SessionScope`, which
   /// owns the retire and its fail-closed liveness fence. [surplus] are the
   /// older rows the frontier demotes so the join goes single-valued again.
-  /// The lifecycle cut retires a predecessor attempt before presenting its
-  /// successor; this verdict never polls to heal a late terminal projection.
+  /// The admission authority fences successor creation on the predecessor's
+  /// retirement acknowledgement; this verdict never polls to heal ordering.
   const factory LinkedSessionVerdict.remint({
     required SessionProjection session,
     required List<SessionProjection> surplus,

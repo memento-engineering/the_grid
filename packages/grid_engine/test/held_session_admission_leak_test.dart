@@ -309,6 +309,7 @@ void main() {
       await authority.closeRetiredReworkSession(
         workBeadId: owner.id,
         sessionId: firstSessionId,
+        retiredRound: 0,
         reapMolecule: false,
         services: const ServiceBundle(),
       );

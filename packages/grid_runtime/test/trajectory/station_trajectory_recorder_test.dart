@@ -211,8 +211,13 @@ void main() {
       await ackRecorder.sessionCompleted(sessionId: 's2', workBeadId: 'tg-2'),
       await ackRecorder.sessionEscalated(sessionId: 's3', workBeadId: 'tg-3'),
       await ackRecorder.sessionVoided(sessionId: 's4', workBeadId: 'tg-4'),
+      await ackRecorder.roundRetiredAcked(
+        sessionId: 's5',
+        cause: RoundRetireCause.rework,
+        oldRound: 0,
+      ),
     ];
-    ackRecorder.sessionSettled(sessionId: 's5', workBeadId: 'tg-5');
+    ackRecorder.sessionSettled(sessionId: 's6', workBeadId: 'tg-6');
     ackRecorder.stepReady(
       sessionId: 's1',
       stepPath: 'ship',
@@ -228,13 +233,14 @@ void main() {
           Suppressed() => 'suppressed',
         },
     ], everyElement('acked'));
-    expect(ackSink.acked, hasLength(7));
+    expect(ackSink.acked, hasLength(8));
     expect(ackSink.acked.map((entry) => entry.record.recordType), [
       'step.transition',
       'step.transition',
       'molecule.poured',
       'step.superseded',
       ...List.filled(3, 'attempt.terminal'),
+      'attempt.round.retired',
     ]);
     expect(
       ackSink.acked.map((entry) => entry.decisionBearing),
@@ -617,6 +623,81 @@ void main() {
           expectSchemaClean(sink.captured.last).record as AttemptRoundRetired;
       expect((reseeded.oldRound, reseeded.newRound), (4, 5));
     });
+
+    test(
+      'acknowledged retirement shares derivation and round advancement',
+      () async {
+        final ackSink = _CapturingAckSink();
+        final ackRecorder = StationTrajectoryRecorder(sink: ackSink);
+
+        final result = await ackRecorder.roundRetiredAcked(
+          sessionId: 's10',
+          cause: RoundRetireCause.rework,
+          oldRound: 3,
+        );
+        ackRecorder.processStarted(
+          attemptId: mintUlid(),
+          sessionId: 's10',
+          incarnation: 0,
+          pid: 101,
+          pgid: 101,
+        );
+
+        expect(result, isA<Acked>());
+        final retired = ackSink.acked.single.record as AttemptRoundRetired;
+        expect((retired.oldRound, retired.newRound), (3, 4));
+        final started = ackSink.enqueued.single.record as AttemptProcessStarted;
+        expect(started.round, 4);
+      },
+    );
+
+    test(
+      'an acknowledged rework retirement leaves the fold head open',
+      () async {
+        final ackSink = _CapturingAckSink();
+        final ackRecorder = StationTrajectoryRecorder(sink: ackSink);
+        ackRecorder.sessionMinted(
+          sessionId: 's-open',
+          workBeadId: 'tg-open',
+          rig: 'tg',
+          model: 'molecule',
+        );
+        await ackRecorder.roundRetiredAcked(
+          sessionId: 's-open',
+          cause: RoundRetireCause.rework,
+          oldRound: 0,
+        );
+
+        TrajectoryEnvelope numbered(_Capture capture, int seq) {
+          final json = envelopeOf(capture).toJson()
+            ..['seq'] = seq
+            ..['epoch_seq'] = seq;
+          return TrajectoryEnvelope.fromJson(json);
+        }
+
+        final started = ackSink.enqueued.single;
+        final retired = ackSink.acked.single.record;
+        final fold = foldSessionHeads([
+          numbered(started, 1),
+          numbered(
+            _Capture(
+              record: retired,
+              occurredAt: null,
+              substation: null,
+              provenance: TrajectoryProvenance.observed,
+              provenanceBasis: null,
+            ),
+            2,
+          ),
+        ]);
+        final row = fold.rows['s-open']!;
+
+        expect(retired.recordType, 'attempt.round.retired');
+        expect(row.status, SessionHeadStatus.open);
+        expect(row.round, 1);
+        expect(row.outcome, isNull);
+      },
+    );
   });
 
   group('terminals (§2.3 rows, one record, NO tail)', () {

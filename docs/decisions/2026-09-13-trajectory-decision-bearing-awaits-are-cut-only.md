@@ -18,7 +18,8 @@ register:
     - "wave-2-entry-criteria-rulings"
     - "trajectory-queue-deadline-follows-writer-progress"
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - retirement-acknowledgements-fence-successor-mints
   bead: tg-f0fn
   legacy-id: null
 ---

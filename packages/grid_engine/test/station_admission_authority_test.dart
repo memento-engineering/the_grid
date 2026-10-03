@@ -176,6 +176,39 @@ final class _GatedTerminalSettlementRunner extends RecordingBdRunner {
   }
 }
 
+final class _ControlledAckSink implements TrajectoryAckRecordSink {
+  _ControlledAckSink(this.onAppend);
+
+  Future<TrajectoryAppendResult> Function(TrajectoryRecord record) onAppend;
+  final List<TrajectoryRecord> records = [];
+
+  @override
+  bool get accepting => true;
+
+  @override
+  void enqueue(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+  }) {}
+
+  @override
+  Future<TrajectoryAppendResult> appendAcked(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+    required bool decisionBearing,
+  }) {
+    expect(decisionBearing, isTrue);
+    records.add(record);
+    return onAppend(record);
+  }
+}
+
 final class _GraphErrorRunner extends RecordingBdRunner {
   _GraphErrorRunner(this.error, {super.createdId});
 
@@ -309,18 +342,29 @@ StationServices _stationOver(
   FakeRuntimeProvider? provider,
   AllocationLiveness? liveness,
   int maxConcurrentWork = 2,
+  StationTrajectoryRecorder? trajectoryRecorder,
+  bool cut = false,
 }) {
   final runtime = provider ?? FakeRuntimeProvider();
+  final writer = StationBeadWriter(
+    bd: BdCliService(runner),
+    reader: reader ?? runner,
+    ownership: BeadOwnershipPredicate(const {'tg'}),
+  );
   return StationServices(
     provider: runtime,
-    writer: StationBeadWriter(
-      bd: BdCliService(runner),
-      reader: reader ?? runner,
-      ownership: BeadOwnershipPredicate(const {'tg'}),
-    ),
+    writer: writer,
     stateSubstation: 'tg',
     liveness: liveness,
     maxConcurrentWork: maxConcurrentWork,
+    trajectoryRecorder: trajectoryRecorder,
+    trajectoryAdmissionHalt: cut
+        ? TrajectoryAdmissionHalt(
+            writer: writer,
+            stateSubstation: 'tg',
+            bootEpoch: () => 1,
+          )
+        : null,
   );
 }
 
@@ -2437,6 +2481,7 @@ void main() {
     await station.admission.closeRetiredReworkSession(
       workBeadId: work.id,
       sessionId: 'tg-retired',
+      retiredRound: 0,
       reapMolecule: false,
       services: const ServiceBundle(),
     );
@@ -2471,57 +2516,59 @@ void main() {
   });
 
   test(
-    'rework retirement acknowledgement fences release and successor mint',
+    'an unreserved rework retirement fences a later successor reservation',
     () async {
       final runner = RecordingBdRunner(createdId: 'tg-successor');
       runner.exportBeads = [_ownedSession('tg-retired')];
-      final station = _stationOver(runner, maxConcurrentWork: 1);
-      addTearDown(station.dispose);
-      final work = _bead('tg-1');
-      const retired = SessionProjection(
-        workBeadId: 'tg-1#r1',
-        sessionId: 'tg-retired',
-      );
-      final candidate = StationAdmissionCandidate(bead: work, session: retired);
-      final stale = _snapshot([work], sessions: const {'tg-1': retired});
-      station.admission.admitPending(
-        stale,
-        _config.copyWith(maxConcurrentWork: 1),
-        const ServiceBundle(),
-        [candidate],
-      );
-      var notifications = 0;
-      station.admission.addInvalidationListener(() => notifications += 1);
-      final beforeRetirement = notifications;
       final acknowledgementEntered = Completer<void>();
-      final releaseAcknowledgement = Completer<void>();
-      var acknowledgements = 0;
-
-      Future<void> acknowledge() async {
-        acknowledgements += 1;
-        if (!acknowledgementEntered.isCompleted) {
-          acknowledgementEntered.complete();
+      final releaseAcknowledgement = Completer<TrajectoryAppendResult>();
+      final sink = _ControlledAckSink((record) {
+        acknowledgementEntered.complete();
+        return releaseAcknowledgement.future;
+      });
+      final recorder = StationTrajectoryRecorder(
+        sink: sink,
+        substationPrefixes: const {'tg'},
+      );
+      final station = _stationOver(
+        runner,
+        maxConcurrentWork: 1,
+        trajectoryRecorder: recorder,
+      );
+      addTearDown(station.dispose);
+      addTearDown(() {
+        if (!releaseAcknowledgement.isCompleted) {
+          releaseAcknowledgement.complete(const TrajectoryAppendResult.acked());
         }
-        await releaseAcknowledgement.future;
-      }
+      });
+      final work = _bead('tg-1');
+      final candidate = StationAdmissionCandidate(bead: work, session: null);
+      final snapshot = _snapshot([work]);
 
-      final firstRetirement = station.admission.closeRetiredReworkSession(
+      final retirement = station.admission.closeRetiredReworkSession(
         workBeadId: work.id,
         sessionId: 'tg-retired',
+        retiredRound: 0,
         reapMolecule: false,
         services: const ServiceBundle(),
-        beforeAttemptRelease: acknowledge,
       );
       await acknowledgementEntered.future;
       final repeatedRetirement = station.admission.closeRetiredReworkSession(
         workBeadId: work.id,
         sessionId: 'tg-retired',
+        retiredRound: 0,
         reapMolecule: false,
         services: const ServiceBundle(),
-        beforeAttemptRelease: acknowledge,
       );
+      final admitted = station.admission.admitPending(
+        snapshot,
+        _config.copyWith(maxConcurrentWork: 1),
+        const ServiceBundle(),
+        [candidate],
+      );
+      expect(admitted.admitted, hasLength(1));
       final create = station.admission.createSessionAttempt(
-        stale,
+        snapshot,
         candidate,
         title: 'grid session ${work.id}',
         metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
@@ -2529,13 +2576,18 @@ void main() {
       await _pump();
 
       expect(runner.callsFor('close'), hasLength(1));
-      expect(acknowledgements, 1);
       expect(runner.workCreates, isEmpty);
-      expect(notifications, beforeRetirement);
       expect(station.admission.admissionStatus.reservations, hasLength(1));
+      expect(sink.records, hasLength(1));
+      expect(sink.records.single.recordType, 'attempt.round.retired');
+      expect(
+        sink.records.where((record) => record.recordType == 'attempt.terminal'),
+        isEmpty,
+        reason: 'a retired round stays open in the P1 fold',
+      );
 
-      releaseAcknowledgement.complete();
-      await firstRetirement;
+      releaseAcknowledgement.complete(const TrajectoryAppendResult.acked());
+      await retirement;
       await repeatedRetirement;
       final created = await create;
 
@@ -2548,105 +2600,184 @@ void main() {
         ),
         hasLength(1),
       );
-      expect(notifications, greaterThan(beforeRetirement));
     },
   );
 
-  test('failed retirement acknowledgement retains the reservation and creates '
-      'no successor', () async {
-    final runner = RecordingBdRunner(createdId: 'tg-successor');
-    runner.exportBeads = [_ownedSession('tg-retired')];
-    final station = _stationOver(runner, maxConcurrentWork: 1);
+  test('a completed fence is not reused for a different retirement', () async {
+    final runner = RecordingBdRunner();
+    final sink = _ControlledAckSink(
+      (_) async => const TrajectoryAppendResult.acked(),
+    );
+    final station = _stationOver(
+      runner,
+      trajectoryRecorder: StationTrajectoryRecorder(
+        sink: sink,
+        substationPrefixes: const {'tg'},
+      ),
+    );
     addTearDown(station.dispose);
-    final work = _bead('tg-1');
-    const retired = SessionProjection(
-      workBeadId: 'tg-1#r1',
-      sessionId: 'tg-retired',
-    );
-    final candidate = StationAdmissionCandidate(bead: work, session: retired);
-    final stale = _snapshot([work], sessions: const {'tg-1': retired});
-    station.admission.admitPending(
-      stale,
-      _config.copyWith(maxConcurrentWork: 1),
-      const ServiceBundle(),
-      [candidate],
-    );
-    var notifications = 0;
-    station.admission.addInvalidationListener(() => notifications += 1);
 
-    await expectLater(
-      station.admission.closeRetiredReworkSession(
-        workBeadId: work.id,
-        sessionId: 'tg-retired',
-        reapMolecule: false,
-        services: const ServiceBundle(),
-        beforeAttemptRelease: () async {
-          throw StateError('controlled acknowledgement failure');
-        },
-      ),
-      throwsStateError,
+    await station.admission.closeRetiredReworkSession(
+      workBeadId: 'tg-1',
+      sessionId: 'tg-retired-1',
+      retiredRound: 0,
+      reapMolecule: false,
+      services: const ServiceBundle(),
     );
-    await expectLater(
-      station.admission.createSessionAttempt(
-        stale,
-        candidate,
-        title: 'grid session ${work.id}',
-        metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
-      ),
-      throwsStateError,
+    await station.admission.closeRetiredReworkSession(
+      workBeadId: 'tg-1',
+      sessionId: 'tg-retired-2',
+      retiredRound: 1,
+      reapMolecule: false,
+      services: const ServiceBundle(),
     );
 
-    expect(runner.callsFor('close'), hasLength(1));
-    expect(runner.workCreates, isEmpty);
-    expect(notifications, 0);
-    expect(station.admission.admissionStatus.reservations, hasLength(1));
+    expect(runner.callsFor('close'), hasLength(2));
+    final roundRetirements = sink.records
+        .where((record) => record.recordType == 'attempt.round.retired')
+        .toList();
+    expect(roundRetirements, hasLength(2));
+    expect(
+      roundRetirements.map((record) => record.payloadToJson()['old_round']),
+      [0, 1],
+    );
   });
 
   test(
-    'post-create abandonment acknowledgement fences release and notify',
+    'terminal acknowledgement failure releases capacity and retries',
     () async {
       final runner = RecordingBdRunner(createdId: 'tg-session');
-      final station = _stationOver(runner, maxConcurrentWork: 1);
+      var acknowledgements = 0;
+      final sink = _ControlledAckSink((_) async {
+        acknowledgements += 1;
+        return acknowledgements == 1
+            ? const TrajectoryAppendResult.dropped()
+            : const TrajectoryAppendResult.acked();
+      });
+      final station = _stationOver(
+        runner,
+        maxConcurrentWork: 1,
+        trajectoryRecorder: StationTrajectoryRecorder(
+          sink: sink,
+          substationPrefixes: const {'tg'},
+        ),
+        cut: true,
+      );
       addTearDown(station.dispose);
       final owned = await _reserveAndCreate(station, 'tg-1');
       var notifications = 0;
       station.admission.addInvalidationListener(() => notifications += 1);
       final beforeRetirement = notifications;
-      final acknowledgementEntered = Completer<void>();
-      final releaseAcknowledgement = Completer<void>();
 
+      await expectLater(
+        station.admission.abandonSessionAttempt(
+          workBeadId: owned.candidate.bead.id,
+          sessionId: owned.sessionId,
+          reservationToken: null,
+          services: const ServiceBundle(),
+        ),
+        throwsStateError,
+      );
+      expect(station.admission.admissionStatus.reservations, isEmpty);
+      expect(notifications, greaterThan(beforeRetirement));
+
+      expect(
+        await station.admission.abandonSessionAttempt(
+          workBeadId: owned.candidate.bead.id,
+          sessionId: owned.sessionId,
+          reservationToken: null,
+          services: const ServiceBundle(),
+        ),
+        owned.sessionId,
+      );
+
+      expect(acknowledgements, 2);
+      expect(runner.callsFor('close'), hasLength(2));
+      expect(
+        sink.records.where((record) => record.recordType == 'attempt.terminal'),
+        hasLength(2),
+      );
+    },
+  );
+
+  test(
+    'post-create abandonment releases capacity but fences its successor',
+    () async {
+      final runner = RecordingBdRunner(createdId: 'tg-session');
+      final acknowledgementEntered = Completer<void>();
+      final releaseAcknowledgement = Completer<TrajectoryAppendResult>();
+      final sink = _ControlledAckSink((_) {
+        acknowledgementEntered.complete();
+        return releaseAcknowledgement.future;
+      });
+      final station = _stationOver(
+        runner,
+        maxConcurrentWork: 1,
+        trajectoryRecorder: StationTrajectoryRecorder(
+          sink: sink,
+          substationPrefixes: const {'tg'},
+        ),
+      );
+      addTearDown(station.dispose);
+      addTearDown(() {
+        if (!releaseAcknowledgement.isCompleted) {
+          releaseAcknowledgement.complete(const TrajectoryAppendResult.acked());
+        }
+      });
+      final owned = await _reserveAndCreate(station, 'tg-1');
+      var notifications = 0;
+      station.admission.addInvalidationListener(() => notifications += 1);
+      final beforeRetirement = notifications;
       final retirement = station.admission.abandonSessionAttempt(
         workBeadId: owned.candidate.bead.id,
         sessionId: owned.sessionId,
         reservationToken: null,
         services: const ServiceBundle(),
-        beforeAttemptRelease: () async {
-          acknowledgementEntered.complete();
-          await releaseAcknowledgement.future;
-        },
       );
       await acknowledgementEntered.future;
 
       expect(runner.callsFor('close'), hasLength(1));
-      expect(notifications, beforeRetirement);
-      expect(station.admission.admissionStatus.reservations, hasLength(1));
-      final rival = _bead('tg-2');
-      final held = station.admission.admitPending(
-        _snapshot([owned.candidate.bead, rival]),
+      expect(notifications, greaterThan(beforeRetirement));
+      expect(station.admission.admissionStatus.reservations, isEmpty);
+      final successorSnapshot = _snapshot([owned.candidate.bead]);
+      final successor = StationAdmissionCandidate(
+        bead: owned.candidate.bead,
+        session: null,
+      );
+      final admitted = station.admission.admitPending(
+        successorSnapshot,
         _config.copyWith(maxConcurrentWork: 1),
         const ServiceBundle(),
-        [
-          owned.candidate,
-          StationAdmissionCandidate(bead: rival, session: null),
-        ],
+        [successor],
       );
-      expect(held.admitted.single.candidate.bead.id, owned.candidate.bead.id);
-      expect(held.waiting.single.bead.id, rival.id);
+      expect(
+        admitted.admitted.single.candidate.bead.id,
+        owned.candidate.bead.id,
+      );
+      final create = station.admission.createSessionAttempt(
+        successorSnapshot,
+        successor,
+        title: 'grid session ${owned.candidate.bead.id}',
+        metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
+      );
+      await _pump();
+      expect(
+        runner
+            .callsFor('create')
+            .where((call) => call.contains(GridIssueTypes.session.wire)),
+        hasLength(1),
+      );
 
-      releaseAcknowledgement.complete();
+      releaseAcknowledgement.complete(const TrajectoryAppendResult.acked());
       expect(await retirement, owned.sessionId);
-      expect(station.admission.admissionStatus.reservations, isEmpty);
-      expect(notifications, greaterThan(beforeRetirement));
+      expect((await create).refusal, isNull);
+      expect(sink.records.single.recordType, 'attempt.terminal');
+      expect(
+        runner
+            .callsFor('create')
+            .where((call) => call.contains(GridIssueTypes.session.wire)),
+        hasLength(2),
+      );
     },
   );
 
@@ -2685,6 +2816,7 @@ void main() {
           await station.admission.closeRetiredReworkSession(
             workBeadId: work.id,
             sessionId: 'tg-unrelated',
+            retiredRound: 0,
             reapMolecule: false,
             services: const ServiceBundle(),
           );
@@ -2708,6 +2840,7 @@ void main() {
         await station.admission.closeRetiredReworkSession(
           workBeadId: work.id,
           sessionId: 'tg-retired',
+          retiredRound: 0,
           reapMolecule: false,
           services: const ServiceBundle(),
         );

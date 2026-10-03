@@ -502,6 +502,15 @@ _decisionBearingRecorderCalls() => [
       reason: 'dead key',
     ),
   ),
+  (
+    name: 'roundRetiredAcked',
+    recordType: 'attempt.round.retired',
+    invoke: (recorder) => recorder.roundRetiredAcked(
+      sessionId: 'tranquility-s1',
+      cause: RoundRetireCause.rework,
+      oldRound: 0,
+    ),
+  ),
 ];
 
 void main() {

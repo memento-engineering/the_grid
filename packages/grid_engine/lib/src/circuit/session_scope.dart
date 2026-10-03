@@ -276,29 +276,19 @@ class SessionScopeState extends State<SessionScope>
 
   Future<void> _closeRetiredReworkSession(String sessionId) async {
     try {
+      final retiringRound = switch (_retiredReworkRound) {
+        final round? when round > 0 => round - 1,
+        _ => throw StateError(
+          'rework retirement requires the captured predecessor round',
+        ),
+      };
       await _ctx!.admission.closeRetiredReworkSession(
         workBeadId: seed.bead.id,
         sessionId: sessionId,
+        retiredRound: retiringRound,
         reapMolecule: _isMolecule,
         services: _services,
-        beforeAttemptRelease: () => _retireAttemptBeforeRelease(
-          sessionId: sessionId,
-          reason: 'reworked',
-        ),
       );
-      // §2.3's `attempt.round.retired` row, second observation site: the
-      // command handler saw the re-key, this scope sees the retired round
-      // CLOSE. One retire, two observers, ONE record — the idem key is
-      // `round-retired:<session>:<oldRound>`, so whichever lands first wins
-      // and the other dedupes. `_retiredReworkRound` is the NEW round the
-      // `#rN` key names, so the round being retired is one below it.
-      if (_retiredReworkRound case final round?) {
-        _recorder.roundRetired(
-          sessionId: sessionId,
-          cause: RoundRetireCause.rework,
-          oldRound: round - 1,
-        );
-      }
     } on Object catch (error) {
       _flare('gate.autoCloseFailed', {
         'sessionId': sessionId,
@@ -324,7 +314,6 @@ class SessionScopeState extends State<SessionScope>
   /// is why nothing below ever asks whether the trajectory is up.
   StationTrajectoryRecorder _recorder =
       TrajectoryRecorderScope.disabled.recorder;
-  final Map<String, Future<void>> _attemptRetirementsBySessionId = {};
 
   /// The ambient [ServiceBundle] captured off `build` (D-H rule 1: re-read on
   /// every `didChangeDependencies`, never `??=`-cached) — held so the off-build
@@ -825,10 +814,6 @@ class SessionScopeState extends State<SessionScope>
             deadSession: dead,
             reason: _voidReason,
             services: _services,
-            beforeAttemptRelease: () => _retireAttemptBeforeRelease(
-              sessionId: deadId,
-              reason: _voidReason,
-            ),
           );
           if (refusal != null) {
             _mintAttempts--;
@@ -970,10 +955,6 @@ class SessionScopeState extends State<SessionScope>
         sessionId: id,
         rootCrumbs: root.crumbs,
         services: _services,
-        beforeAttemptRelease: () => _retireAttemptBeforeRelease(
-          sessionId: id!,
-          reason: kMintTimeoutVoidReason,
-        ),
       );
     } on StationMintVoided catch (voided) {
       _recorder.roundRetired(
@@ -1237,13 +1218,6 @@ class SessionScopeState extends State<SessionScope>
       reservationToken: reservationToken,
       services: _services,
       blockUntilFreshReady: blockUntilFreshReady,
-      beforeAttemptRelease: switch (_moleculeSessionId) {
-        final sessionId? => () => _retireAttemptBeforeRelease(
-          sessionId: sessionId,
-          reason: 'mint-abandoned',
-        ),
-        null => null,
-      },
     );
     if (retiredMintSessionId != null) {
       _recorder.roundRetired(
@@ -1826,10 +1800,6 @@ class SessionScopeState extends State<SessionScope>
         sessionId: sessionId,
         rootCrumbs: root.crumbs,
         services: _services,
-        beforeAttemptRelease: () => _retireAttemptBeforeRelease(
-          sessionId: sessionId,
-          reason: kMintTimeoutVoidReason,
-        ),
       );
     } on Object catch (error) {
       // Same terminal park as the fresh-mint path: the session bead EXISTS
@@ -2219,20 +2189,6 @@ class SessionScopeState extends State<SessionScope>
       recordClass: 'attempt.terminal',
     );
   }
-
-  Future<void> _retireAttemptBeforeRelease({
-    required String sessionId,
-    required String reason,
-  }) => _attemptRetirementsBySessionId.putIfAbsent(
-    sessionId,
-    () => _recordTerminal(
-      _recorder.sessionVoided(
-        sessionId: sessionId,
-        workBeadId: seed.bead.id,
-        reason: reason,
-      ),
-    ),
-  );
 
   @override
   void dispose() {

@@ -80,29 +80,12 @@ final class StationAttemptLivenessRecovery {
       throw StateError('liveness-loss recovery requires the cut trajectory');
     }
 
-    if (!session.isClosed) {
-      await services.admission.retireLostSession(
-        workBeadId: workBeadId,
-        sessionId: sessionId,
-        attemptId: attemptId,
-        services: _transportServices,
-      );
-    }
-
-    final result = await _recorder.sessionVoided(
-      sessionId: sessionId,
+    await services.admission.retireLostSession(
       workBeadId: workBeadId,
-      reason: 'attempt-liveness-lost',
+      sessionId: sessionId,
+      attemptId: attemptId,
+      services: _transportServices,
     );
-    await halt.handleTerminalResult(result, recordClass: 'attempt.terminal');
-    switch (result) {
-      case Acked():
-        break;
-      case Dropped():
-        throw StateError('liveness-loss terminal testimony was dropped');
-      case Suppressed():
-        throw StateError('liveness-loss terminal testimony was suppressed');
-    }
 
     _recorder.roundRetired(
       sessionId: sessionId,

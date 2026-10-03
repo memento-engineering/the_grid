@@ -291,6 +291,7 @@ const _voidedSession = SessionProjection(
 StationServices _servicesFor(
   RecordingBdRunner runner, {
   int maxConcurrentWork = kDefaultMaxConcurrentWork,
+  StationTrajectoryRecorder? trajectoryRecorder,
 }) => StationServices(
   provider: FakeRuntimeProvider(),
   writer: StationBeadWriter(
@@ -300,6 +301,7 @@ StationServices _servicesFor(
   ),
   stateSubstation: stateSubstation,
   maxConcurrentWork: maxConcurrentWork,
+  trajectoryRecorder: trajectoryRecorder,
 );
 
 ({TreeOwner owner, Branch root}) _mountFull({
@@ -347,12 +349,16 @@ void main() {
       'terminal acknowledgement fences rework remint and first dispatch',
       () async {
         final runner = RecordingBdRunner(createdId: 'tgdog-round2');
-        final station = _servicesFor(runner);
-        addTearDown(station.dispose);
         final sink = _GatedTerminalSink();
         addTearDown(() {
           if (!sink.release.isCompleted) sink.release.complete();
         });
+        final recorder = StationTrajectoryRecorder(
+          sink: sink,
+          substationPrefixes: const {stateSubstation},
+        );
+        final station = _servicesFor(runner, trajectoryRecorder: recorder);
+        addTearDown(station.dispose);
         final registry = RecordingCapabilityRegistry(circuits: const {});
         final beforeDecision = DateTime.now().subtract(
           const Duration(seconds: 1),
@@ -377,12 +383,7 @@ void main() {
           ctx: station,
           registry: registry,
           rootCircuit: (_) => _code,
-          trajectoryScope: TrajectoryRecorderScope(
-            StationTrajectoryRecorder(
-              sink: sink,
-              substationPrefixes: const {stateSubstation},
-            ),
-          ),
+          trajectoryScope: TrajectoryRecorderScope(recorder),
         );
         addTearDown(mounted.owner.dispose);
 
@@ -405,8 +406,14 @@ void main() {
 
         expect(runner.callsFor('close'), hasLength(1));
         expect(sink.records.map((record) => record.recordType), [
-          'attempt.terminal',
+          'attempt.round.retired',
         ]);
+        expect(
+          sink.records.where(
+            (record) => record.recordType == 'attempt.terminal',
+          ),
+          isEmpty,
+        );
         expect(runner.workCreates, isEmpty);
         expect(runner.graphApplyCalls, isEmpty);
         expect(
@@ -493,12 +500,16 @@ void main() {
         addTearDown(() {
           if (!runner.release.isCompleted) runner.release.complete();
         });
-        final station = _servicesFor(runner);
-        addTearDown(station.dispose);
         final sink = _GatedTerminalSink();
         addTearDown(() {
           if (!sink.release.isCompleted) sink.release.complete();
         });
+        final recorder = StationTrajectoryRecorder(
+          sink: sink,
+          substationPrefixes: const {stateSubstation},
+        );
+        final station = _servicesFor(runner, trajectoryRecorder: recorder);
+        addTearDown(station.dispose);
         final transport = _RecordingTransport(events);
         final firstJoined = JoinedSnapshotNotifier(
           _joined(
@@ -513,12 +524,7 @@ void main() {
           registry: RecordingCapabilityRegistry(circuits: const {}),
           rootCircuit: (_) => _code,
           transport: transport,
-          trajectoryScope: TrajectoryRecorderScope(
-            StationTrajectoryRecorder(
-              sink: sink,
-              substationPrefixes: const {stateSubstation},
-            ),
-          ),
+          trajectoryScope: TrajectoryRecorderScope(recorder),
         );
 
         await _pumpUntil(firstTree.owner, () => runner.entered.isCompleted);
@@ -539,7 +545,11 @@ void main() {
         );
         expect(runner.graphApplyCalls, hasLength(1));
         expect(transport.named('session.mintAbandoned'), isEmpty);
-        expect(station.admission.admissionStatus.reservations, hasLength(1));
+        expect(
+          station.admission.admissionStatus.reservations,
+          isEmpty,
+          reason: 'the durable close releases capacity before its ack',
+        );
 
         sink.release.complete();
         await _waitUntil(
