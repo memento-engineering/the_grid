@@ -572,6 +572,17 @@ void main() {
   );
 
   group('config postures (§1.3)', () {
+    test('default G2 posture leaves the edge mirror unmounted', () async {
+      final h = await harness();
+      expect(h.config.g2Posture, G2Posture.off);
+      expect(h.moleculeEdges, isNull);
+      expect(h.onMoleculeEdgesChanged((_) {}), isNull);
+
+      await h.start();
+      expect(h.moleculeEdges, isNull);
+      await h.shutdown();
+    });
+
     test(
       'disabled: no connection, no claim, enqueue is a SILENT no-op',
       () async {

@@ -3,6 +3,8 @@ library;
 
 import 'package:meta/meta.dart';
 
+import '../connect/trajectory_db.dart';
+
 /// The existing projection's complete primary key.
 typedef MoleculeEdgeKey = ({
   String sessionId,
@@ -23,6 +25,24 @@ final class MoleculeEdgeRow {
     required this.toPath,
     required this.kind,
   });
+
+  /// Decodes one `proj_step_edges` row from SQL or an in-memory row map.
+  factory MoleculeEdgeRow.fromSqlRow(Map<String, Object?> row) {
+    String text(String column) => '${row[column] ?? ''}';
+    int number(String column) => int.parse(text(column));
+
+    final kind = text('kind');
+    if (kind != 'blocks' && kind != 'validates') {
+      throw StateError('unsupported proj_step_edges kind "$kind"');
+    }
+    return MoleculeEdgeRow(
+      sessionId: text('session_id'),
+      round: number('round'),
+      fromPath: text('from_path'),
+      toPath: text('to_path'),
+      kind: kind,
+    );
+  }
 
   /// The owning session correlation.
   final String sessionId;
@@ -65,4 +85,15 @@ final class MoleculeEdgeRow {
 
   @override
   String toString() => 'MoleculeEdgeRow(${toSqlParams()})';
+}
+
+/// The whole semantic edge projection in deterministic primary-key order.
+const String scanMoleculeEdgesSql =
+    'SELECT * FROM proj_step_edges '
+    'ORDER BY session_id, round, from_path, to_path, kind';
+
+/// Reads every projected molecule edge through the caller's serialized lane.
+Future<List<MoleculeEdgeRow>> scanMoleculeEdges(TrajectoryDb db) async {
+  final result = await db.execute(scanMoleculeEdgesSql);
+  return [for (final row in result.rows) MoleculeEdgeRow.fromSqlRow(row)];
 }

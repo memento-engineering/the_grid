@@ -95,15 +95,35 @@ Iterable<_ValidatesEdge> _validatesEdges(
   Circuit circuit,
   String nodePath, {
   required Circuit? Function(String circuitId) circuitById,
+  DependencyPathsFor? validatesPathsFor,
 }) sync* {
   for (final step in circuit.steps) {
     final sourcePath = stepPath(nodePath, step.stepId);
-    final targetId = step.params[kValidatesParam];
-    final target = targetId == null ? null : circuit.stepById(targetId);
-    if (targetId != null && target != null) {
+    final projectedTargets = validatesPathsFor?.call(sourcePath);
+    final targetPaths =
+        projectedTargets ??
+        [
+          if (step.params[kValidatesParam] case final targetId?)
+            stepPath(nodePath, targetId),
+        ];
+    for (final targetPath in targetPaths) {
+      final target = circuit.steps
+          .where(
+            (candidate) =>
+                depTerminalPath(
+                  circuit,
+                  nodePath,
+                  candidate.stepId,
+                  circuitById,
+                ) ==
+                targetPath,
+          )
+          .firstOrNull;
+      if (target == null) continue;
+      final targetId = target.stepId;
       yield (
         sourcePath: sourcePath,
-        targetPath: stepPath(nodePath, targetId),
+        targetPath: targetPath,
         closure: rewindNodePaths(
           circuit,
           nodePath,
@@ -119,7 +139,12 @@ Iterable<_ValidatesEdge> _validatesEdges(
     if (step is SubCircuitStep) {
       final sub = circuitById(step.circuitId);
       if (sub != null) {
-        yield* _validatesEdges(sub, sourcePath, circuitById: circuitById);
+        yield* _validatesEdges(
+          sub,
+          sourcePath,
+          circuitById: circuitById,
+          validatesPathsFor: validatesPathsFor,
+        );
       }
     }
   }
@@ -137,12 +162,14 @@ Map<String, int> _generationsByPath(
   String nodePath, {
   required Circuit? Function(String circuitId) circuitById,
   required Map<String, int> supersedesDepthByPath,
+  DependencyPathsFor? validatesPathsFor,
 }) {
   final generations = <String, int>{};
   for (final edge in _validatesEdges(
     circuit,
     nodePath,
     circuitById: circuitById,
+    validatesPathsFor: validatesPathsFor,
   )) {
     // Pass 1 — the stamp-driven demotion: a currently-invalidating
     // `validates` stamp demotes the target's whole closure at the target's
@@ -208,6 +235,7 @@ Set<String> invalidatedNodes(
   String nodePath, {
   required Circuit? Function(String circuitId) circuitById,
   required Map<String, int> supersedesDepthByPath,
+  DependencyPathsFor? validatesPathsFor,
 }) => _generationsByPath(
   circuit,
   projected,
@@ -215,6 +243,7 @@ Set<String> invalidatedNodes(
   nodePath,
   circuitById: circuitById,
   supersedesDepthByPath: supersedesDepthByPath,
+  validatesPathsFor: validatesPathsFor,
 ).keys.toSet();
 
 /// The derived incarnation axis for [path] (item 7): the active step bead's
@@ -230,6 +259,7 @@ int derivedGeneration(
   required String path,
   required Circuit? Function(String circuitId) circuitById,
   required Map<String, int> supersedesDepthByPath,
+  DependencyPathsFor? validatesPathsFor,
 }) =>
     _generationsByPath(
       circuit,
@@ -238,6 +268,7 @@ int derivedGeneration(
       nodePath,
       circuitById: circuitById,
       supersedesDepthByPath: supersedesDepthByPath,
+      validatesPathsFor: validatesPathsFor,
     )[path] ??
     0;
 
@@ -268,6 +299,7 @@ CircuitCursor effectiveCursor(
   required Circuit? Function(String circuitId) circuitById,
   required Map<String, int> supersedesDepthByPath,
   Map<String, int>? spentReworkRoundsByPath,
+  DependencyPathsFor? validatesPathsFor,
 }) {
   final generations = _generationsByPath(
     circuit,
@@ -276,6 +308,7 @@ CircuitCursor effectiveCursor(
     nodePath,
     circuitById: circuitById,
     supersedesDepthByPath: supersedesDepthByPath,
+    validatesPathsFor: validatesPathsFor,
   );
   if (generations.isEmpty) return projected;
   final effective = <String, NodeCursor>{...projected};
@@ -307,6 +340,8 @@ List<CircuitStep> liveFrontier(
   required DateTime now,
   required Map<String, int> supersedesDepthByPath,
   Map<String, int>? spentReworkRoundsByPath,
+  DependencyPathsFor? validatesPathsFor,
+  DependencyPathsFor? dependencyPathsFor,
 }) => eligibleSteps(
   circuit,
   effectiveCursor(
@@ -317,10 +352,12 @@ List<CircuitStep> liveFrontier(
     circuitById: circuitById,
     supersedesDepthByPath: supersedesDepthByPath,
     spentReworkRoundsByPath: spentReworkRoundsByPath,
+    validatesPathsFor: validatesPathsFor,
   ),
   nodePath,
   circuitById: circuitById,
   now: now,
+  dependencyPathsFor: dependencyPathsFor,
 );
 
 /// Every node path in [circuit]'s subtree, depth-first in DECLARATION order
@@ -360,6 +397,7 @@ Iterable<String> _declarationOrderPaths(
   required Circuit? Function(String circuitId) circuitById,
   required Map<String, int> supersedesDepthByPath,
   Map<String, int>? spentReworkRoundsByPath,
+  DependencyPathsFor? validatesPathsFor,
 }) {
   final generations = _generationsByPath(
     circuit,
@@ -368,6 +406,7 @@ Iterable<String> _declarationOrderPaths(
     nodePath,
     circuitById: circuitById,
     supersedesDepthByPath: supersedesDepthByPath,
+    validatesPathsFor: validatesPathsFor,
   );
   for (final path in _declarationOrderPaths(
     circuit,

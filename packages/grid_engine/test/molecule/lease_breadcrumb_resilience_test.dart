@@ -211,7 +211,7 @@ void main() {
         ).sweepOrphanedLeases(
           candidates: [
             // The dropped-write shape: spawned (running), NO lease keys.
-            (
+            LeaseSweepCandidate(
               stepBeadId: 'tgdog-step-dropped',
               willRemount: true,
               metadata: {
@@ -221,7 +221,7 @@ void main() {
             ),
             // A pre-spawn step (pending, no keys): nothing was owed —
             // stays silent.
-            (
+            LeaseSweepCandidate(
               stepBeadId: 'tgdog-step-pending',
               willRemount: true,
               metadata: {
@@ -231,7 +231,7 @@ void main() {
             ),
             // The cleared SENTINEL (release ran and stopped the group):
             // an explicit record, not a dropped write — stays silent.
-            (
+            LeaseSweepCandidate(
               stepBeadId: 'tgdog-step-cleared',
               willRemount: true,
               metadata: {

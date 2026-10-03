@@ -68,6 +68,7 @@ import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
 import '../sdk/circuit.dart';
 import '../sdk/lease.dart';
+import '../domain/projection_graph_read.dart';
 import 'molecule_schema.dart';
 
 /// A per-incarnation, BUFFERED tap on a transport's broadcast [RuntimeEvent]
@@ -279,6 +280,7 @@ class ProcessLeaseRequest {
     required this.stepBeadId,
     required this.capability,
     required this.inputs,
+    this.projectedLease,
   });
 
   /// The durable step-bead id this lease is keyed by (Decided items 2/5).
@@ -291,6 +293,9 @@ class ProcessLeaseRequest {
   /// The host-assembled inputs — transport/env/address/sink — everything the
   /// REAL spawner/dispatcher need beyond the lease family's `(context, args)`.
   final AllocationInputs inputs;
+
+  /// The exact P2/P6 reading; null keeps the legacy off/shadow path.
+  final ProjectionAttemptLeaseRead? projectedLease;
 }
 
 /// LOUD-or-GONE (Decided item 5): resolves the ambient [ProcessLeaseVendor], a
@@ -461,11 +466,21 @@ RecoveredAttemptId recoverAttemptId(Map<String, String>? metadata) {
 /// not defaulted: preserving a live daemon nothing will adopt is exactly the
 /// leak this field closes, so the caller STATES it rather than inheriting it
 /// silently.
-typedef LeaseSweepCandidate = ({
-  String stepBeadId,
-  Map<String, String> metadata,
-  bool willRemount,
-});
+final class LeaseSweepCandidate {
+  const LeaseSweepCandidate({
+    required this.stepBeadId,
+    required this.metadata,
+    required this.willRemount,
+    this.projectedLease,
+  });
+
+  final String stepBeadId;
+  final Map<String, String> metadata;
+  final bool willRemount;
+
+  /// The exact P2/P6 reading; null keeps the legacy off/shadow path.
+  final ProjectionAttemptLeaseRead? projectedLease;
+}
 
 /// The guarded group-terminate seam the sweep kills through — the caller binds
 /// it to the REAL `terminateGroup` over its own `ProcessGroupController`, so
@@ -732,7 +747,18 @@ class StationProcessLeaseVendor implements ProcessLeaseVendor {
       // (the caller stays lease-schema-ignorant). No breadcrumb, or a
       // cleared/partial one ⇒ nothing is leased; the frontier re-mounts and
       // the job lease respawns fresh (respawn-or-skip, D5).
-      final handle = leaseBreadcrumbOf(candidate.metadata);
+      final projectedLease = candidate.projectedLease;
+      final handle = switch (projectedLease) {
+        ProjectionAttemptLeaseHeld(:final attemptId, :final pid, :final pgid) =>
+          ProcessHandle(
+            pgid: pgid,
+            pid: pid,
+            token: attemptId,
+            attemptId: attemptId,
+          ),
+        ProjectionAttemptLeaseAbsent() => null,
+        null => leaseBreadcrumbOf(candidate.metadata),
+      };
       if (handle == null) {
         // NOT silently (tg-uad D3 repair round 1): a step that already
         // SPAWNED (state running/ready) OWES a breadcrumb. Its lease keys
@@ -749,7 +775,7 @@ class StationProcessLeaseVendor implements ProcessLeaseVendor {
             !candidate.metadata.containsKey(LeaseKeys.pgid) &&
             !candidate.metadata.containsKey(LeaseKeys.pid) &&
             !candidate.metadata.containsKey(LeaseKeys.token);
-        if (spawned && keysAbsent) {
+        if (projectedLease == null && spawned && keysAbsent) {
           onOrphan(
             'lease sweep: step "${candidate.stepBeadId}" is $state but '
             'carries NO lease breadcrumb — its acquire\'s breadcrumb write '
@@ -945,9 +971,18 @@ class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
     TreeContext context,
     StepArgs args,
   ) async {
-    final metadata = await metadataOf(stepBeadId);
-    if (metadata == null) return null;
-    final handle = leaseBreadcrumbOf(metadata);
+    final projectedLease = request.projectedLease;
+    final handle = switch (projectedLease) {
+      ProjectionAttemptLeaseHeld(:final attemptId, :final pid, :final pgid) =>
+        ProcessHandle(
+          pgid: pgid,
+          pid: pid,
+          token: attemptId,
+          attemptId: attemptId,
+        ),
+      ProjectionAttemptLeaseAbsent() => null,
+      null => leaseBreadcrumbOf(await metadataOf(stepBeadId) ?? const {}),
+    };
     // A READ, not a transition — so it appends nothing (§2.3 derives records
     // at writes). It only seeds the recorder's view of what this step's
     // breadcrumb currently names, which is what lets a later spawn over this

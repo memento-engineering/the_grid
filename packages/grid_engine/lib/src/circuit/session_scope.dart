@@ -2327,6 +2327,9 @@ class SessionScopeState extends State<SessionScope>
     var circuitRoundsByPath = const <String, int>{};
     var adoptedFailures = const <String, PersistedFailureEvidence>{};
     AdoptedFailureLatch? onAdoptedLatch;
+    final projectionGraph = joined?.trajectoryGraph;
+    final projectionAuthority =
+        isMolecule && (projectionGraph?.isAuthoritative ?? false);
     if (isMolecule) {
       final projected = projectMoleculeCursor(
         joined!.moleculeBeads,
@@ -2377,14 +2380,18 @@ class SessionScopeState extends State<SessionScope>
         return const Idle();
       }
       _clearMoleculePourStall();
-      structuralDepthByPath = supersedesDepthByPath(
-        joined.moleculeBeads,
-        joined.moleculeDependencies,
-      );
-      spentRoundsByPath = supersedesVerdictCountByPath(
-        joined.moleculeBeads,
-        joined.moleculeDependencies,
-      );
+      structuralDepthByPath = projectionAuthority
+          ? projectionGraph!.supersedesDepthByPath
+          : supersedesDepthByPath(
+              joined.moleculeBeads,
+              joined.moleculeDependencies,
+            );
+      spentRoundsByPath = projectionAuthority
+          ? projectionGraph!.spentResultCountByPath
+          : supersedesVerdictCountByPath(
+              joined.moleculeBeads,
+              joined.moleculeDependencies,
+            );
       circuitRoundsByPath = {
         for (final entry in structuralDepthByPath.entries)
           entry.key:
@@ -2404,10 +2411,11 @@ class SessionScopeState extends State<SessionScope>
       // the SAME `projectCircuitResults` the flat codec used on the session
       // bead; merging the active incarnation at each path yields that shape
       // without allowing superseded results to overwrite current results.
-      final stepResults = <String, Map<String, String>>{};
-      for (final b in activeByPath.values) {
-        stepResults.addAll(projectCircuitResults(b));
-      }
+      final stepResults = projectionAuthority
+          ? projectionGraph!.results
+          : <String, Map<String, String>>{
+              for (final b in activeByPath.values) ...projectCircuitResults(b),
+            };
       results = mergeOperatorRulings(stepResults, joined.results);
       invalidated = invalidatedNodes(
         seed.circuit,
@@ -2416,6 +2424,9 @@ class SessionScopeState extends State<SessionScope>
         seed.bead.id,
         circuitById: registry?.circuit ?? (String _) => null,
         supersedesDepthByPath: structuralDepthByPath,
+        validatesPathsFor: projectionAuthority
+            ? projectionGraph!.validatesFor
+            : null,
       );
       final effective = effectiveCursor(
         seed.circuit,
@@ -2425,6 +2436,9 @@ class SessionScopeState extends State<SessionScope>
         circuitById: registry?.circuit ?? (String _) => null,
         supersedesDepthByPath: structuralDepthByPath,
         spentReworkRoundsByPath: spentRoundsByPath,
+        validatesPathsFor: projectionAuthority
+            ? projectionGraph!.validatesFor
+            : null,
       );
       final holds = <String>{};
       for (final path in invalidated) {
@@ -2512,6 +2526,9 @@ class SessionScopeState extends State<SessionScope>
                 circuitById: registry.circuit,
                 supersedesDepthByPath: structuralDepthByPath,
                 spentReworkRoundsByPath: spentRoundsByPath,
+                validatesPathsFor: projectionAuthority
+                    ? projectionGraph!.validatesFor
+                    : null,
               )
             : null;
         if (derived != null) {
@@ -2651,6 +2668,9 @@ class SessionScopeState extends State<SessionScope>
       circuitRoundsByPath: circuitRoundsByPath,
       adoptedFailures: adoptedFailures,
       onAdoptedLatch: onAdoptedLatch,
+      dependencyPathsFor: projectionAuthority
+          ? projectionGraph!.blockersFor
+          : null,
     );
     return Nest(
       children: [
@@ -2665,6 +2685,9 @@ class SessionScopeState extends State<SessionScope>
               root: BeadPathKey([seed.bead.id, id]),
               beadIdByNodePath: beadIdByNodePath,
               cursor: cursor,
+              projectedLeases: projectionAuthority
+                  ? projectionGraph!.leasesByPath
+                  : const {},
             ),
           ),
       ],

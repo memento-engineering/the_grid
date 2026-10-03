@@ -70,6 +70,7 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../domain/session_bead.dart';
+import '../domain/projection_graph_read.dart';
 import '../domain/session_head_read.dart';
 import '../domain/session_projection.dart';
 import '../domain/step_cursor_read.dart' show collapseStepCursors;
@@ -476,6 +477,7 @@ class RestartReconciler {
     StationTrajectoryRecorder? recorder,
     TrajectoryHeadSnapshot Function()? headSnapshot,
     TrajectoryStepSnapshot Function()? stepSnapshot,
+    ProjectionGraphRead? Function(String sessionId)? projectionGraphFor,
     DualReadAccounting? dualReadAccounting,
     DualReadMode dualReadMode = DualReadMode.off,
     void Function(String name, Map<String, String> data)? onFlare,
@@ -483,6 +485,7 @@ class RestartReconciler {
        _recorder = recorder ?? StationTrajectoryRecorder.disabled(),
        _headSnapshot = headSnapshot,
        _stepSnapshot = stepSnapshot,
+       _projectionGraphFor = projectionGraphFor,
        _dualRead = dualReadAccounting,
        _dualReadMode = dualReadMode,
        _onFlare = onFlare,
@@ -545,6 +548,7 @@ class RestartReconciler {
   /// P2's optional fold-backed state for the lease sweep. Served only under
   /// the same primary/live/not-disengaged posture as the other fold reads.
   final TrajectoryStepSnapshot Function()? _stepSnapshot;
+  final ProjectionGraphRead? Function(String sessionId)? _projectionGraphFor;
 
   /// Shared with the bridge's observer so ONE boot has ONE set of counters —
   /// the round summary must not report two different truths for one boot. It
@@ -1120,13 +1124,25 @@ class RestartReconciler {
         final state = path == null ? null : active[path]?.stepState;
         if (state != null) metadata[MoleculeStepKeys.state] = state;
       }
-      candidates.add((
-        stepBeadId: bead.id,
-        willRemount: willRemount,
-        // bd metadata is Map<String, dynamic> off the wire; the vendor's
-        // breadcrumb codec reads flat strings.
-        metadata: metadata,
-      ));
+      final path = metadata[MoleculeStepKeys.path];
+      final graph = _projectionGraphFor?.call(owner);
+      final projectedLease = path != null && graph?.isAuthoritative == true
+          ? switch (graph!.stepAt(path)) {
+              ProjectionStepMaterialized(:final lease) => lease,
+              ProjectionStepNotMaterialized() =>
+                const ProjectionAttemptLeaseAbsent(),
+            }
+          : null;
+      candidates.add(
+        LeaseSweepCandidate(
+          stepBeadId: bead.id,
+          willRemount: willRemount,
+          // bd metadata is Map<String, dynamic> off the wire; the vendor's
+          // breadcrumb codec reads flat strings.
+          metadata: metadata,
+          projectedLease: projectedLease,
+        ),
+      );
     }
     if (candidates.isEmpty) return const [];
 
