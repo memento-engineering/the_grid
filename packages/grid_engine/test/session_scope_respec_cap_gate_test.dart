@@ -898,6 +898,24 @@ void main() {
     expect(target.circuit.projectedLeases, isEmpty);
   });
 
+  test('cut-held projection graph idles the affected session', () {
+    final registry = _AuthorityRegistry();
+    final projection = _authorityProjection(authoritative: true).copyWith(
+      trajectoryGraph: null,
+      projectionGraphFailurePosture: ProjectionGraphFailurePosture.cutHeld,
+    );
+    final mounted = _mount(
+      projection: projection,
+      circuit: authorityCircuit,
+      circuits: const {},
+      registry: registry,
+    );
+    addTearDown(mounted.owner.dispose);
+
+    expect(registry.observations, isEmpty);
+    expect(mounted.fakes.provider.started, isEmpty);
+  });
+
   test(
     'three verdict-less predecessors mint the depth-four successor',
     () async {

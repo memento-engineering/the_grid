@@ -287,6 +287,36 @@ void main() {
       expect(unclaimed, isEmpty);
     });
 
+    test('cut-held projection graph advertises no unclaimed work', () {
+      final registry = RecordingCapabilityRegistry(clock: DateTime(2026));
+      final snapshot = JoinedSnapshot(
+        graph: _graph([_task('tg-held'), _task('tg-healthy')]),
+        sessionsByWorkBead: const {
+          'tg-held': SessionProjection(
+            workBeadId: 'tg-held',
+            sessionId: 'tgdog-held',
+            projectionGraphFailurePosture:
+                ProjectionGraphFailurePosture.cutHeld,
+          ),
+          'tg-healthy': SessionProjection(
+            workBeadId: 'tg-healthy',
+            sessionId: 'tgdog-healthy',
+          ),
+        },
+      );
+
+      final unclaimed = stationUnclaimedFrontier(
+        snapshot,
+        rootCircuitFor: (_) => _burn,
+        registry: registry,
+        stationFacts: _macos,
+      );
+
+      expect(unclaimed, hasLength(1));
+      expect(unclaimed.single.sessionId, 'tgdog-healthy');
+      expect(unclaimed.single.workBeadId, 'tg-healthy');
+    });
+
     test('a session whose work bead is momentarily absent from the joined '
         'graph contributes nothing (fail-closed, never throws)', () {
       final registry = RecordingCapabilityRegistry(clock: DateTime(2026));

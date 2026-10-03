@@ -64,6 +64,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 import '../diagnostics/diagnosable.dart';
 import '../diagnostics/state_store_deadline.dart';
 import '../domain/joined_snapshot.dart';
+import '../domain/projection_graph_read.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_disposition.dart';
 import '../domain/session_projection.dart';
@@ -2256,6 +2257,14 @@ class SessionScopeState extends State<SessionScope>
     // cursor is read ONLY from a matching join; otherwise it is empty, which is
     // exactly what a fresh round's cursor IS.
     final joined = matchesJoin ? seed.existingSession : null;
+    switch (joined?.projectionGraphFailurePosture ??
+        ProjectionGraphFailurePosture.none) {
+      case ProjectionGraphFailurePosture.cutHeld:
+        return const Idle();
+      case ProjectionGraphFailurePosture.none:
+      case ProjectionGraphFailurePosture.shadowIsolated:
+        break;
+    }
     final closedGateCountByNodePath =
         joined?.closedGateCountByNodePath ?? const <String, int>{};
 

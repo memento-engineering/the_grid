@@ -228,5 +228,9 @@ abstract class SessionProjection with _$SessionProjection {
 
     /// The G2 P2+edge+P6 candidate. Null at the default off posture.
     ProjectionGraphRead? trajectoryGraph,
+
+    /// The per-session failure posture when the G2 graph candidate is corrupt.
+    @Default(ProjectionGraphFailurePosture.none)
+    ProjectionGraphFailurePosture projectionGraphFailurePosture,
   }) = _SessionProjection;
 }

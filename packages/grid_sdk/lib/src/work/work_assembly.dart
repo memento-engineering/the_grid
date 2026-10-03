@@ -2281,6 +2281,7 @@ Future<StationWorkRuntime> _acquireStationWork({
             listener,
             fireImmediately: false,
           ),
+    onFlare: transport?.flare,
   );
   final bridge =
       joinBridgeBuilder?.call(buildDefault: buildJoinBridgeDefault) ??

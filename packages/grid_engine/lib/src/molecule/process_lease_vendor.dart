@@ -775,13 +775,23 @@ class StationProcessLeaseVendor implements ProcessLeaseVendor {
             !candidate.metadata.containsKey(LeaseKeys.pgid) &&
             !candidate.metadata.containsKey(LeaseKeys.pid) &&
             !candidate.metadata.containsKey(LeaseKeys.token);
-        if (projectedLease == null && spawned && keysAbsent) {
+        if (spawned && keysAbsent) {
+          final reason = switch (projectedLease) {
+            ProjectionAttemptLeaseAbsent() =>
+              'the authoritative P2/P6 projection reports NO held lease',
+            null =>
+              'it carries NO lease breadcrumb — its acquire\'s breadcrumb '
+                  'write never landed (dropped, or the station died '
+                  'mid-write)',
+            ProjectionAttemptLeaseHeld() => throw StateError(
+              'a held projected lease must produce a process handle',
+            ),
+          };
           onOrphan(
             'lease sweep: step "${candidate.stepBeadId}" is $state but '
-            'carries NO lease breadcrumb — its acquire\'s breadcrumb write '
-            'never landed (dropped, or the station died mid-write). If that '
-            'incarnation\'s process group survived the restart, this sweep '
-            'cannot find or kill it — inspect and terminate it by hand.',
+            '$reason. If that incarnation\'s process group survived the '
+            'restart, this sweep cannot find or kill it — inspect and '
+            'terminate it by hand.',
           );
         }
         continue;

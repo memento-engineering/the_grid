@@ -21,6 +21,40 @@ import 'step_dual_read_pass.dart';
 
 typedef _JoinedStepIncarnation = ({Bead bead, int ordinal});
 
+/// Emitted when one session's P2+edge+P6 rows cannot form a structural graph.
+const kProjectionGraphRejectedFlare = 'trajectory.projectionGraphRejected';
+
+final class _ProjectionGraphFailureReporter {
+  _ProjectionGraphFailureReporter(this._onFlare);
+
+  final DualReadFlareSink? _onFlare;
+  final Set<({String sessionId, int round, String reason})> _reported = {};
+
+  void report({
+    required String sessionId,
+    required String workBeadId,
+    required int round,
+    required ProjectionGraphFailurePosture posture,
+    required StateError error,
+  }) {
+    final reason = error.toString();
+    if (!_reported.add((sessionId: sessionId, round: round, reason: reason))) {
+      return;
+    }
+    try {
+      _onFlare?.call(kProjectionGraphRejectedFlare, {
+        'sessionId': sessionId,
+        'workBeadId': workBeadId,
+        'round': '$round',
+        'posture': posture.name,
+        'reason': reason,
+      });
+    } on Object {
+      // Flares are emit-only evidence and cannot break the shared join.
+    }
+  }
+}
+
 /// Subscribes to P6 process-identity snapshot publications and returns the
 /// remover (house convention).
 ///
@@ -92,8 +126,12 @@ class StationJoinBridge {
     TrajectoryProcessIdentitySnapshot Function()? processIdentitySnapshot,
     ProcessIdentitySnapshotSubscribe? onProcessIdentityChanges,
     bool projectionGraphAuthoritative = false,
+    DualReadFlareSink? onFlare,
   }) {
     final revisions = EligibilityBasisRevisions();
+    final projectionGraphFailureReporter = _ProjectionGraphFailureReporter(
+      onFlare,
+    );
     final seed = _join(
       work.current,
       state.current,
@@ -104,6 +142,7 @@ class StationJoinBridge {
       dualRead: dualRead,
       stepDualRead: stepDualRead,
       projectionGraphAuthoritative: projectionGraphAuthoritative,
+      projectionGraphFailureReporter: projectionGraphFailureReporter,
       revisions: revisions,
     );
     return StationJoinBridge._(
@@ -123,6 +162,7 @@ class StationJoinBridge {
       processIdentitySnapshot: processIdentitySnapshot,
       onProcessIdentityChanges: onProcessIdentityChanges,
       projectionGraphAuthoritative: projectionGraphAuthoritative,
+      projectionGraphFailureReporter: projectionGraphFailureReporter,
       revisions: revisions,
     );
   }
@@ -145,6 +185,7 @@ class StationJoinBridge {
     processIdentitySnapshot,
     required ProcessIdentitySnapshotSubscribe? onProcessIdentityChanges,
     required bool projectionGraphAuthoritative,
+    required _ProjectionGraphFailureReporter projectionGraphFailureReporter,
     required EligibilityBasisRevisions revisions,
   }) : _work = work,
        _state = state,
@@ -161,6 +202,7 @@ class StationJoinBridge {
        _processIdentitySnapshot = processIdentitySnapshot,
        _onProcessIdentityChanges = onProcessIdentityChanges,
        _projectionGraphAuthoritative = projectionGraphAuthoritative,
+       _projectionGraphFailureReporter = projectionGraphFailureReporter,
        _revisions = revisions;
 
   final SnapshotSource _work;
@@ -201,6 +243,7 @@ class StationJoinBridge {
   /// disarmed and the clause refusing nothing.
   final TrajectoryProcessIdentitySnapshot Function()? _processIdentitySnapshot;
   final bool _projectionGraphAuthoritative;
+  final _ProjectionGraphFailureReporter _projectionGraphFailureReporter;
 
   final ProcessIdentitySnapshotSubscribe? _onProcessIdentityChanges;
   void Function()? _removeProcessIdentityListener;
@@ -297,6 +340,7 @@ class StationJoinBridge {
     dualRead: _dualRead,
     stepDualRead: _stepDualRead,
     projectionGraphAuthoritative: _projectionGraphAuthoritative,
+    projectionGraphFailureReporter: _projectionGraphFailureReporter,
     revisions: _revisions,
   );
 
@@ -390,6 +434,7 @@ class StationJoinBridge {
     DualReadSessionObserver? dualRead,
     DualReadStepObserver? stepDualRead,
     bool projectionGraphAuthoritative = false,
+    _ProjectionGraphFailureReporter? projectionGraphFailureReporter,
     EligibilityBasisRevisions? revisions,
   }) {
     if (work == null) return JoinedSnapshot.empty();
@@ -496,16 +541,35 @@ class StationJoinBridge {
         for (final identity in processIdentities.bySessionId(sessionId)) {
           if (identity.round > round) round = identity.round;
         }
-        sessions[entry.key] = projection.copyWith(
-          trajectoryGraph: ProjectionGraphRead(
+        try {
+          final trajectoryGraph = ProjectionGraphRead(
             sessionId: sessionId,
             round: round,
             steps: steps,
             edges: edges,
             processIdentities: processIdentities,
             isAuthoritative: projectionGraphAuthoritative,
-          ),
-        );
+          );
+          sessions[entry.key] = projection.copyWith(
+            trajectoryGraph: trajectoryGraph,
+            projectionGraphFailurePosture: ProjectionGraphFailurePosture.none,
+          );
+        } on StateError catch (error) {
+          final posture = projectionGraphAuthoritative
+              ? ProjectionGraphFailurePosture.cutHeld
+              : ProjectionGraphFailurePosture.shadowIsolated;
+          sessions[entry.key] = projection.copyWith(
+            trajectoryGraph: null,
+            projectionGraphFailurePosture: posture,
+          );
+          projectionGraphFailureReporter?.report(
+            sessionId: sessionId,
+            workBeadId: projection.workBeadId,
+            round: round,
+            posture: posture,
+            error: error,
+          );
+        }
       }
     }
     // THE BARRIER'S READ (§W2.4 W2-B) and the bead-scoped eligibility basis

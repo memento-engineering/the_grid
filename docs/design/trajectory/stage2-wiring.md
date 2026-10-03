@@ -191,12 +191,24 @@ from the three-clean-round G2 certificate, and increments the relevant named
 failure or mismatch counter. The comparator never converts an unexplained
 mismatch into a fallback success.
 
+A corrupt per-session P2+edge+P6 structural graph (including an unsupported
+edge kind or a supersedes-chain hole) is contained at the join attachment
+boundary. Shadow leaves only that session's `trajectoryGraph` null, carries
+`shadowIsolated`, and emits `trajectory.projectionGraphRejected` once per
+session/round/reason; its legacy structural graph remains authoritative. Other
+sessions continue through the same joined snapshot pipeline.
+
 In cut, append refusal, post-ACK mirror failure, a stale projection, checksum
 mismatch, or fold failure trips the existing `TrajectoryAdmissionHalt` and
 prevents drive. It never falls back to a deleted graph bead carrier. A molecule
 is not driveable before its `molecule.poured` ACK and edge-projection
 confirmation. A predecessor is not released as superseded before its
 `step.superseded` ACK and P2 chain confirmation.
+
+A corrupt per-session structural graph in cut carries `cutHeld`: that session
+mounts no capability subtree and advertises no unclaimed requirements. It emits
+the same `trajectory.projectionGraphRejected` evidence and never falls back to
+legacy structural graph reads; healthy sibling sessions remain driveable.
 
 A failed one-shot reap leaves the residue visible and prevents the driver from
 starting. The next boot repeats the scan and retries the idempotent delete;
