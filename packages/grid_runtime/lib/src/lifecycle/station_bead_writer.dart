@@ -1106,23 +1106,26 @@ class StationBeadWriter {
   /// metadata filters into `bd list`). Expressed instead as "list every owned
   /// session, filter in Dart", this would reintroduce precisely the unbounded
   /// boot pass `RestartReconciler` documents itself refusing to do — a large
-  /// backlog would then be walked on every boot. [BeadProbeReader.openBeads]
-  /// also excludes closed beads, so the open half of the conjunction costs
-  /// nothing extra.
+  /// backlog would then be walked on every boot. The reads deliberately use
+  /// this writer's [BdCliService.listScope], so they dial the same configured
+  /// station-state root as lifecycle mutations instead of inheriting a probe
+  /// reader rooted at an ambient worktree.
   Future<List<Bead>> sessionsAwaitingTeardown() async {
     final matches = await Future.wait([
-      _reader.openBeads(
-        types: {GridIssueTypes.session},
-        metadataAll: const {'grid.outcome': 'complete'},
+      _bd.listScope(
+        type: GridIssueTypes.session,
+        status: BeadStatus.open,
+        metadataFields: const {'grid.outcome': 'complete'},
       ),
-      _reader.openBeads(
-        types: {GridIssueTypes.session},
-        metadataAll: const {'grid.outcome': 'commit_only'},
+      _bd.listScope(
+        type: GridIssueTypes.session,
+        status: BeadStatus.open,
+        metadataFields: const {'grid.outcome': 'commit_only'},
       ),
     ]);
     final byId = <String, Bead>{};
     for (final group in matches) {
-      for (final bead in group) {
+      for (final bead in group.beads) {
         byId[bead.id] = bead;
       }
     }
@@ -1192,6 +1195,10 @@ class StationBeadWriter {
     String? appendNotes,
     String? ifAssignee,
     BeadStatus? ifStatus,
+
+    /// Refuses rather than dropping [ifAssignee] or [ifStatus] when bd lacks
+    /// guarded-write support.
+    bool requireGuardedWrite = false,
   }) async {
     // `async` so the fail-closed `_assertOwned` throw surfaces as a rejected
     // future (not a synchronous throw at the call site); `_serialized` registers
@@ -1206,6 +1213,7 @@ class StationBeadWriter {
         appendNotes: appendNotes,
         ifAssignee: ifAssignee,
         ifStatus: ifStatus,
+        requireGuardedWrite: requireGuardedWrite,
       ),
     );
   }
@@ -1326,6 +1334,7 @@ class StationBeadWriter {
     String id, {
     String? ifAssignee,
     BeadStatus? ifStatus,
+    bool requireGuardedWrite = false,
     String? title,
     BeadStatus? status,
     int? priority,
@@ -1345,6 +1354,7 @@ class StationBeadWriter {
         ifAssignee: ifAssignee,
         ifStatus: ifStatus,
         onGuardDegraded: _flare,
+        requireGuardedWrite: requireGuardedWrite,
         title: title,
         status: status,
         priority: priority,

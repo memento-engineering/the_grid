@@ -66,4 +66,27 @@ void main() {
       await connection.close();
     },
   );
+
+  test('the boot summary names the read deadline and the timed-out reads per '
+      'pooled store (tg-6n18)', () {
+    final line = describeStoreDeadlines(
+      orderedStoreConnections(
+        state: DoltQueryService(_endpoint),
+        work: {'earth': DoltQueryService(_endpoint), 'mars': null},
+      ),
+    );
+
+    expect(
+      line,
+      'store query deadline: '
+      '${DoltQueryService.queryTimeout.inMilliseconds}ms '
+      '(DoltQueryService.queryTimeout)  ·  timed-out reads: 0 '
+      '(state 0, earth 0)',
+    );
+    expect(
+      describeStoreDeadlines(const <StoreConnection>[]),
+      endsWith('timed-out reads: n/a (no SQL read path open)'),
+      reason: 'the CLI read path has no SQL deadline to count against',
+    );
+  });
 }

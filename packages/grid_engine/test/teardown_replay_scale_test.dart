@@ -209,16 +209,32 @@ void main() {
       expect(refreshedOpenSteps, hasLength(81));
       expect(refreshedOpenMolecules, hasLength(15));
       expect(closedIds, isNot(containsAll(liveChildIds)));
-      expect(reader.sessionQueries, hasLength(2));
-      for (final query in reader.sessionQueries) {
-        expect(
-          query.types,
-          unorderedEquals(<IssueType>{GridIssueTypes.session}),
-        );
-      }
-      expect(reader.sessionQueries.map((query) => query.metadataAll), [
-        {'grid.outcome': 'complete'},
-        {'grid.outcome': 'commit_only'},
+      expect(reader.sessionQueries, isEmpty);
+      expect(bd.calls.where((call) => call.firstOrNull == 'list'), [
+        [
+          'list',
+          '-t',
+          'session',
+          '--status',
+          'open',
+          '--metadata-field',
+          'grid.outcome=complete',
+          '--json',
+          '--limit',
+          '0',
+        ],
+        [
+          'list',
+          '-t',
+          'session',
+          '--status',
+          'open',
+          '--metadata-field',
+          'grid.outcome=commit_only',
+          '--json',
+          '--limit',
+          '0',
+        ],
       ]);
     },
   );

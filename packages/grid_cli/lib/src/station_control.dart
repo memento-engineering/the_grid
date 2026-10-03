@@ -848,6 +848,21 @@ class StationControl implements ExplorationTransport {
             ? GridCommandRequest.pauseSession(beadId: beadId)
             : GridCommandRequest.resumeSession(beadId: beadId);
       }
+    } else if (method == 'grid/session/void') {
+      final sessionId = params['sessionId'];
+      final reason = params['reason'];
+      const allowed = {'sessionId', 'reason'};
+      if (params.keys.every(allowed.contains) &&
+          params.length == allowed.length &&
+          sessionId is String &&
+          sessionId.trim().isNotEmpty &&
+          reason is String &&
+          reason.trim().isNotEmpty) {
+        command = GridCommandRequest.voidSession(
+          sessionId: sessionId,
+          reason: reason,
+        );
+      }
     } else if (method == 'grid/admission/set') {
       final maxAgents = params['maxAgents'];
       if (params.length == 1 && maxAgents is int) {

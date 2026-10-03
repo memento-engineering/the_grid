@@ -879,14 +879,19 @@ class CapabilityHostState extends State<CapabilityHost>
   /// A clean completion — the terminal `state=complete` merged with the optional
   /// result [payload] into ONE chokepoint update (the grade/pr_url lands
   /// atomically alongside the cursor advance — A1/D-5).
-  Future<void> _persistComplete(Map<String, String>? payload) async {
+  Future<void> _persistComplete(
+    Map<String, String>? payload, {
+    Map<String, String>? preparedResultMetadata,
+  }) async {
     if (!_guardPersist('complete')) return;
     final timing = _terminalTiming();
     await _ctx!.writer.update(
       _stepBeadId,
       metadata: {
         ..._moleculeMetadata(StepState.complete, timing: timing),
-        ...nodeResultMetadata(_nodePath, payload),
+        ...?preparedResultMetadata,
+        if (preparedResultMetadata == null)
+          ...nodeResultMetadata(_nodePath, payload),
       },
     );
     // The result keys the legacy write merged atomically ride the record's
@@ -1162,11 +1167,19 @@ class CapabilityHostState extends State<CapabilityHost>
     required Map<String, String> completionPayload,
     required Map<String, String> advanceBasis,
   }) async {
+    // Validate the A42 result family before the first possible transition
+    // write. This only reorders preparation: the wave-2 KEPT carriers
+    // (complete, failed, gated, ready) and their sole-carrier payloads remain
+    // unchanged (`wave-2-kept-set-includes-gated-and-ready`).
+    final resultMetadata = nodeResultMetadata(_nodePath, completionPayload);
     final receipts = await _ctx!.writer.closeOpenGatesForNodeAdvance(
       sessionId: _sessionId,
       nodePath: _nodePath,
     );
-    await _persistComplete(completionPayload);
+    await _persistComplete(
+      completionPayload,
+      preparedResultMetadata: resultMetadata,
+    );
     for (final receipt in receipts) {
       if (receipt.cause != GateCloseCause.supersededByAdvance) continue;
       _emitFlare('gate.supersededByAdvance', {
@@ -1234,6 +1247,21 @@ class CapabilityHostState extends State<CapabilityHost>
       );
       return;
     }
+    // THE FRESH-STATUS GATE (tg-b1t8): the production path that pushes and
+    // opens pull requests is THIS call to the bound method. Ask the injected
+    // gate — a read at call time, never the mount-time `workBead` snapshot —
+    // immediately before it, and refuse a bead that is no longer open and
+    // driveable: nothing is pushed, no PR opens, and the refusal is recorded
+    // on the step (bead id + observed status) and flared.
+    if (_ctx?.deliveryGate case final gate?) {
+      final refusal = await _deliveryGateRefusal(gate, workBead.id, method.id);
+      if (refusal != null) {
+        if (!_guardPersist('advance')) return;
+        await _persistFailure(refusal);
+        return;
+      }
+      if (!_guardPersist('advance')) return;
+    }
     final StepOutcome outcome;
     try {
       outcome = await method.deliver(
@@ -1263,6 +1291,42 @@ class CapabilityHostState extends State<CapabilityHost>
         _emitFlare('step.delivered', {'method': method.id});
       case Failed(:final reason):
         await _persistFailure('delivery "${method.id}" failed: $reason');
+    }
+  }
+
+  /// Asks [gate] whether work bead [beadId] may still be delivered, returning
+  /// the refusal line to persist, or null when it may. A throwing gate fails
+  /// CLOSED. Every refusal is flared as `deliver.refused` with the bead id and
+  /// the status the fresh read observed.
+  Future<String?> _deliveryGateRefusal(
+    WorkBeadLandGate gate,
+    String beadId,
+    String methodId,
+  ) async {
+    final LandGateDecision decision;
+    try {
+      decision = await gate(beadId);
+    } on Object catch (error) {
+      _emitFlare('deliver.refused', {
+        'bead': beadId,
+        'status': 'unreadable',
+        'method': methodId,
+      });
+      return 'delivery "$methodId" refused: work bead $beadId status could '
+          'not be read at push time ($error) — failing closed, nothing pushed '
+          'and no PR opened';
+    }
+    switch (decision) {
+      case LandGateOpen():
+        return null;
+      case LandGateRefused(:final status, :final reason):
+        _emitFlare('deliver.refused', {
+          'bead': beadId,
+          'status': status,
+          'method': methodId,
+        });
+        return 'delivery "$methodId" refused: work bead $beadId is $status at '
+            'push time — $reason; nothing pushed and no PR opened';
     }
   }
 

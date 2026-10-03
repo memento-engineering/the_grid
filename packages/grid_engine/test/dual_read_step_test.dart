@@ -23,6 +23,10 @@ final class _Row implements StepCursorView {
     this.sessionId = 'tgdog-1',
     this.round = 0,
     this.stepRound = 0,
+    this.incarnation = 0,
+    this.supersededByStepRound,
+    this.startedAt,
+    this.lastSeq = 1,
   });
 
   @override
@@ -40,18 +44,23 @@ final class _Row implements StepCursorView {
   // (`restartCount`/`cooldownUntil` and the fence triple stay bead-read —
   // B-M2), so the fake pins them at their absent shape rather than pretending
   // a read that no consumer makes.
+  //
+  // `incarnation`, `supersededByStepRound`, `startedAt` and `lastSeq` are
+  // settable because the retired-carrier classification (tg-ul2v) reads them
+  // as EVIDENCE — never as served fields — and a fixture that could not vary
+  // them could not pin the negative arms.
   @override
-  int get incarnation => 0;
+  final int incarnation;
   @override
   String? get attemptId => null;
   @override
-  int? get supersededByStepRound => null;
+  final int? supersededByStepRound;
   @override
   DateTime? get cooldownUntil => null;
   @override
   int? get restartBudget => null;
   @override
-  DateTime? get startedAt => null;
+  final DateTime? startedAt;
   @override
   DateTime? get readyAt => null;
   @override
@@ -59,7 +68,7 @@ final class _Row implements StepCursorView {
   @override
   String? get failureClass => null;
   @override
-  int get lastSeq => 1;
+  final int lastSeq;
 }
 
 final class _StepSnapshot implements TrajectoryStepSnapshot {
@@ -89,6 +98,7 @@ Bead _stepBead(
   String? beadId,
   int restartCount = 0,
   DateTime? cooldownUntil,
+  DateTime? finishedAt,
   String sessionId = 'tgdog-1',
 }) => Bead(
   id: beadId ?? 'tgdog-step-${nodePath.replaceAll('/', '-')}',
@@ -101,6 +111,8 @@ Bead _stepBead(
     MoleculeStepKeys.restartCount: '$restartCount',
     if (cooldownUntil != null)
       MoleculeStepKeys.cooldownUntil: cooldownUntil.toUtc().toIso8601String(),
+    if (finishedAt != null)
+      MoleculeStepKeys.finishedAt: finishedAt.toUtc().toIso8601String(),
   },
 );
 
@@ -1065,5 +1077,586 @@ void main() {
         'fold-ahead-of-legacy',
       );
     });
+  });
+
+  // ── THE RETIRED-CARRIER CLASS (tg-ul2v) ─────────────────────────────────
+  //
+  // Lunar epoch 98 (2026-09-22, discipline cut, dual-read primary) flared 78
+  // `unexplained` step-axis divergences, every one on field `stepLag`, in
+  // exactly three bead/fold shapes:
+  //
+  //   68 × bead pending / fold running  @ step_round 0
+  //    2 × bead pending / fold running  @ step_round 1
+  //    8 × bead gated   / fold pending  @ step_round 1
+  //
+  // All three are the cut's RETIRED step-bead writes (the start write and the
+  // gate-cleared rearm write), so the bead can never catch up and the pair
+  // is an unshadowable fact. These tests pin each classification AND its
+  // negative space: a pair lacking the positive evidence, or seen under
+  // shadow, must still land in `unexplained`, so a regression re-opens the
+  // bucket rather than silently re-labelling it.
+  group('the retired-carrier class under cut (tg-ul2v)', () {
+    late List<(String, Map<String, String>)> flares;
+
+    setUp(() => flares = []);
+
+    DualReadStepObserver cutObserver(
+      DateTime Function() clock, {
+      bool cut = true,
+    }) => DualReadStepObserver(
+      mode: DualReadMode.primary,
+      clock: clock,
+      legacyStepWritesRetired: cut,
+      onFlare: (name, data) => flares.add((name, data)),
+    );
+
+    /// Three passes spanning twice the grace — enough for any stepLag entry
+    /// to escalate, so a pair that does NOT escalate was classified.
+    void soak(
+      DualReadStepObserver o,
+      Map<String, SessionProjection> sessions,
+      TrajectoryStepSnapshot snapshot,
+      void Function(Duration) advance,
+    ) {
+      o.observe(sessions, snapshot);
+      advance(kStepLagGrace * 2);
+      o.observe(sessions, snapshot);
+      o.observe(sessions, snapshot);
+    }
+
+    List<Map<String, String>> divergenceFlares() => [
+      for (final (name, data) in flares)
+        if (name == kDualReadDivergenceFlare) data,
+    ];
+
+    void expectRetired(
+      DualReadStepObserver o, {
+      required String legacy,
+      required String fold,
+      required RetiredStepCarrier carrier,
+    }) {
+      expect(o.accounting.stepLagEscalations, 0);
+      expect(o.accounting.stepDivergences, 0);
+      expect(o.accounting.stepUnexplainedDivergences, 0);
+      expect(o.accounting.openStepLag, 0);
+      expect(o.accounting.stepLegacyCarrierRetired, 1);
+      expect(o.accounting.stepLegacyCarrierRetiredTotal, 1);
+      expect(divergenceFlares(), isEmpty);
+      final detail = o.accounting.divergenceDetails.single;
+      expect(detail.axis, 'step');
+      expect(detail.field, 'stepLag');
+      expect(detail.legacyValue, legacy);
+      expect(detail.foldValue, fold);
+      expect(detail.cause, DualReadDivergenceCause.legacyStepCarrierRetired);
+      expect(detail.mismatchKey, contains(carrier.wire));
+    }
+
+    void expectUnexplained(DualReadStepObserver o) {
+      expect(o.accounting.stepLegacyCarrierRetired, 0);
+      expect(o.accounting.stepLegacyCarrierRetiredTotal, 0);
+      expect(o.accounting.stepLagEscalations, 1);
+      expect(o.accounting.stepUnexplainedDivergences, 1);
+      expect(
+        o.accounting.divergenceDetails.single.cause,
+        DualReadDivergenceCause.unexplained,
+      );
+      expect(divergenceFlares().single['cause'], 'unexplained');
+    }
+
+    test('EPOCH 98 SHAPE 1 — bead pending / fold running @ step_round 0 is '
+        'the retired start write', () {
+      var now = DateTime.utc(2026, 9, 22, 8);
+      final o = cutObserver(() => now);
+      soak(
+        o,
+        {
+          'tg-9abc': _session(
+            steps: [_stepBead('a', state: StepState.pending)],
+          ),
+        },
+        _StepSnapshot([_Row(stepPath: 'a', stepState: 'running')]),
+        (d) => now = now.add(d),
+      );
+      expectRetired(
+        o,
+        legacy: 'pending',
+        fold: 'running',
+        carrier: RetiredStepCarrier.running,
+      );
+    });
+
+    test('EPOCH 98 SHAPE 2 — bead pending / fold running @ step_round 1 (a '
+        'fresh successor generation) is the retired start write', () {
+      var now = DateTime.utc(2026, 9, 22, 8);
+      final o = cutObserver(() => now);
+      soak(
+        o,
+        {
+          'tg-9abc': _session(
+            steps: [_stepBead('a', state: StepState.pending)],
+          ),
+        },
+        _StepSnapshot([
+          _Row(stepPath: 'a', stepState: 'complete', supersededByStepRound: 1),
+          _Row(stepPath: 'a', stepState: 'running', stepRound: 1, lastSeq: 9),
+        ]),
+        (d) => now = now.add(d),
+      );
+      expectRetired(
+        o,
+        legacy: 'pending',
+        fold: 'running',
+        carrier: RetiredStepCarrier.running,
+      );
+    });
+
+    test('EPOCH 98 SHAPE 3 — bead gated / fold pending on the rung the '
+        "fold's own rearm opened is the retired rearm write", () {
+      var now = DateTime.utc(2026, 9, 22, 8);
+      final o = cutObserver(() => now);
+      soak(
+        o,
+        {
+          'tg-9abc': _session(steps: [_stepBead('a', state: StepState.gated)]),
+        },
+        _StepSnapshot([
+          _Row(stepPath: 'a', stepState: 'gated', supersededByStepRound: 1),
+          _Row(stepPath: 'a', stepState: 'pending', stepRound: 1, lastSeq: 7),
+        ]),
+        (d) => now = now.add(d),
+      );
+      expectRetired(
+        o,
+        legacy: 'gated',
+        fold: 'pending',
+        carrier: RetiredStepCarrier.rearm,
+      );
+    });
+
+    test('THE FIRST-ROUND BLIND SPOT — a re-armed node that RE-RAN (bead '
+        'gated / fold running on the rearmed rung) is the retired rearm AND '
+        'start writes, not unexplained', () {
+      var now = DateTime.utc(2026, 9, 22, 8);
+      final gatedAt = now.subtract(const Duration(minutes: 10));
+      final o = cutObserver(() => now);
+      soak(
+        o,
+        {
+          'tg-9abc': _session(
+            steps: [
+              _stepBead('a', state: StepState.gated, finishedAt: gatedAt),
+            ],
+          ),
+        },
+        _StepSnapshot([
+          _Row(stepPath: 'a', stepState: 'gated', supersededByStepRound: 1),
+          _Row(
+            stepPath: 'a',
+            stepState: 'running',
+            stepRound: 1,
+            startedAt: gatedAt.add(const Duration(minutes: 5)),
+            lastSeq: 8,
+          ),
+        ]),
+        (d) => now = now.add(d),
+      );
+      expectRetired(
+        o,
+        legacy: 'gated',
+        fold: 'running',
+        carrier: RetiredStepCarrier.rearmThenRunning,
+      );
+    });
+
+    test('a SUPERVISED RESTART under cut — bead failed / fold running at the '
+        'bumped incarnation — is the retired restart start write', () {
+      var now = DateTime.utc(2026, 9, 22, 8);
+      final o = cutObserver(() => now);
+      soak(
+        o,
+        {
+          'tg-9abc': _session(
+            steps: [_stepBead('a', state: StepState.failed, restartCount: 2)],
+          ),
+        },
+        _StepSnapshot([
+          _Row(stepPath: 'a', stepState: 'running', incarnation: 2),
+        ]),
+        (d) => now = now.add(d),
+      );
+      expectRetired(
+        o,
+        legacy: 'failed',
+        fold: 'running',
+        carrier: RetiredStepCarrier.restartRunning,
+      );
+    });
+
+    test('the SAME pairs under SHADOW keep escalating unexplained — the '
+        'bead still carries those writes there', () {
+      for (final (bead, rows) in <(Bead, List<_Row>)>[
+        (
+          _stepBead('a', state: StepState.pending),
+          [_Row(stepPath: 'a', stepState: 'running')],
+        ),
+        (
+          _stepBead('a', state: StepState.gated),
+          [
+            _Row(stepPath: 'a', stepState: 'gated', supersededByStepRound: 1),
+            _Row(stepPath: 'a', stepState: 'pending', stepRound: 1),
+          ],
+        ),
+      ]) {
+        flares = [];
+        var now = DateTime.utc(2026, 9, 22, 8);
+        final o = cutObserver(() => now, cut: false);
+        soak(
+          o,
+          {
+            'tg-9abc': _session(steps: [bead]),
+          },
+          _StepSnapshot(rows),
+          (d) => now = now.add(d),
+        );
+        expectUnexplained(o);
+      }
+    });
+
+    test('NEGATIVE SPACE — a pair without positive evidence stays '
+        'unexplained under cut', () {
+      final gatedAt = DateTime.utc(2026, 9, 22, 7, 55);
+      final cases = <String, (Bead, List<_Row>)>{
+        // No predecessor rung: nothing in the fold proves a rearm happened.
+        'gated/pending with no predecessor rung': (
+          _stepBead('a', state: StepState.gated),
+          [_Row(stepPath: 'a', stepState: 'pending', stepRound: 1)],
+        ),
+        // The predecessor is not linked to this rung.
+        'gated/pending with an unlinked predecessor': (
+          _stepBead('a', state: StepState.gated),
+          [
+            _Row(stepPath: 'a', stepState: 'gated'),
+            _Row(stepPath: 'a', stepState: 'pending', stepRound: 1),
+          ],
+        ),
+        // The bead gated AFTER the re-run started: it gated on the CURRENT
+        // rung and the gate's append is what is missing.
+        'gated/running where the bead gated after the re-run started': (
+          _stepBead(
+            'a',
+            state: StepState.gated,
+            finishedAt: gatedAt.add(const Duration(minutes: 10)),
+          ),
+          [
+            _Row(stepPath: 'a', stepState: 'gated', supersededByStepRound: 1),
+            _Row(
+              stepPath: 'a',
+              stepState: 'running',
+              stepRound: 1,
+              startedAt: gatedAt,
+            ),
+          ],
+        ),
+        // The fold still holds the PRE-failure incarnation: the failure's
+        // append never landed, which is lag, not a retired restart write.
+        'failed/running at the pre-failure incarnation': (
+          _stepBead('a', state: StepState.failed, restartCount: 2),
+          [_Row(stepPath: 'a', stepState: 'running', incarnation: 1)],
+        ),
+        // A bead AHEAD of the fold: the terminal write is not retired.
+        'complete/running (the bead is ahead)': (
+          _stepBead('a', state: StepState.complete),
+          [_Row(stepPath: 'a', stepState: 'running')],
+        ),
+      };
+      cases.forEach((name, pair) {
+        flares = [];
+        var now = DateTime.utc(2026, 9, 22, 8);
+        final o = cutObserver(() => now);
+        soak(
+          o,
+          {
+            'tg-9abc': _session(steps: [pair.$1]),
+          },
+          _StepSnapshot(pair.$2),
+          (d) => now = now.add(d),
+        );
+        expect(
+          o.accounting.stepUnexplainedDivergences,
+          1,
+          reason: '$name must re-open the unexplained bucket',
+        );
+        expect(o.accounting.stepLegacyCarrierRetired, 0, reason: name);
+      });
+    });
+
+    test('an OPERATOR-EDITED pair keeps its own cause under cut', () {
+      var now = DateTime.utc(2026, 9, 22, 8);
+      final o = cutObserver(() => now);
+      final snapshot = _StepSnapshot([
+        _Row(stepPath: 'a', stepState: 'running'),
+      ]);
+      // The legacy value moves while the fold seq stands still — the
+      // operator-edit marker's premise — and lands on a retired-carrier pair.
+      o.observe({
+        'tg-9abc': _session(steps: [_stepBead('a', state: StepState.running)]),
+      }, snapshot);
+      final edited = {
+        'tg-9abc': _session(steps: [_stepBead('a', state: StepState.pending)]),
+      };
+      o.observe(edited, snapshot);
+      now = now.add(kStepLagGrace * 2);
+      o.observe(edited, snapshot);
+      expect(o.accounting.stepLegacyCarrierRetired, 0);
+      expect(o.accounting.stepOperatorStoreEditDivergences, 1);
+      expect(o.accounting.stepUnexplainedDivergences, 0);
+    });
+
+    test('THE EPOCH 98 RECEIPT — the measured 78 resolve to the retired '
+        'carrier under cut and all stay unexplained under shadow', () {
+      final beads = <Bead>[];
+      final rows = <_Row>[];
+      var seq = 100;
+      void add(String path, StepState bead, List<_Row> fold) {
+        beads.add(_stepBead(path, state: bead));
+        rows.addAll(fold);
+      }
+
+      for (var i = 0; i < 68; i++) {
+        add('shape1/$i', StepState.pending, [
+          _Row(stepPath: 'shape1/$i', stepState: 'running', lastSeq: seq++),
+        ]);
+      }
+      for (var i = 0; i < 2; i++) {
+        add('shape2/$i', StepState.pending, [
+          _Row(
+            stepPath: 'shape2/$i',
+            stepState: 'complete',
+            supersededByStepRound: 1,
+            lastSeq: seq++,
+          ),
+          _Row(
+            stepPath: 'shape2/$i',
+            stepState: 'running',
+            stepRound: 1,
+            lastSeq: seq++,
+          ),
+        ]);
+      }
+      for (var i = 0; i < 8; i++) {
+        add('shape3/$i', StepState.gated, [
+          _Row(
+            stepPath: 'shape3/$i',
+            stepState: 'gated',
+            supersededByStepRound: 1,
+            lastSeq: seq++,
+          ),
+          _Row(
+            stepPath: 'shape3/$i',
+            stepState: 'pending',
+            stepRound: 1,
+            lastSeq: seq++,
+          ),
+        ]);
+      }
+      final sessions = {'tg-9abc': _session(steps: beads)};
+      final snapshot = _StepSnapshot(rows);
+
+      for (final cut in [true, false]) {
+        flares = [];
+        var now = DateTime.utc(2026, 9, 22, 8);
+        final o = cutObserver(() => now, cut: cut);
+        soak(o, sessions, snapshot, (d) => now = now.add(d));
+        if (cut) {
+          expect(o.accounting.stepUnexplainedDivergences, 0);
+          expect(o.accounting.stepDivergences, 0);
+          expect(o.accounting.stepLagEscalations, 0);
+          expect(o.accounting.stepLegacyCarrierRetired, 78);
+          expect(o.accounting.stepLegacyCarrierRetiredTotal, 78);
+          expect(divergenceFlares(), isEmpty);
+          final byCarrier = <String, int>{};
+          for (final detail in o.accounting.divergenceDetails) {
+            expect(
+              detail.cause,
+              DualReadDivergenceCause.legacyStepCarrierRetired,
+            );
+            final carrier = RetiredStepCarrier.values.singleWhere(
+              (c) => detail.mismatchKey.contains(':stepLag:${c.wire}@'),
+            );
+            byCarrier[carrier.name] = (byCarrier[carrier.name] ?? 0) + 1;
+          }
+          expect(byCarrier, {'running': 70, 'rearm': 8});
+        } else {
+          expect(o.accounting.stepUnexplainedDivergences, 78);
+          expect(o.accounting.stepLegacyCarrierRetired, 0);
+        }
+      }
+    });
+
+    test('recorded ONCE per fold seq: a later pass re-sights without '
+        're-recording, and a new seq is a new fact', () {
+      final accounting = DualReadAccounting();
+      bool record(int seq) => accounting.recordRetiredStepCarrier(
+        sessionId: 's1',
+        stepPath: 'a',
+        legacyValue: 'gated',
+        foldValue: 'pending',
+        carrier: RetiredStepCarrier.rearm,
+        foldSeq: seq,
+      );
+      expect(record(7), isTrue);
+      expect(record(7), isFalse);
+      expect(record(8), isTrue);
+      expect(accounting.stepLegacyCarrierRetiredTotal, 2);
+      expect(accounting.divergenceDetails, hasLength(2));
+      expect(accounting.stepDivergences, 0);
+    });
+
+    test('the class can never be counted as a step divergence', () {
+      expect(
+        () => DualReadAccounting().recordStepDivergence(
+          sessionId: 's1',
+          stepPath: 'a',
+          field: 'stepLag',
+          legacyValue: 'pending',
+          foldValue: 'running',
+          cause: DualReadDivergenceCause.legacyStepCarrierRetired,
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('the round summary reports the class beside, never inside, the '
+        'divergence counters', () {
+      final accounting = DualReadAccounting()
+        ..stepLegacyCarrierRetired = 3
+        ..stepLegacyCarrierRetiredTotal = 78;
+      final json = accounting.toJson(
+        mode: DualReadMode.primary,
+        health: TrajectorySnapshotHealth.live,
+        snapshotVersion: 11,
+      );
+      expect(json['step_legacy_carrier_retired'], 3);
+      expect(json['step_legacy_carrier_retired_total'], 78);
+      expect(json['step_divergences'], 0);
+      expect(json['step_unexplained_divergences'], 0);
+      final semantics = json['counter_semantics']! as Map<String, String>;
+      expect(semantics['step_legacy_carrier_retired'], 'gauge');
+      expect(semantics['step_legacy_carrier_retired_total'], 'cumulative');
+      expect(
+        DualReadDivergenceCause.legacyStepCarrierRetired.wire,
+        'legacy-step-carrier-retired',
+      );
+    });
+  });
+
+  group('retiredStepCarrierOf — the pure classification', () {
+    test('each arm, and its missing-evidence twin', () {
+      final gatedAt = DateTime.utc(2026, 9, 22, 7);
+      final predecessor = _Row(
+        stepPath: 'a',
+        stepState: 'gated',
+        supersededByStepRound: 1,
+      );
+      RetiredStepCarrier? of(
+        NodeCursor bead,
+        _Row fold, {
+        StepCursorView? previous,
+      }) => retiredStepCarrierOf(bead: bead, fold: fold, predecessor: previous);
+
+      expect(
+        of(
+          const NodeCursor(state: StepState.pending),
+          _Row(stepPath: 'a', stepState: 'running'),
+        ),
+        RetiredStepCarrier.running,
+      );
+      expect(
+        of(
+          const NodeCursor(state: StepState.pending),
+          _Row(stepPath: 'a', stepState: 'running', incarnation: 1),
+        ),
+        isNull,
+      );
+      expect(
+        of(
+          const NodeCursor(state: StepState.failed, restartCount: 1),
+          _Row(stepPath: 'a', stepState: 'running', incarnation: 1),
+        ),
+        RetiredStepCarrier.restartRunning,
+      );
+      final pendingRung = _Row(
+        stepPath: 'a',
+        stepState: 'pending',
+        stepRound: 1,
+      );
+      expect(
+        of(
+          const NodeCursor(state: StepState.gated),
+          pendingRung,
+          previous: foldPredecessorOf(pendingRung, [predecessor, pendingRung]),
+        ),
+        RetiredStepCarrier.rearm,
+      );
+      expect(of(const NodeCursor(state: StepState.gated), pendingRung), isNull);
+      final rerun = _Row(
+        stepPath: 'a',
+        stepState: 'running',
+        stepRound: 1,
+        startedAt: gatedAt.add(const Duration(minutes: 1)),
+      );
+      expect(
+        of(
+          NodeCursor(state: StepState.gated, finishedAt: gatedAt),
+          rerun,
+          previous: predecessor,
+        ),
+        RetiredStepCarrier.rearmThenRunning,
+      );
+      expect(
+        of(
+          NodeCursor(
+            state: StepState.gated,
+            finishedAt: gatedAt.add(const Duration(minutes: 2)),
+          ),
+          rerun,
+          previous: predecessor,
+        ),
+        isNull,
+      );
+      // Every pair outside the four arms — including every bead-ahead pair —
+      // is not this class.
+      for (final bead in [StepState.complete, StepState.ready]) {
+        expect(
+          of(
+            NodeCursor(state: bead),
+            _Row(stepPath: 'a', stepState: 'running'),
+          ),
+          isNull,
+        );
+      }
+      expect(
+        of(
+          const NodeCursor(state: StepState.pending),
+          _Row(stepPath: 'a', stepState: 'gated'),
+        ),
+        isNull,
+      );
+    });
+
+    test(
+      'foldPredecessorOf finds the rung below on the same path and round',
+      () {
+        final rows = [
+          _Row(stepPath: 'a', stepState: 'gated'),
+          _Row(stepPath: 'b', stepState: 'gated'),
+          _Row(stepPath: 'a', stepState: 'gated', round: 1),
+          _Row(stepPath: 'a', stepState: 'pending', stepRound: 1),
+        ];
+        final predecessor = foldPredecessorOf(rows.last, rows);
+        expect(predecessor, same(rows.first));
+        expect(foldPredecessorOf(rows.first, rows), isNull);
+      },
+    );
   });
 }

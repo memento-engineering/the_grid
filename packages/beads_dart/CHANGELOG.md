@@ -1,3 +1,11 @@
+## 0.3.0-dev.8
+
+ - **FIX**(engine,runtime,sdk,trajectory): re-arm the P6 mirror and degrade admission while it is dead (tg-6n18) (#520).
+
+## 0.3.0-dev.7
+
+ - **FIX**(sdk): refuse incompatible bd store modes (#512).
+
 ## 0.3.0-dev.6
 
  - **FIX**: warm stores and report SQL boot fallbacks (#505).

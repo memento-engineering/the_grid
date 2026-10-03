@@ -259,9 +259,31 @@ void main() {
       expect(outcome.err, contains('unwind step "store close (state)" failed'));
       expect(outcome.err, contains('unwind step "store close (slow)" failed'));
       expect(outcome.out, contains('store connections closed: 1/3'));
+      // The shell runs grid_sdk's ONE close primitive (tg-supq): each
+      // unconfirmed handle is named beside the count, by name and endpoint.
+      expect(outcome.out, contains('store handle still outstanding: "state" '));
+      expect(
+        outcome.out,
+        contains(
+          'store handle still outstanding: "slow" ((endpoint not vended)) — '
+          'close did not confirm within '
+          '${kStoreCloseTimeout.inMilliseconds}ms',
+        ),
+      );
     },
     timeout: const Timeout(Duration(seconds: 60)),
   );
+
+  test('the SDK unwind total fits strictly inside the down client grace, '
+      'and the shell and the SDK share one store-close budget (tg-supq)', () {
+    // `down` gives a SIGTERMed resident kStationStopGrace to exit AND remove
+    // its lock; StationWorkRuntime.shutdown runs before that release.
+    expect(kUnwindDeadline, lessThan(kStationStopGrace));
+    // ONE constant: this library imports grid_cli AND grid_sdk unprefixed, so
+    // a second `kStoreCloseTimeout` declaration in grid_cli would make this
+    // name ambiguous and the file would not compile.
+    expect(kStoreCloseTimeout, const Duration(seconds: 2));
+  });
 
   test('a station vending no stores prints no store line', () async {
     final outcome = await _runUp((_) => const <StoreConnection>[]);

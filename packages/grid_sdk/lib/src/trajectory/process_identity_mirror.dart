@@ -58,6 +58,7 @@ final class ProcessIdentitySnapshot
     required Iterable<ProcessIdentityRow> rows,
     this.seededAt,
     this.lastTickAt,
+    this.tickStalled = false,
   }) : rows = List<ProcessIdentityView>.unmodifiable(
          rows.map(ProcessIdentityRowView.new),
        ) {
@@ -82,6 +83,8 @@ final class ProcessIdentitySnapshot
   @override
   final DateTime? lastTickAt;
   @override
+  final bool tickStalled;
+  @override
   final List<ProcessIdentityView> rows;
 
   final Map<String, List<ProcessIdentityView>> _bySession = {};
@@ -103,6 +106,10 @@ final class ProcessIdentityMirror {
   DateTime? _seededAt;
   DateTime? _lastTickAt;
   var _health = TrajectorySnapshotHealth.refused;
+
+  /// The current compromise belongs to the tick supervisor ALONE (tg-6n18).
+  /// Any other latch takes ownership and clears it.
+  bool _tickStalled = false;
 
   TrajectoryProcessIdentitySnapshot get snapshot => _snapshot;
   bool get isSeeded => _seededAt != null;
@@ -127,6 +134,7 @@ final class ProcessIdentityMirror {
     _seededAt = seededAt;
     if (stale) {
       _health = TrajectorySnapshotHealth.refused;
+      _tickStalled = false;
     } else if (firstSeed && _health == TrajectorySnapshotHealth.refused) {
       _health = TrajectorySnapshotHealth.live;
     }
@@ -174,17 +182,47 @@ final class ProcessIdentityMirror {
   /// fencing, halt, or degradation. The heartbeat and health transition are
   /// published in one immutable snapshot so readers cannot observe a resumed
   /// beat with the stale health value.
+  ///
+  /// The supervisor's ownership is tracked HERE rather than trusted to the
+  /// caller's episode-start snapshot (tg-6n18): a drop, fence-out, halt or
+  /// degrade that lands DURING the stall takes the compromise over, and a
+  /// resumed beat then leaves the mirror compromised rather than laundering
+  /// that loss back to `live`.
   bool noteResumedTickAt(DateTime instant) {
     _lastTickAt = instant;
-    final changed = _health == TrajectorySnapshotHealth.compromised;
+    final changed =
+        _health == TrajectorySnapshotHealth.compromised && _tickStalled;
     if (changed) _health = TrajectorySnapshotHealth.live;
+    _tickStalled = false;
     _publish();
     return changed;
   }
 
-  bool latchCompromised() {
+  /// Latches the compromise on behalf of the TICK SUPERVISOR (tg-6n18): the
+  /// heartbeat stopped while the fold kept applying. Returns whether this call
+  /// took a `live` mirror to compromised — only then does the supervisor own
+  /// it, and only then does the snapshot report
+  /// [ProcessIdentitySnapshot.tickStalled].
+  bool latchTickStalled() {
     if (_health != TrajectorySnapshotHealth.live) return false;
     _health = TrajectorySnapshotHealth.compromised;
+    _tickStalled = true;
+    _publish();
+    return true;
+  }
+
+  /// Latches the compromise for any cause OTHER than a stalled tick. Over a
+  /// supervisor-owned stall it takes ownership (and reports a change): the
+  /// fold itself is now in doubt, so the degraded read must wedge again.
+  bool latchCompromised() {
+    if (_health == TrajectorySnapshotHealth.live) {
+      _health = TrajectorySnapshotHealth.compromised;
+      _tickStalled = false;
+      _publish();
+      return true;
+    }
+    if (!_tickStalled) return false;
+    _tickStalled = false;
     _publish();
     return true;
   }
@@ -212,6 +250,7 @@ final class ProcessIdentityMirror {
       rows: _rows.values,
       seededAt: _seededAt,
       lastTickAt: _lastTickAt,
+      tickStalled: _tickStalled,
     );
     for (final listener in [..._listeners]) {
       _notify(listener, _snapshot);

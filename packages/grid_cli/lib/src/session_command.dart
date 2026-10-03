@@ -5,13 +5,16 @@ import 'package:args/command_runner.dart';
 
 import 'station_command_client.dart';
 
-/// Lists and explicitly collects held sessions through the resident station.
+/// The session noun-domain: list and collect held sessions, and void an open,
+/// ungated one, through the resident station.
 class SessionCommand extends Command<int> {
-  /// Creates the session noun-domain with its `ls` and `collect` verbs.
+  /// Creates the session noun-domain with its `ls`, `collect`, and `void`
+  /// verbs.
   SessionCommand({StationCommandClient? client})
     : _client = client ?? StationCommandClient() {
     addSubcommand(SessionLsCommand(client: _client));
     addSubcommand(SessionCollectCommand(client: _client));
+    addSubcommand(SessionVoidCommand(client: _client));
   }
 
   final StationCommandClient _client;
@@ -21,7 +24,8 @@ class SessionCommand extends Command<int> {
 
   @override
   final String description =
-      'List held sessions and collect their preserved worktrees.';
+      'List held sessions, collect their preserved worktrees, or void an '
+      'open, ungated session so its work bead re-mounts.';
 
   @override
   Future<int> run() async {
@@ -102,6 +106,65 @@ class SessionCollectCommand extends Command<int> {
       act: argResults!.flag('act'),
       bulk: argResults!.flag('bulk'),
       overrideUnsafe: argResults!.flag('override-unsafe'),
+      client: _client,
+    );
+  }
+}
+
+/// `grid session void <session-id> --reason <text>` retires an OPEN, UNGATED
+/// session through the resident station.
+///
+/// The gated exit is `grid rework`, which spends round budget and closes the
+/// gates that parked the round; a gated session is therefore REFUSED here and
+/// pointed at rework. There is no defer date: a void is a decision, not a
+/// timer. The resident re-keys the round onto its void key the way rework
+/// re-keys at a gate, so the work bead returns to the mountable frontier
+/// instead of stranding behind a bare `work_bead` key the way a hand close
+/// does.
+class SessionVoidCommand extends Command<int> {
+  /// Creates the open-session void verb.
+  SessionVoidCommand({StationCommandClient? client})
+    : _client = client ?? StationCommandClient() {
+    _addGridRootOption(argParser);
+    argParser.addOption(
+      'reason',
+      help:
+          'Why the round is abandoned; recorded on the voided session. '
+          'Required.',
+    );
+  }
+
+  final StationCommandClient _client;
+
+  @override
+  final String name = 'void';
+
+  @override
+  final String description =
+      'Void an open, ungated session so its work bead re-mounts; a gated '
+      'session is refused (use rework).';
+
+  @override
+  String get invocation =>
+      'grid session void <session-id> --reason <text> --grid-root <path>';
+
+  @override
+  Future<int> run() async {
+    final args = argResults!;
+    if (args.rest.length != 1) {
+      stderr.writeln(
+        args.rest.isEmpty
+            ? 'grid session void: a <session-id> is required.'
+            : 'grid session void: void accepts exactly one session id.',
+      );
+      return 64;
+    }
+    final root = _gridRoot(args, stderr.writeln, 'void');
+    if (root == null) return 64;
+    return runSessionVoid(
+      gridRoot: root,
+      sessionId: args.rest.single,
+      reason: args.option('reason'),
       client: _client,
     );
   }
@@ -222,6 +285,95 @@ Future<int> runSessionCollect({
       return 0;
   }
 }
+
+/// Voids the open, ungated [sessionId] through [client] for [reason].
+///
+/// Exit 64 with nothing on stdout unless the resident returns a COMPLETE void
+/// receipt: the session closed with reason and disposition `voided`, and the
+/// round re-keyed onto a named void key. A partial receipt is reported as
+/// such rather than rendered as success.
+Future<int> runSessionVoid({
+  required String gridRoot,
+  required String sessionId,
+  required String? reason,
+  required StationCommandClient client,
+  void Function(String)? out,
+  void Function(String)? err,
+}) async {
+  final write = out ?? stdout.writeln;
+  final writeErr = err ?? stderr.writeln;
+  if (sessionId.trim().isEmpty) {
+    writeErr('grid session void: a <session-id> is required.');
+    return 64;
+  }
+  if (reason == null || reason.trim().isEmpty) {
+    writeErr(
+      'grid session void: --reason is required (a void must say why the '
+      'round is abandoned).',
+    );
+    return 64;
+  }
+  final result = await client.send(
+    gridRoot: gridRoot,
+    method: 'grid/session/void',
+    params: {'sessionId': sessionId, 'reason': reason},
+  );
+  switch (result) {
+    case StationCommandRefused(:final message) ||
+        StationCommandUnavailable(:final message):
+      writeErr('grid session void: $message');
+      return 64;
+    case StationCommandCompleted(:final value):
+      final closedSession = _stringMap(value['closedSession']);
+      final closedId = _nonEmptyText(closedSession?['sessionId']);
+      final workBeadId = _nonEmptyText(value['workBeadId']);
+      final retiredKey = _nonEmptyText(value['retiredKey']);
+      final reapFailure = _nonEmptyText(value['reapFailure']);
+      final specClearFailure = _nonEmptyText(value['specClearFailure']);
+      final completeReceipt =
+          closedId == sessionId &&
+          closedSession?['reason'] == 'voided' &&
+          closedSession?['disposition'] == 'voided' &&
+          workBeadId != null &&
+          retiredKey != null;
+      if (!completeReceipt) {
+        writeErr(
+          'grid session void: resident completed without a complete void '
+          'receipt.',
+        );
+        return 64;
+      }
+      write(
+        'grid session void — voided session $sessionId (disposition voided).',
+      );
+      write(
+        'grid session void — re-keyed $workBeadId to $retiredKey; the bead '
+        'returns to the mountable frontier.',
+      );
+      if (specClearFailure != null) {
+        writeErr(
+          'grid session void: the specify-authored spec clear FAILED (the '
+          'fresh round may read the retired round\'s AC/design; clear them): '
+          '$specClearFailure',
+        );
+      }
+      if (reapFailure != null) {
+        writeErr(
+          'grid session void: molecule reap FAILED (open step beads remain; '
+          'sweep them): $reapFailure',
+        );
+      }
+      return 0;
+  }
+}
+
+Map<String, Object?>? _stringMap(Object? value) => switch (value) {
+  final Map<Object?, Object?> row => row.cast<String, Object?>(),
+  _ => null,
+};
+
+String? _nonEmptyText(Object? value) =>
+    value is String && value.trim().isNotEmpty ? value : null;
 
 List<Map<String, Object?>> _rows(Map<String, Object?> value) {
   final raw = value['sessions'];

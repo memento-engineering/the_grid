@@ -364,6 +364,148 @@ Future<void> _waitUntil(bool Function() condition) async {
 }
 
 void main() {
+  group('operator session void (tg-5snt)', () {
+    const live = SessionProjection(workBeadId: 'tg-1', sessionId: 'tgdog-s1');
+
+    test('liveRuntimesOf reference-counts provisional effects and returns a '
+        'sorted de-duplicated union with the provider', () async {
+      final provider = FakeRuntimeProvider();
+      addTearDown(provider.close);
+      final station = _stationOver(RecordingBdRunner(), provider: provider);
+      addTearDown(station.dispose);
+      const config = RuntimeConfig(workDir: '/w', command: 'agent');
+      await provider.start('tgdog-s1/tg-1/land', config);
+      await provider.start('tgdog-s1/tg-1/agent', config);
+      await provider.start('tgdog-s10/tg-9/agent', config);
+      station.admission
+        ..beginRuntimeEffect('tgdog-s1/tg-1/verify')
+        ..beginRuntimeEffect('tgdog-s1/tg-1/verify')
+        ..beginRuntimeEffect('tgdog-s1/tg-1/agent');
+
+      expect(station.admission.liveRuntimesOf('tgdog-s1'), [
+        'tgdog-s1/tg-1/agent',
+        'tgdog-s1/tg-1/land',
+        'tgdog-s1/tg-1/verify',
+      ]);
+      expect(station.admission.liveRuntimesOf('tgdog-s2'), isEmpty);
+
+      station.admission.endRuntimeEffect('tgdog-s1/tg-1/verify');
+      expect(
+        station.admission.liveRuntimesOf('tgdog-s1'),
+        contains('tgdog-s1/tg-1/verify'),
+      );
+      station.admission
+        ..endRuntimeEffect('tgdog-s1/tg-1/verify')
+        ..endRuntimeEffect('tgdog-s1/tg-1/agent');
+      expect(station.admission.liveRuntimesOf('tgdog-s1'), [
+        'tgdog-s1/tg-1/agent',
+        'tgdog-s1/tg-1/land',
+      ]);
+    });
+
+    test(
+      'a sanctioned void of an ADOPTED session holds the bead once it is '
+      'unlinked, frees its slot, and re-offers it fresh after landing',
+      () async {
+        final station = _stationOver(RecordingBdRunner(), maxConcurrentWork: 1);
+        addTearDown(station.dispose);
+        final transport = _RecordingTransport();
+        final services = ServiceBundle(transport: transport);
+        var invalidations = 0;
+        station.admission.addInvalidationListener(() => invalidations += 1);
+        final first = _bead('tg-1');
+        final second = _bead('tg-2');
+        final capOne = _config.copyWith(maxConcurrentWork: 1);
+
+        StationAdmissionBatch pass({required bool linked}) =>
+            station.admission.admitPending(
+              _snapshot([
+                first,
+                second,
+              ], sessions: linked ? const {'tg-1': live} : const {}),
+              capOne,
+              services,
+              [
+                StationAdmissionCandidate(
+                  bead: first,
+                  session: linked ? live : null,
+                ),
+                StationAdmissionCandidate(bead: second, session: null),
+              ],
+            );
+
+        final adopted = pass(linked: true);
+        expect(adopted.admitted.single.sessionId, 'tgdog-s1');
+        expect(adopted.admitted.single.adopted, isTrue);
+
+        station.admission.beginOperatorVoid(
+          workBeadId: 'tg-1',
+          sessionId: 'tgdog-s1',
+        );
+        // The re-key is not yet observed: nothing changes for the mount.
+        final stale = pass(linked: true);
+        expect(stale.admitted.single.sessionId, 'tgdog-s1');
+
+        // Observed while the void is still landing: held, slot freed, and the
+        // next candidate takes it in the same pass.
+        final held = pass(linked: false);
+        expect(held.waiting.map((c) => c.bead.id), ['tg-1']);
+        expect(held.admitted.single.candidate.bead.id, 'tg-2');
+        expect(
+          transport.flares.last.data['causes'],
+          contains('tg-1=${WorkThrottleCause.operatorVoid}'),
+        );
+        expect(pass(linked: false).waiting.map((c) => c.bead.id), ['tg-1']);
+
+        station.admission.endOperatorVoid(
+          workBeadId: 'tg-1',
+          sessionId: 'tgdog-s1',
+          landed: true,
+        );
+        expect(invalidations, greaterThan(0));
+        // One more held pass drops any stale mount, then the bead re-competes
+        // as a FRESH candidate (a new mount attempt), never an adoption.
+        expect(pass(linked: false).waiting.map((c) => c.bead.id), ['tg-1']);
+        final before = invalidations;
+        await _pump();
+        expect(invalidations, greaterThan(before), reason: 'recheck scheduled');
+        final reoffered = station.admission.admitPending(
+          _snapshot([first]),
+          capOne,
+          services,
+          [StationAdmissionCandidate(bead: first, session: null)],
+        );
+        expect(reoffered.admitted.single.candidate.bead.id, 'tg-1');
+        expect(reoffered.admitted.single.adopted, isFalse);
+        expect(reoffered.admitted.single.sessionId, isNull);
+        expect(reoffered.waiting, isEmpty);
+      },
+    );
+
+    test('a withdrawn void takes the ordinary path again', () {
+      final station = _stationOver(RecordingBdRunner());
+      addTearDown(station.dispose);
+      final first = _bead('tg-1');
+      station.admission.beginOperatorVoid(
+        workBeadId: 'tg-1',
+        sessionId: 'tgdog-s1',
+      );
+      station.admission.endOperatorVoid(
+        workBeadId: 'tg-1',
+        sessionId: 'tgdog-s1',
+        landed: false,
+      );
+      final batch = station.admission.admitPending(
+        _snapshot([first]),
+        _config,
+        const ServiceBundle(),
+        [StationAdmissionCandidate(bead: first, session: null)],
+      );
+      expect(batch.waiting, isEmpty);
+      expect(batch.admitted.single.candidate.bead.id, 'tg-1');
+    });
+  });
+
   test(
     'lost-session retirement shares one exact future and stops every runtime '
     'before the incumbent void path',
@@ -3602,4 +3744,81 @@ void main() {
       );
     },
   );
+
+  test('work.throttled names WHY each bead is held: slots-full for capacity, '
+      'reservation-missing after a failed mount-attempt record write '
+      '(tg-fpvk)', () async {
+    final runner = _FailingMountAttemptRunner();
+    final station = _stationOver(runner, maxConcurrentWork: 1);
+    addTearDown(station.dispose);
+    final transport = _RecordingTransport();
+    final services = ServiceBundle(transport: transport);
+    final first = _bead('tg-first', priority: 0);
+    final second = _bead('tg-second', priority: 1);
+    final snapshot = _snapshot([first, second]);
+    final candidates = [
+      StationAdmissionCandidate(bead: first, session: null),
+      StationAdmissionCandidate(bead: second, session: null),
+    ];
+    final config = _config.copyWith(maxConcurrentWork: 1);
+
+    // Pass 1: tg-first takes the single slot and its reservation write is
+    // scheduled; tg-second is held for capacity.
+    final pass1 = station.admission.admitPending(
+      snapshot,
+      config,
+      services,
+      candidates,
+    );
+    expect(pass1.admitted.single.candidate.bead.id, first.id);
+    final capacityHold = transport.flares.singleWhere(
+      (flare) => flare.name == 'work.throttled',
+    );
+    expect(capacityHold.data, containsPair('beadIds', second.id));
+    expect(capacityHold.data, containsPair('cause', 'slots-full'));
+    expect(
+      capacityHold.data,
+      containsPair('causes', '${second.id}=slots-full'),
+    );
+
+    // The reservation write fails (the controlled runner throws on the budget
+    // merge), the reservation is released and tg-first enters its backoff.
+    for (var i = 0; i < 12; i++) {
+      await Future<void>.delayed(Duration.zero);
+    }
+    expect(
+      transport.flares.where(
+        (flare) => flare.name == 'work.mountAttemptRecordFailed',
+      ),
+      hasLength(1),
+    );
+
+    // Pass 2: tg-first is held by its missing reservation, tg-second now takes
+    // the slot — and the one flare names BOTH conditions bead by bead.
+    transport.flares.clear();
+    final pass2 = station.admission.admitPending(
+      snapshot,
+      config,
+      services,
+      candidates,
+    );
+    expect(pass2.admitted.single.candidate.bead.id, second.id);
+    expect(pass2.waiting.single.bead.id, first.id);
+    final backoffHold = transport.flares.singleWhere(
+      (flare) => flare.name == 'work.throttled',
+    );
+    expect(backoffHold.data, containsPair('count', '1'));
+    expect(backoffHold.data, containsPair('beadIds', first.id));
+    expect(
+      backoffHold.data,
+      containsPair('cause', WorkThrottleCause.reservationMissing),
+    );
+    expect(
+      backoffHold.data,
+      containsPair(
+        'causes',
+        '${first.id}=${WorkThrottleCause.reservationMissing}',
+      ),
+    );
+  });
 }

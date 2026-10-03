@@ -1,3 +1,12 @@
+## 0.2.1-dev.10
+
+ - **FIX**(engine,runtime,sdk,trajectory): re-arm the P6 mirror and degrade admission while it is dead (tg-6n18) (#520).
+
+## 0.2.1-dev.9
+
+ - **FIX**(sdk,runtime): land the zombie-PR guard on the production path, bound the unwind tail, self-bound the live attach test (tg-b1t8, tg-supq, tg-ejzb) (#517).
+ - **FIX**(runtime): bind teardown reads to writer store (#513).
+
 ## 0.2.1-dev.8
 
  - **FIX**(trajectory): close voided prespawn session heads (#502).

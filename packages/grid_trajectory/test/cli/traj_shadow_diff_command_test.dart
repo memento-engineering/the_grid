@@ -472,6 +472,204 @@ void main() {
       expect(out.join('\n'), contains('nothing compared'));
     });
   });
+
+  group('tg-ul2v — the unshadowable class and the non-atomic-crash '
+      'allow-list, in the existing typed report', () {
+    ShadowMismatch crash(String sessionId, String field, int seq) =>
+        ShadowMismatch(
+          sessionId: sessionId,
+          field: field,
+          legacyValue: 'closed',
+          foldValue: null,
+          seq: seq,
+          classification: ShadowMismatchClass.nonAtomicCrash,
+          basis: 'attempt a-$sessionId: started without exit, started@$seq',
+        );
+
+    Future<(int, String)> run(
+      List<ShadowMismatch> rows, {
+      NonAtomicCrashAllowList? allowList,
+    }) async {
+      final out = <String>[];
+      final code = await runTrajShadowDiff(
+        gridHome: '/grid',
+        open: openerFor(
+          TrajectoryOpened(ScriptedReader([_note('tranquility-5xk', 1)])),
+        ),
+        compare: _ScriptedCompare(rows),
+        accounting: const ShadowRunAccounting(dropped: 0, suppressed: 0),
+        allowList: allowList,
+        out: out.add,
+        err: out.add,
+      );
+      return (code, out.join('\n'));
+    }
+
+    test('a legacy_carrier_retired row is PRINTED with its key and basis but '
+        'never sampled as a mismatch', () async {
+      final (code, text) = await run([
+        const ShadowMismatch(
+          sessionId: 'tranquility-5xk',
+          stepPath: 'tg-ersi.5/review/route',
+          field: 'step_state',
+          legacyValue: 'gated',
+          foldValue: 'pending',
+          seq: 4411,
+          classification: ShadowMismatchClass.legacyCarrierRetired,
+          basis: 'cut discipline retired the step bead rearm write',
+        ),
+      ]);
+      expect(code, 0);
+      // The typed report keeps every key §9 orders it by.
+      expect(text, contains('tg-ersi.5/review/route'));
+      expect(text, contains('gated'));
+      expect(text, contains('pending'));
+      expect(text, contains('4411'));
+      expect(
+        text,
+        contains(
+          '[legacy_carrier_retired — cut discipline retired the step bead '
+          'rearm write]',
+        ),
+      );
+      expect(text, contains('unshadowable: legacy_carrier_retired 1'));
+      expect(text, contains('0 mismatches over 1 session'));
+      expect(text, contains('(1 unshadowable, not sampled)'));
+      expect(text, isNot(contains('named gaps')));
+      expect(text, isNot(contains('BLOCKED')));
+    });
+
+    test('an unexplained row beside an unshadowable one still counts — the '
+        'class hides nothing else', () async {
+      final (code, text) = await run([
+        const ShadowMismatch(
+          sessionId: 'tranquility-5xk',
+          field: 'step_state',
+          legacyValue: 'pending',
+          foldValue: 'running',
+          seq: 1,
+          classification: ShadowMismatchClass.legacyCarrierRetired,
+        ),
+        const ShadowMismatch(
+          sessionId: 'tranquility-5xk',
+          field: 'outcome',
+          legacyValue: 'failed',
+          foldValue: 'succeeded',
+          seq: 2,
+        ),
+      ]);
+      expect(code, 1);
+      expect(text, contains('1 mismatch, 1 unexplained'));
+    });
+
+    test('NonAtomicCrashAllowList opens ONE adjudication per session and '
+        'ignores every other class', () {
+      final list = NonAtomicCrashAllowList();
+      final first = list.admit([
+        crash('s1', 'status', 1),
+        crash('s1', 'outcome', 2),
+        crash('s2', 'status', 3),
+        const ShadowMismatch(
+          sessionId: 's3',
+          field: 'status',
+          legacyValue: 'closed',
+          foldValue: 'open',
+          seq: 4,
+          classification: ShadowMismatchClass.lostAppend,
+        ),
+      ]);
+      expect(first.opened.map((a) => a.sessionId), ['s1', 's2']);
+      expect(first.joined, isEmpty);
+      expect(list.adjudicationFor('s1')!.rows, hasLength(2));
+      expect(list.adjudicationFor('s3'), isNull);
+      expect(NonAtomicCrashAllowList.name, 'non-atomic-crash allow-list');
+
+      // A later admission in the SAME process never re-opens s1.
+      final second = list.admit([
+        crash('s1', 'held', 5),
+        crash('s4', 'status', 6),
+      ]);
+      expect(second.opened.map((a) => a.sessionId), ['s4']);
+      expect(second.joined, {'s1': 1});
+      expect(list.adjudicationFor('s1')!.rows, hasLength(3));
+      expect(list.sessions, 3);
+    });
+
+    test('the verb prompts ONCE per session within a run, and a second run '
+        'through the same list does not re-prompt', () async {
+      final allowList = NonAtomicCrashAllowList();
+      final rows = [
+        crash('tranquility-5xk', 'status', 10),
+        crash('tranquility-5xk', 'outcome', 11),
+        crash('tranquility-5xk', 'held', 12),
+      ];
+
+      final (firstCode, first) = await run(rows, allowList: allowList);
+      expect(firstCode, 0);
+      // Three crash rows, one session, ONE prompt.
+      expect('adjudicate ONCE'.allMatches(first), hasLength(1), reason: first);
+      expect(
+        first,
+        contains(
+          'non-atomic-crash allow-list: adjudicate ONCE — tranquility-5xk '
+          '(3 rows); basis: attempt a-tranquility-5xk: started without exit',
+        ),
+      );
+      // Every row is still in the typed report.
+      expect('[non_atomic_crash'.allMatches(first), hasLength(3));
+
+      final (secondCode, second) = await run(rows, allowList: allowList);
+      expect(secondCode, 0);
+      expect(second, isNot(contains('adjudicate ONCE')));
+      expect(
+        second,
+        contains(
+          'non-atomic-crash allow-list: already adjudicated this process — '
+          'tranquility-5xk (+3 rows, not re-prompted)',
+        ),
+      );
+      expect(allowList.adjudicationFor('tranquility-5xk')!.rows, hasLength(6));
+    });
+
+    test('the VERB threads its held list through every run it makes', () async {
+      final allowList = NonAtomicCrashAllowList();
+      final runner = CommandRunner<int>('grid', 'test')
+        ..addCommand(
+          TrajShadowDiffCommand(
+            open: openerFor(
+              TrajectoryOpened(ScriptedReader([_note('tranquility-5xk', 1)])),
+            ),
+            compare: _ScriptedCompare([crash('tranquility-5xk', 'status', 10)]),
+            allowList: allowList,
+          ),
+        );
+      const args = [
+        'shadow-diff',
+        '--state-workspace',
+        '/tmp',
+        '--dropped',
+        '0',
+        '--suppressed',
+        '0',
+      ];
+      expect(await runner.run(args), 0);
+      expect(allowList.sessions, 1);
+      expect(allowList.adjudicationFor('tranquility-5xk')!.rows, hasLength(1));
+      // The second run of the SAME verb joins the open adjudication.
+      expect(await runner.run(args), 0);
+      expect(allowList.sessions, 1);
+      expect(allowList.adjudicationFor('tranquility-5xk')!.rows, hasLength(2));
+    });
+
+    test('the list is scoped to its INSTANCE: a fresh list (a new process) '
+        'prompts again — nothing persists across a bounce', () async {
+      final rows = [crash('tranquility-5xk', 'status', 10)];
+      final (_, first) = await run(rows, allowList: NonAtomicCrashAllowList());
+      final (_, second) = await run(rows, allowList: NonAtomicCrashAllowList());
+      expect(first, contains('adjudicate ONCE'));
+      expect(second, contains('adjudicate ONCE'));
+    });
+  });
 }
 
 /// A legacy reader with one scripted view per session id.

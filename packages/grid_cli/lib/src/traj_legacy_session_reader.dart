@@ -33,8 +33,10 @@ import 'package:grid_engine/grid_engine.dart'
         MoleculeStepKeys,
         MountAttemptKeys,
         SessionBeadKeys,
+        SessionDisciplineStamp,
         projectMountAttempt,
-        projectSession;
+        projectSession,
+        sessionDisciplineOf;
 import 'package:grid_sdk/grid_sdk.dart' show G2ShadowRoundAdapter;
 import 'package:grid_trajectory/grid_trajectory.dart'
     show
@@ -136,17 +138,28 @@ LegacySessionView legacySessionViewOf(Bead bead) {
 }
 
 /// Reads one session's step beads and projects them to the step-lane view.
+///
+/// With [sessionFetch], it also reads the owning SESSION bead's discipline
+/// stamp and marks every view of a `cut` session ([LegacyStepView.cutDiscipline])
+/// so the lane can classify the retired legacy carriers (tg-ul2v). Without it
+/// — or when the session bead cannot be read — every view is shadow-era,
+/// which only ever leaves a row in its ordinary class, never hides one.
 class BdLegacyStepReader implements LegacyStepReader {
-  BdLegacyStepReader(this._fetch);
+  BdLegacyStepReader(this._fetch, {SessionBeadFetch? sessionFetch})
+    : _sessionFetch = sessionFetch;
 
   final StepBeadFetch _fetch;
+  final SessionBeadFetch? _sessionFetch;
 
   @override
   Future<List<LegacyStepView>> stepViews(String sessionId) async {
+    final cut = await _isCutSession(sessionId);
     try {
       return [
         for (final bead in await _fetch(sessionId))
-          if (legacyStepViewOf(bead) case final LegacyStepView view) view,
+          if (legacyStepViewOf(bead, cutDiscipline: cut)
+              case final LegacyStepView view)
+            view,
       ];
     } on BdException {
       // "The ledger cannot answer" is not "the ledger says no steps": an
@@ -157,12 +170,31 @@ class BdLegacyStepReader implements LegacyStepReader {
       return const [];
     }
   }
+
+  /// Whether the owning session bead carries the `cut` discipline stamp —
+  /// grid_engine's own reading ([sessionDisciplineOf]), so the two sides can
+  /// never disagree on what "cut" means.
+  Future<bool> _isCutSession(String sessionId) async {
+    final fetch = _sessionFetch;
+    if (fetch == null) return false;
+    try {
+      for (final bead in await fetch([sessionId])) {
+        if (bead.id != sessionId) continue;
+        return sessionDisciplineOf(bead.metadata) == SessionDisciplineStamp.cut;
+      }
+    } on BdException {
+      // Unreadable is shadow-era: the lane then keeps every row in its
+      // ordinary class rather than classifying on a guess.
+    }
+    return false;
+  }
 }
 
 /// Pure projection of one `type=step` [bead] to the shadow view — the key
 /// vocabulary is `MoleculeStepKeys`' (grid_engine owns that schema). Null for
 /// a bead carrying no node path: without the path there is nothing to join on.
-LegacyStepView? legacyStepViewOf(Bead bead) {
+/// [cutDiscipline] is the OWNING session's fact, supplied by the reader.
+LegacyStepView? legacyStepViewOf(Bead bead, {bool cutDiscipline = false}) {
   final metadata = bead.metadata;
   final stepPath = '${metadata[MoleculeStepKeys.path] ?? ''}';
   if (stepPath.isEmpty) return null;
@@ -175,6 +207,7 @@ LegacyStepView? legacyStepViewOf(Bead bead) {
     // the six-valued one.
     state: state == null ? null : '$state',
     cooldownUntil: cooldown == null ? null : DateTime.tryParse('$cooldown'),
+    cutDiscipline: cutDiscipline,
   );
 }
 
@@ -330,7 +363,12 @@ Future<ShadowCompare> legacyShadowCompareFor(String gridHome) async {
       return CompositeShadow(
         [
           AttemptLifecycleShadow(BdLegacySessionReader(bd.show)),
-          StepTransitionShadow(BdLegacyStepReader((id) => _stepBeads(bd, id))),
+          StepTransitionShadow(
+            BdLegacyStepReader(
+              (id) => _stepBeads(bd, id),
+              sessionFetch: bd.show,
+            ),
+          ),
           MountOrdinalShadow(
             BdLegacyMountAttemptReader((id) => _mountAttemptBeads(bd, id)),
           ),

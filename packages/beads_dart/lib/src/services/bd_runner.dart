@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:meta/meta.dart';
+import 'package:path/path.dart' as p;
 
 import '../errors/bd_exception.dart';
 import 'dolt_endpoint.dart';
@@ -82,6 +83,27 @@ class ProcessBdRunner implements BdRunner {
 
   /// The `bd` executable name or path (default `bd`, resolved via `PATH`).
   final String executable;
+
+  /// The configured executable's diagnostic identity without spawning it.
+  ///
+  /// Absolute configuration is already unambiguous and is returned unchanged.
+  /// A token is resolved against this runner's explicit `PATH`, in order; the
+  /// first existing file is returned as an absolute normalized path. When no
+  /// candidate exists, the original token remains the best available identity.
+  String get resolvedExecutable {
+    if (p.isAbsolute(executable)) return executable;
+    final pathValue = _baseEnvironment['PATH'];
+    if (pathValue == null || pathValue.isEmpty) return executable;
+    final pathListSeparator = Platform.isWindows ? ';' : ':';
+    for (final directory in pathValue.split(pathListSeparator)) {
+      if (directory.isEmpty) continue;
+      final candidate = p.join(directory, executable);
+      if (File(candidate).existsSync()) {
+        return p.normalize(p.absolute(candidate));
+      }
+    }
+    return executable;
+  }
 
   /// Timeout applied when [run] is called without an explicit one.
   final Duration defaultTimeout;

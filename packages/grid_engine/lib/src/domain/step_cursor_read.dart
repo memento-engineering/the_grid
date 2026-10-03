@@ -284,6 +284,143 @@ bool expectsFoldStepRow(StepState bead) => bead != StepState.pending;
 bool foldAheadOfLegacyStep(StepState bead, StepState fold) =>
     _stepProgress(fold) > _stepProgress(bead);
 
+/// Which RETIRED legacy step-bead write explains a bead/fold pair under
+/// `discipline: cut` (tg-ul2v).
+///
+/// The cut retires exactly two step-bead writes, and the trajectory record
+/// becomes the only carrier of those transitions:
+///
+///   * the `running` write at a step's start (`capability_host.dart`
+///     `_persistStarted`: "under cut P2 is the running carrier and the legacy
+///     bead write retires");
+///   * the gate-cleared `gated`→`pending` rearm write (`session_scope.dart`
+///     `_rearm`: "cut retires that carrier").
+///
+/// So under cut the bead holds the state its LAST NON-RETIRED write left —
+/// the pour's `pending`, the previous rung's `gated`, or a `failed` awaiting
+/// its supervised restart — while the fold carries the retired transition.
+/// That pair is not an append in flight and no grace closes it: it is an
+/// unshadowable fact, and each value names which retired write produced it.
+enum RetiredStepCarrier {
+  /// Bead `pending` (the pour's state, or a fresh successor generation's),
+  /// fold `running`: the start write is retired.
+  running('retired-running-write'),
+
+  /// Bead `failed`, fold `running` at the incarnation the failure write
+  /// bumped `restartCount` to: the supervised restart's start write is
+  /// retired.
+  restartRunning('retired-restart-running-write'),
+
+  /// Bead `gated`, fold `pending` on the rung the fold's own rearm opened:
+  /// the rearm write is retired.
+  rearm('retired-rearm-write'),
+
+  /// Bead `gated`, fold `running` on the rung the fold's own rearm opened:
+  /// BOTH the rearm write and the re-run's start write are retired. This is
+  /// the first-round review's blind spot — a re-armed node that re-ran.
+  rearmThenRunning('retired-rearm-and-running-writes');
+
+  const RetiredStepCarrier(this.wire);
+
+  /// Stable spelling for the detail key and the report basis.
+  final String wire;
+}
+
+/// Classifies a bead/fold pair as a [RetiredStepCarrier], or returns null
+/// when the pair is NOT explained by a retired write and must keep its
+/// existing treatment (`stepLag`, escalating as before).
+///
+/// Only meaningful under `discipline: cut` — the caller gates on that, since
+/// under `shadow` every one of these writes still happens and the same pair
+/// IS the bead-first/append-later window or worse.
+///
+/// [fold] is the node's newest row (the collapse winner) and [predecessor] is
+/// the fold's row one rung below it on the same `(round, step_path)`, when
+/// one exists. Every arm demands POSITIVE evidence, so a genuine lag with the
+/// same two state words stays unexplained:
+///
+///   * both `running` arms require the fold row's `incarnation` to equal the
+///     bead's `restartCount` — the start record carries the mount's
+///     `restartCount` and the failure write carries the bumped one, so a fold
+///     still holding the PRE-failure incarnation (the failure's append never
+///     landed) does not match;
+///   * both rearm arms require the fold to PROVE its rearm: a predecessor rung
+///     at `stepRound - 1` that is `gated` and whose `superseded_by_step_round`
+///     names the current rung (the fold's chain rule writes exactly that on a
+///     gate-cleared rearm);
+///   * the rearm-then-running arm additionally refuses a bead whose gate
+///     instant (`finishedAt`) is AFTER the re-run started — that bead gated
+///     on the CURRENT rung, so its `gated` is ahead of the fold, not behind.
+///
+/// A bead AHEAD of the fold (`complete`/`ready` over fold `running`, the
+/// persist-site window) is never matched: those writes are not retired.
+RetiredStepCarrier? retiredStepCarrierOf({
+  required NodeCursor bead,
+  required StepCursorView fold,
+  StepCursorView? predecessor,
+}) {
+  final foldState = stepStateFromWire(fold.stepState);
+  if (foldState == null) return null;
+  switch ((bead.state, foldState)) {
+    case (StepState.pending, StepState.running):
+      return fold.incarnation == bead.restartCount
+          ? RetiredStepCarrier.running
+          : null;
+    case (StepState.failed, StepState.running):
+      return fold.incarnation == bead.restartCount
+          ? RetiredStepCarrier.restartRunning
+          : null;
+    case (StepState.gated, StepState.pending):
+      return _foldProvesRearm(fold, predecessor)
+          ? RetiredStepCarrier.rearm
+          : null;
+    case (StepState.gated, StepState.running):
+      if (!_foldProvesRearm(fold, predecessor)) return null;
+      if (fold.incarnation != bead.restartCount) return null;
+      final gatedAt = bead.finishedAt;
+      final rerunStartedAt = fold.startedAt;
+      if (gatedAt != null &&
+          rerunStartedAt != null &&
+          gatedAt.isAfter(rerunStartedAt)) {
+        return null;
+      }
+      return RetiredStepCarrier.rearmThenRunning;
+    default:
+      return null;
+  }
+}
+
+/// Does the fold itself carry the gate-cleared rearm that opened [fold]'s
+/// rung? See [retiredStepCarrierOf].
+bool _foldProvesRearm(StepCursorView fold, StepCursorView? predecessor) =>
+    fold.stepRound >= 1 &&
+    predecessor != null &&
+    predecessor.sessionId == fold.sessionId &&
+    predecessor.round == fold.round &&
+    predecessor.stepPath == fold.stepPath &&
+    predecessor.stepRound == fold.stepRound - 1 &&
+    predecessor.stepState == StepState.gated.name &&
+    predecessor.supersededByStepRound == fold.stepRound;
+
+/// The fold's row one rung below [fold] on the same `(round, step_path)`, out
+/// of one session's raw (uncollapsed) [rows] — the [retiredStepCarrierOf]
+/// predecessor. Null at rung 0 or when the rung is absent.
+StepCursorView? foldPredecessorOf(
+  StepCursorView fold,
+  Iterable<StepCursorView> rows,
+) {
+  if (fold.stepRound < 1) return null;
+  for (final row in rows) {
+    if (row.sessionId == fold.sessionId &&
+        row.round == fold.round &&
+        row.stepPath == fold.stepPath &&
+        row.stepRound == fold.stepRound - 1) {
+      return row;
+    }
+  }
+  return null;
+}
+
 /// The step lifecycle's progress ordering — pending → running → gated →
 /// terminal. `gated` sits above `running` because a node reaches its gate by
 /// running into it, and the three terminals share a rank because they are

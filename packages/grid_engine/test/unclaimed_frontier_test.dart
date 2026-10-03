@@ -173,6 +173,8 @@ final class _NoProcesses implements TrajectoryProcessIdentitySnapshot {
   DateTime? get seededAt => null;
   @override
   DateTime? get lastTickAt => null;
+  @override
+  bool get tickStalled => false;
 }
 
 Bead _task(String id) =>

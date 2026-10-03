@@ -18,7 +18,8 @@ register:
     - "wave-2-entry-criteria-rulings"
     - "trajectory-queue-deadline-follows-writer-progress"
   obsoleted-by: null
-  updated-by: []
+  updated-by:
+    - projection-authority-selects-structural-graph-reads
   bead: tg-f0fn
   legacy-id: null
 ---

@@ -106,6 +106,8 @@ void main() {
         '_lostSessionRetirements',
         '_blockedUntilFreshReady',
         '_rivalCleanupsInFlight',
+        '_operatorVoids',
+        '_runtimeEffects',
       };
       final declaredCollections = RegExp(
         r'final\s+(?:Set|Map|List)<[^;]+?>\s+(_[A-Za-z0-9]+)\s*=',
@@ -126,6 +128,8 @@ void main() {
             'In-flight liveness-loss cuts are unavailable',
         '_blockedUntilFreshReady': 'Cancellation quarantine persists',
         '_rivalCleanupsInFlight': 'rival-cleanup microtasks are unavailable',
+        '_operatorVoids': 'command-door fact the snapshot cannot carry',
+        '_runtimeEffects': 'Provisional runtime effects are unavailable',
       };
       for (final entry in rationaleByCollection.entries) {
         expect(

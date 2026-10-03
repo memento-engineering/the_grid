@@ -654,6 +654,138 @@ void main() {
     },
   );
 
+  group('the FRESH-status land gate (tg-b1t8)', () {
+    // The gate is INJECTED (grid_sdk builds the real one over its store
+    // readers); here a mutable fake plays the store so the bead can be OPEN
+    // when its worktree is provisioned and DEFERRED by the time land runs —
+    // the zombie shape: a round that kept building after its bead was parked.
+    test(
+      'a bead open at mount and deferred at push time gets NO pull request; '
+      'the refusal is recorded with the bead id and the observed status',
+      () async {
+        final seeded = await seedOriginAndClone();
+        final fakePr = _FakePrOpener();
+        var status = 'open';
+        final asked = <String>[];
+        final svc = StationGitService(
+          runner: runner,
+          prOpener: fakePr,
+          landGate: (beadId) async {
+            asked.add(beadId);
+            return status == 'open'
+                ? const LandGateDecision.open()
+                : LandGateDecision.refused(
+                    status: status,
+                    reason: 'only an open bead lands; $beadId reads $status',
+                  );
+          },
+        );
+        final root = await svc.registerRootCheckout(
+          path: seeded.root,
+          substation: 'tgdog',
+        );
+        // Mount: the bead is open when the worktree is cut.
+        final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-3');
+        File(p.join(wt.path, 'agent_output.txt')).writeAsStringSync('done\n');
+        // Parked while the round was still building.
+        status = 'deferred';
+
+        final res = await svc.land(
+          root: root,
+          worktree: wt,
+          commitMessage: 'grid: lenny-3 work',
+          prTitle: 'grid/lenny-3',
+        );
+
+        expect(fakePr.calls, 0, reason: 'the PR opener was never asked');
+        expect(asked, ['lenny-3'], reason: 'one fresh read, at push time');
+        expect(res.isLanded, isFalse);
+        expect(res.committed, isTrue);
+        expect(res.pushed, isTrue);
+        expect(
+          res.failureReason,
+          'pr open refused: work bead lenny-3 is deferred at push time — only '
+          'an open bead lands; lenny-3 reads deferred; no PR opened',
+        );
+        // The work survives on its pushed branch for a later decision.
+        final lsRemote = await runner.run(
+          workingDirectory: wt.path,
+          args: const <String>[
+            'ls-remote',
+            '--heads',
+            'origin',
+            'grid/lenny-3',
+          ],
+        );
+        expect(lsRemote.output.trim(), isNotEmpty);
+      },
+    );
+
+    test('an open, driveable bead still commits, pushes and opens its PR '
+        'exactly as before with the gate installed', () async {
+      final seeded = await seedOriginAndClone();
+      final fakePr = _FakePrOpener();
+      final svc = StationGitService(
+        runner: runner,
+        prOpener: fakePr,
+        landGate: (_) async => const LandGateDecision.open(),
+      );
+      final root = await svc.registerRootCheckout(
+        path: seeded.root,
+        substation: 'tgdog',
+      );
+      final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-4');
+      File(p.join(wt.path, 'agent_output.txt')).writeAsStringSync('done\n');
+
+      final landed = await svc.land(
+        root: root,
+        worktree: wt,
+        commitMessage: 'grid: lenny-4 work',
+        prTitle: 'grid/lenny-4',
+      );
+
+      expect(landed.isLanded, isTrue, reason: landed.failureReason ?? '');
+      expect(fakePr.calls, 1);
+      expect(fakePr.lastBranch, 'grid/lenny-4');
+      expect(fakePr.lastBaseBranch, 'main');
+    });
+
+    test(
+      'a gate that throws fails CLOSED: no PR, the failure is recorded',
+      () async {
+        final seeded = await seedOriginAndClone();
+        final fakePr = _FakePrOpener();
+        final svc = StationGitService(
+          runner: runner,
+          prOpener: fakePr,
+          landGate: (_) async => throw StateError('store unreachable'),
+        );
+        final root = await svc.registerRootCheckout(
+          path: seeded.root,
+          substation: 'tgdog',
+        );
+        final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-5');
+        File(p.join(wt.path, 'agent_output.txt')).writeAsStringSync('done\n');
+
+        final res = await svc.land(
+          root: root,
+          worktree: wt,
+          commitMessage: 'grid: lenny-5 work',
+          prTitle: 'grid/lenny-5',
+        );
+
+        expect(fakePr.calls, 0);
+        expect(res.isLanded, isFalse);
+        expect(res.pushed, isTrue);
+        expect(
+          res.failureReason,
+          'pr open refused: work bead lenny-5 status could not be read at push '
+          'time (Bad state: store unreachable) — failing closed, no PR opened',
+        );
+      },
+    );
+  });
+
   group('the WORK SIGNAL of the completion fence', () {
     test('THE WEDGE: a NON-.grid-ignoring substation with grid residue + '
         'COMMITTED code reads CLEAR when the grid dir is excluded', () async {

@@ -150,6 +150,12 @@ The Stage 2 engine projection rule is:
 * Lease breadcrumbs are read from the existing attempt-lease projections
   before graph bead types retire.
 
+`the_grid#projection-authority-selects-structural-graph-reads` records the
+narrow read-side carve-out from
+`the_grid#trajectory-decision-bearing-awaits-are-cut-only`: projection
+authority selects structural data in `SessionScope` without passing
+`TrajectoryDiscipline` into the engine or changing any recorder await policy.
+
 The schema §9 falsifier checkpoint is satisfied only when the frontier/status
 suite rows 3/5/6/14/15/16 run through those projection reads with a guard that
 detects any legacy graph call.

@@ -58,7 +58,15 @@ typedef SelectRunner = Future<List<Map<String, Object?>>> Function(String sql);
 /// read-only service or reuse its credential for the separate trajectory
 /// database's sole-appender write path.
 class DoltQueryService {
-  /// Deadline applied by `mysql_client` to the Dolt SQL connection and queries.
+  /// Deadline on every Dolt SQL read this service issues — the connect
+  /// handshake (`mysql_client`'s own `connect(timeoutMs:)`) AND each statement.
+  ///
+  /// The statement half is applied HERE (tg-6n18): `mysql_client` 0.0.27 puts
+  /// no timeout on `execute()` itself, so before this a slow SELECT under a
+  /// saturated server simply waited, and the boot summary's timed-out-read
+  /// count could never move during exactly the burst it diagnoses. A
+  /// statement that blows the deadline throws [TimeoutException] and its
+  /// connection is evicted (its socket may still be mid-result).
   ///
   /// This is distinct from [BdCliService.pourTimeout], which applies only to
   /// the atomic `bd create --graph` process.
@@ -68,8 +76,13 @@ class DoltQueryService {
     this.endpoint, {
     int poolSize = 2,
     @visibleForTesting DoltConnectionFactory? connectionFactory,
+    @visibleForTesting Duration queryDeadline = queryTimeout,
   }) : _poolSize = poolSize.clamp(1, 2),
-       _connectionFactory = connectionFactory ?? _defaultConnect;
+       _connectionFactory = connectionFactory ?? _defaultConnect,
+       _queryDeadline = queryDeadline;
+
+  /// The per-statement deadline; [queryTimeout] outside tests.
+  final Duration _queryDeadline;
 
   final DoltEndpoint endpoint;
   final int _poolSize;
@@ -87,6 +100,90 @@ class DoltQueryService {
   int _rr = 0;
   bool _closed = false;
   DoltSchemaShape? _shape;
+
+  /// Public reads whose own statement blew [queryTimeout] since this service
+  /// was built — a plain process-lifetime counter (tg-6n18). The station's
+  /// boot summary prints it beside that deadline, so a boot burst that times
+  /// the store out carries its own numbers instead of needing a log dig.
+  ///
+  /// Counts exactly the [DoltStatementTimeout]s [_bounded] raises, at most
+  /// ONE per public read (a nested read — a read transaction's lazy shape
+  /// probe — shares its caller's tally). A read that timed out WAITING for its
+  /// connection, or a connect timeout, is not a statement that blew the
+  /// deadline and is not counted. Never reset.
+  int get timedOutReads => _timedOutReads;
+  int _timedOutReads = 0;
+
+  /// The zone key of the current public read's [_ReadTally].
+  static final Object _tallyZoneKey = Object();
+
+  /// Statement turns per connection: each statement waits for the previous
+  /// one ON THAT CONNECTION before its own deadline starts, so the deadline
+  /// times the statement itself, never a queue behind another caller's read.
+  final Map<DoltConnection, Future<void>> _turns =
+      <DoltConnection, Future<void>>{};
+
+  Future<T> _countingTimeouts<T>(Future<T> Function() read) {
+    final current = Zone.current[_tallyZoneKey];
+    if (current is _ReadTally && identical(current.service, this)) {
+      return read();
+    }
+    return runZoned(read, zoneValues: {_tallyZoneKey: _ReadTally(this)});
+  }
+
+  void _countStatementTimeout() {
+    final tally = Zone.current[_tallyZoneKey];
+    if (tally is _ReadTally && identical(tally.service, this)) {
+      if (tally.counted) return;
+      tally.counted = true;
+    }
+    _timedOutReads += 1;
+  }
+
+  /// Runs one statement on [conn] under the per-statement deadline.
+  ///
+  /// The deadline starts only when [conn] is free: a read QUEUED behind
+  /// another caller's statement waits its turn (bounded by the same deadline,
+  /// surfacing a plain [TimeoutException]) and, on giving up, evicts nothing —
+  /// the statement ahead of it is still progressing. Only a statement whose
+  /// OWN deadline fired raises [DoltStatementTimeout], is counted, and evicts
+  /// [conn]: its socket may still be mid-result, so it must never serve
+  /// another read.
+  Future<List<Map<String, Object?>>> _bounded(
+    DoltConnection conn,
+    String sql,
+  ) async {
+    final prior = _turns[conn] ?? Future<void>.value();
+    final turn = Completer<void>();
+    final mine = turn.future;
+    _turns[conn] = mine;
+    try {
+      await prior.timeout(_queryDeadline);
+      try {
+        return await conn
+            .query(sql)
+            .timeout(
+              _queryDeadline,
+              onTimeout: () => throw DoltStatementTimeout(sql, _queryDeadline),
+            );
+      } on DoltStatementTimeout {
+        _countStatementTimeout();
+        _pool.remove(conn);
+        unawaited(_turns.remove(conn));
+        unawaited(_safeClose(conn));
+        rethrow;
+      }
+    } finally {
+      // The turn passes on only once the statement ahead has also finished,
+      // so a reader that gave up waiting never lets the next one jump it.
+      unawaited(
+        prior.whenComplete(() {
+          if (!turn.isCompleted) turn.complete();
+          if (identical(_turns[conn], mine)) _turns.remove(conn);
+        }),
+      );
+    }
+  }
 
   /// The probed schema shape. Throws [StateError] before [connect] has run —
   /// a caller reading the shape without connecting has a bug, and returning a
@@ -252,6 +349,10 @@ class DoltQueryService {
   /// propagates — a partially-read snapshot must not be silently stitched).
   Future<T> runReadTransaction<T>(
     Future<T> Function(SelectRunner select) body,
+  ) => _countingTimeouts(() => _runReadTransaction(body));
+
+  Future<T> _runReadTransaction<T>(
+    Future<T> Function(SelectRunner select) body,
   ) async {
     await _ensureShapeProbed();
     if (_closed) {
@@ -276,17 +377,24 @@ class DoltQueryService {
   ) async {
     Future<List<Map<String, Object?>>> select(String sql) {
       assertSelectOnly(sql);
-      return conn.query(sql);
+      return _bounded(conn, sql);
     }
 
-    await conn.query('START TRANSACTION READ ONLY');
+    await _bounded(conn, 'START TRANSACTION READ ONLY');
     try {
       final result = await body(select);
-      await conn.query('COMMIT');
+      await _bounded(conn, 'COMMIT');
       return result;
+    } on DoltStatementTimeout {
+      // Only OUR statement deadline evicts the connection; a ROLLBACK would
+      // queue behind the very statement that wedged it, and closing the
+      // socket aborts the transaction. Every other failure — a timeout raised
+      // by the body included — keeps the ROLLBACK below, so a pooled
+      // connection never stays parked inside an open READ ONLY transaction.
+      rethrow;
     } on Object {
       try {
-        await conn.query('ROLLBACK');
+        await _bounded(conn, 'ROLLBACK');
       } on Object {
         // Best-effort: the server may have already aborted the txn.
       }
@@ -490,7 +598,10 @@ class DoltQueryService {
 
   /// Rejects any non-SELECT statement, then runs it with one transparent
   /// reconnect retry if the connection was reaped/closed mid-flight.
-  Future<List<Map<String, Object?>>> _runSelect(String sql) async {
+  Future<List<Map<String, Object?>>> _runSelect(String sql) =>
+      _countingTimeouts(() => _runSelectOnce(sql));
+
+  Future<List<Map<String, Object?>>> _runSelectOnce(String sql) async {
     assertSelectOnly(sql);
     if (_closed) {
       throw const BdParseException(
@@ -499,14 +610,14 @@ class DoltQueryService {
     }
     try {
       final conn = await _acquire();
-      return await conn.query(sql);
+      return await _bounded(conn, sql);
     } on Object catch (error) {
       if (_isConnectionClosed(error)) {
         // Server reaped the idle socket (30s) or it dropped mid-query: drop the
         // dead connection and retry once on a fresh one.
         _evictDead();
         final conn = await _acquire(forceFresh: true);
-        return await conn.query(sql);
+        return await _bounded(conn, sql);
       }
       rethrow;
     }
@@ -667,4 +778,24 @@ class _RealConnection implements DoltConnection {
 
   @override
   Future<void> close() => _conn.close();
+}
+
+/// A Dolt statement that blew [DoltQueryService.queryTimeout] while it held
+/// its connection (tg-6n18) — the only timeout that evicts a connection and
+/// counts toward [DoltQueryService.timedOutReads]. A [TimeoutException], so
+/// every existing deadline classifier still matches it.
+final class DoltStatementTimeout extends TimeoutException {
+  DoltStatementTimeout(this.sql, Duration deadline)
+    : super('Dolt statement exceeded its deadline', deadline);
+
+  /// The statement that timed out.
+  final String sql;
+}
+
+/// The timed-out-read tally of ONE public read, shared by the reads it nests.
+final class _ReadTally {
+  _ReadTally(this.service);
+
+  final DoltQueryService service;
+  bool counted = false;
 }

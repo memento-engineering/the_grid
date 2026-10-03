@@ -610,6 +610,8 @@ final class _AuthorityProcesses implements TrajectoryProcessIdentitySnapshot {
   DateTime? get seededAt => null;
   @override
   DateTime? get lastTickAt => null;
+  @override
+  bool get tickStalled => false;
 }
 
 final class _AuthorityObservation {

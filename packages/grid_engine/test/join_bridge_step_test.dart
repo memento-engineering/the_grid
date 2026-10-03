@@ -193,6 +193,8 @@ final class _ProcessSnapshot implements TrajectoryProcessIdentitySnapshot {
   DateTime? get seededAt => null;
   @override
   DateTime? get lastTickAt => null;
+  @override
+  bool get tickStalled => false;
 
   @override
   Iterable<ProcessIdentityView> bySessionId(String sessionId) => [

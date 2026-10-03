@@ -73,6 +73,57 @@ ShadowClassification stepGapClassifier(ShadowMismatchSubject subject) {
   return corroboratedGapClassifier(subject);
 }
 
+/// The retired legacy carrier behind one step pair of a CUT session, or null
+/// (tg-ul2v).
+///
+/// Under `discipline: cut` the station retires the step bead's `running`
+/// write and its gate-cleared `gated`→`pending` rearm write, so the bead
+/// keeps the state its last NON-retired write left while the fold carries
+/// the retired transition. Returns the basis naming the retired write when
+/// [legacyState] and the fold's [row] form one of those pairs AND the fold
+/// holds the positive evidence for it; null otherwise, which leaves the row
+/// to the lane's ordinary classifier. The grid_engine comparator applies the
+/// same rule on the station's side (`retiredStepCarrierOf`); this lane has no
+/// bead `restartCount` or `finishedAt` (see `legacy_step_reader.dart`), so
+/// its evidence is the fold's own records instead:
+///
+///   * `pending` / `running` — the start write;
+///   * `failed` / `running` — a supervised restart's start write, only when a
+///     `failed` transition AT THE ROW'S INCARNATION landed on this rung (the
+///     failure write bumps the incarnation the restart then runs at; a fold
+///     still at the pre-failure incarnation is a lost failure append);
+///   * `gated` / `pending` or `running` on rung ≥ 1 — the rearm write (and
+///     the re-run's start write), only when the predecessor rung is `gated`
+///     and its `superseded_by_step_round` names this rung, which the fold's
+///     chain rule writes on a gate-cleared rearm.
+String? retiredLegacyStepCarrier({
+  required String? legacyState,
+  required StepCursorRow row,
+  StepCursorRow? predecessor,
+  Set<int> failedIncarnations = const {},
+}) {
+  final rearmProven =
+      row.stepRound >= 1 &&
+      predecessor != null &&
+      predecessor.stepRound == row.stepRound - 1 &&
+      predecessor.state == 'gated' &&
+      predecessor.supersededByStepRound == row.stepRound;
+  return switch ((legacyState, row.state)) {
+    ('pending', 'running') =>
+      'cut discipline retired the step bead running write',
+    ('failed', 'running') when failedIncarnations.contains(row.incarnation) =>
+      'cut discipline retired the step bead running write of the supervised '
+          'restart at incarnation ${row.incarnation}',
+    ('gated', 'pending') when rearmProven =>
+      'cut discipline retired the step bead rearm write (rung '
+          '${row.stepRound - 1} gated, superseded by ${row.stepRound})',
+    ('gated', 'running') when rearmProven =>
+      'cut discipline retired the step bead rearm and running writes (rung '
+          '${row.stepRound - 1} gated, superseded by ${row.stepRound})',
+    _ => null,
+  };
+}
+
 /// The Family-5 [ShadowCompare] lane.
 class StepTransitionShadow implements ShadowCompare {
   StepTransitionShadow(
@@ -182,11 +233,48 @@ class StepTransitionShadow implements ShadowCompare {
       (startedByPath[path] ??= {}).add(record.attemptId);
     }
     final epochs = epochsOf(records.records);
+    // The failure incarnations each rung's own records carry — the evidence
+    // the cut lane needs for a supervised restart (tg-ul2v). Decoded once.
+    final failedIncarnations = <(int, String, int), Set<int>>{};
+    for (final envelope in records.records) {
+      if (envelope.recordType != 'step.transition') continue;
+      final record = TrajectoryCodec.decode(envelope);
+      if (record is! StepTransition || record.state != StepState.failed) {
+        continue;
+      }
+      if (record.sessionId != sessionId) continue;
+      (failedIncarnations[(record.round, record.stepPath, record.stepRound)] ??=
+              {})
+          .add(record.incarnation);
+    }
 
     final mismatches = <ShadowMismatch>[];
     for (final view in legacy) {
       final row = byPath[view.stepPath];
       final resumeGap = row != null && _isUninstrumentedResume(fold, row);
+      // A CUT session's retired carrier (tg-ul2v): the pair's two facts are
+      // printed with their class, never sampled as a mismatch.
+      final retired = row == null || !view.cutDiscipline
+          ? null
+          : retiredLegacyStepCarrier(
+              legacyState: view.state,
+              row: row,
+              predecessor: row.stepRound < 1
+                  ? null
+                  : fold.rows[(
+                      sessionId: row.sessionId,
+                      round: row.round,
+                      stepPath: row.stepPath,
+                      stepRound: row.stepRound - 1,
+                    )],
+              failedIncarnations:
+                  failedIncarnations[(
+                    row.round,
+                    row.stepPath,
+                    row.stepRound,
+                  )] ??
+                  const {},
+            );
       final attemptIds = <String>{
         if (row?.attemptId case final String id) id,
         ...?startedByPath[view.stepPath],
@@ -208,6 +296,15 @@ class StepTransitionShadow implements ShadowCompare {
                       'predecessor step_round ${row.stepRound - 1} re-run '
                       'after its gate-cleared successor (banked pre-fix '
                       'evidence)',
+                    )
+                  : retired != null &&
+                        (field == 'step_state' || field == 'step_attempt')
+                  // The attempt fact rides the same retired carrier: a bead
+                  // held at `gated` by a retired rearm still says "ran" about
+                  // the PREVIOUS rung, while the new rung has no attempt yet.
+                  ? ShadowClassification(
+                      ShadowMismatchClass.legacyCarrierRetired,
+                      retired,
                     )
                   : null,
               attemptIds: attemptIds,

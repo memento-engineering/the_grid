@@ -1,0 +1,10 @@
+# grid_engine test configuration.
+#
+# Tests tagged `integration` spawn the released bd binary only against an
+# endpoint-free temporary embedded store. Keep the package's offline contract
+# explicit with `dart test -x integration`.
+tags:
+  integration:
+    description: >-
+      Spawns released bd against a hermetic temp workspace. Requires bd on
+      PATH and never touches a live server, hooks, network, or credentials.

@@ -493,6 +493,51 @@ void main() {
           );
         }
 
+        final voided = await _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '12',
+          idempotencyKey: 'void-1',
+          body: const {
+            'id': 'void-1',
+            'method': 'grid/session/void',
+            'params': {
+              'sessionId': 'tgdog-session',
+              'reason': 'never stepped after re-adoption',
+            },
+          },
+        );
+        expect(voided.statusCode, HttpStatus.ok);
+        expect(
+          handler.calls.last,
+          const GridCommandRequest.voidSession(
+            sessionId: 'tgdog-session',
+            reason: 'never stepped after re-adoption',
+          ),
+        );
+        final callsBeforeInvalidVoid = handler.calls.length;
+        for (final params in const <Map<String, Object?>>[
+          {'sessionId': 'tgdog-session'},
+          {'sessionId': 'tgdog-session', 'reason': '   '},
+          {'sessionId': 'tgdog-session', 'reason': 'x', 'until': '2026-10-01'},
+        ]) {
+          final invalid = await _post(
+            control.url,
+            '/command',
+            token: 't',
+            fence: '12',
+            idempotencyKey: 'void-invalid-${params.length}-${params.keys.last}',
+            body: {
+              'id': 'void-invalid',
+              'method': 'grid/session/void',
+              'params': params,
+            },
+          );
+          expect(invalid.statusCode, HttpStatus.badRequest, reason: '$params');
+        }
+        expect(handler.calls.length, callsBeforeInvalidVoid);
+
         final admission = await _post(
           control.url,
           '/command',

@@ -1,3 +1,20 @@
+## 0.4.0-dev.14
+
+ - **FIX**(engine,runtime,sdk,trajectory): re-arm the P6 mirror and degrade admission while it is dead (tg-6n18) (#520).
+
+## 0.4.0-dev.13
+
+ - **FIX**(sdk,runtime): land the zombie-PR guard on the production path, bound the unwind tail, self-bound the live attach test (tg-b1t8, tg-supq, tg-ejzb) (#517).
+ - **FIX**(runtime): bind teardown reads to writer store (#513).
+ - **FIX**(engine): refuse non-bd-safe result field identifiers before the write (tg-ymcd) (#499).
+ - **FIX**(engine): classify cut-retired step-bead lag as legacyStepCarrierRetired, not unexplained (tg-ul2v) (#516).
+ - **FIX**(engine): bound terminal-write and reservation bursts station-wide (tg-66w8, tg-t4k9) (#515).
+ - **FIX**(status): serve the resident wedge sample (#514).
+ - **FIX**(sdk): refuse incompatible bd store modes (#512).
+ - **FIX**(engine): fail closed on teardown state reads (#509).
+ - **FEAT**(cli,sdk,engine): session void, the ungated operator exit (tg-5snt) (#518).
+ - **FEAT**(trajectory): report G2 shadow diagnostics (#511).
+
 ## 0.4.0-dev.12
 
  - **FIX**(engine): gate adopted exhausted sessions (#507).

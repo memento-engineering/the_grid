@@ -172,6 +172,34 @@ void main() {
 
       expect(runner.callsFor('update'), hasLength(1));
     });
+
+    test(
+      'strict policy is forwarded and refuses before an unguarded update',
+      () async {
+        runner = RecordingBdRunner(
+          guardedWriteHelp: 'Flags:\n  --actor string',
+        );
+        bd = BdCliService(runner);
+
+        await expectLater(
+          writer().update(
+            'tgdog-one',
+            metadata: const {'state': 'active'},
+            ifStatus: BeadStatus.open,
+            requireGuardedWrite: true,
+          ),
+          throwsA(isA<BdGuardedWriteUnavailable>()),
+        );
+
+        expect(runner.calls, [
+          ['update', '--help'],
+        ]);
+        expect(
+          flares.where((flare) => flare.name == 'bd.guardedWriteDegraded'),
+          hasLength(1),
+        );
+      },
+    );
   });
 
   group('the fail-closed refusal (the key safety test)', () {

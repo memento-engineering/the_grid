@@ -261,6 +261,8 @@ final class _Processes implements TrajectoryProcessIdentitySnapshot {
   @override
   DateTime? get lastTickAt => DateTime(2026, 9, 22);
   @override
+  bool get tickStalled => false;
+  @override
   Iterable<ProcessIdentityView> bySessionId(String sessionId) =>
       rows.where((row) => row.sessionId == sessionId);
 }

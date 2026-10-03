@@ -316,4 +316,6 @@ final class _Processes implements TrajectoryProcessIdentitySnapshot {
   DateTime? get seededAt => DateTime.utc(2026);
   @override
   DateTime? get lastTickAt => DateTime.utc(2026);
+  @override
+  bool get tickStalled => false;
 }

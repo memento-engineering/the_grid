@@ -245,6 +245,13 @@ class TimedOut extends StopResult {
 // StationAttach
 // ---------------------------------------------------------------------------
 
+/// How long `down` ([StationAttach.stop]) waits for a SIGTERMed resident to
+/// exit AND remove its lock before reporting a timeout. The resident's own
+/// unwind budget (grid_sdk's `kUnwindDeadline`) must fit strictly inside it —
+/// pinned by a test — or `down` reports a hang the resident would have
+/// resolved on its own (tg-supq).
+const Duration kStationStopGrace = Duration(seconds: 10);
+
 /// The station attach client (Services: stateless I/O; the reference type
 /// carries the classifier). Reads the [StationLockService] lock, classifies
 /// reachability against the RS-4 [StationControl] HTTP surface, and offers a
@@ -405,7 +412,7 @@ class StationAttach {
   /// never silently escalated to SIGKILL) when the window elapses first.
   Future<StopResult> stop({
     required String stateWorkspaceDir,
-    Duration grace = const Duration(seconds: 10),
+    Duration grace = kStationStopGrace,
     Duration pollInterval = const Duration(milliseconds: 100),
   }) async {
     final record = await _readLock(stateWorkspaceDir);

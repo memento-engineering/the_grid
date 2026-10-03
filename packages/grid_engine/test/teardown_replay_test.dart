@@ -57,65 +57,70 @@ class _FakeGroups implements ProcessGroupController {
   Future<int?> resolvePgid(int pid) async => null;
 }
 
-/// A reader whose probe THROWS — the replay must fail closed before effects.
-class _ThrowingReader implements BeadProbeReader {
-  int openBeadsCalls = 0;
+typedef _RootedBdFixture = ({
+  Directory root,
+  Directory stateRoot,
+  Directory roundWorktree,
+  File executable,
+  File log,
+});
 
-  @override
-  Future<Bead?> beadById(String id, {required Set<IssueType> types}) async =>
-      null;
-  @override
-  Future<List<Bead>> openBeads({
-    required Set<IssueType> types,
-    Map<String, String> metadataAll = const {},
-    Map<String, String> metadataAny = const {},
-  }) async {
-    openBeadsCalls++;
-    throw StateError('probe exploded');
+Future<_RootedBdFixture> _rootedBdFixture({required bool readable}) async {
+  final root = await Directory.systemTemp.createTemp('grid-teardown-replay-');
+  final gridHome = Directory('${root.path}/grid-home')..createSync();
+  final stateRoot = Directory('${gridHome.path}/.grid')..createSync();
+  final roundWorktree = Directory('${root.path}/round-worktree')..createSync();
+  if (readable) Directory('${stateRoot.path}/.beads').createSync();
+  final log = File('${root.path}/bd-calls.log');
+  final executable = File('${root.path}/bd-stub.sh');
+  await executable.writeAsString(r'''#!/bin/sh
+printf '%s\t%s\n' "$PWD" "$*" >> "$GRID_TEST_BD_LOG"
+if [ -d "$PWD/.beads" ]; then
+  printf '%s\n' '{"schema_version":1,"data":[]}'
+  exit 0
+fi
+printf '%s\n' '{"schema_version":1,"data":{"error":"Error: no beads database found"}}'
+exit 1
+''');
+  final chmod = await Process.run('chmod', ['+x', executable.path]);
+  if (chmod.exitCode != 0) {
+    throw StateError('fixture chmod failed: ${chmod.stderr}');
   }
-
-  @override
-  Future<List<Bead>> openSuperseding(Set<String> priorIds) async => const [];
+  return (
+    root: root,
+    stateRoot: stateRoot,
+    roundWorktree: roundWorktree,
+    executable: executable,
+    log: log,
+  );
 }
 
-class _StoreReader implements BeadProbeReader {
-  _StoreReader(this.delegate, {required this.rejectSessionReads});
-
-  final BeadProbeReader delegate;
-  final bool rejectSessionReads;
-  final List<({Set<IssueType> types, Map<String, String> metadataAll})>
-  openBeadCalls = [];
-
-  @override
-  Future<Bead?> beadById(String id, {required Set<IssueType> types}) =>
-      delegate.beadById(id, types: types);
-
-  @override
-  Future<List<Bead>> openBeads({
-    required Set<IssueType> types,
-    Map<String, String> metadataAll = const {},
-    Map<String, String> metadataAny = const {},
-  }) {
-    openBeadCalls.add((
-      types: Set.unmodifiable(types),
-      metadataAll: metadataAll,
-    ));
-    if (rejectSessionReads && types.contains(GridIssueTypes.session)) {
-      throw StateError(
-        'invalid issue type "session" '
-        '(valid: bug, feature, task, epic, chore, decision)',
-      );
-    }
-    return delegate.openBeads(
-      types: types,
-      metadataAll: metadataAll,
-      metadataAny: metadataAny,
+BdCliService _fixtureBd(_RootedBdFixture fixture, Directory root) =>
+    BdCliService(
+      ProcessBdRunner(
+        workspaceRoot: root.path,
+        executable: fixture.executable.path,
+        environment: {'GRID_TEST_BD_LOG': fixture.log.path},
+      ),
     );
-  }
 
-  @override
-  Future<List<Bead>> openSuperseding(Set<String> priorIds) =>
-      delegate.openSuperseding(priorIds);
+CliBeadProbeReader _roundReader(_RootedBdFixture fixture) => CliBeadProbeReader(
+  _fixtureBd(fixture, fixture.roundWorktree),
+  lifecycleTypes: {
+    GridIssueTypes.session,
+    GridIssueTypes.molecule,
+    GridIssueTypes.step,
+  },
+);
+
+Future<T> _fromDirectory<T>(Directory directory, Future<T> Function() body) {
+  final original = Directory.current;
+  Directory.current = directory;
+  try {
+    return body();
+  } finally {
+    Directory.current = original;
+  }
 }
 
 class _SelectiveThrowingReader implements BeadProbeReader {
@@ -543,16 +548,28 @@ void main() {
 
   group('the boot contract', () {
     test(
-      'outstanding teardown reads stay on the resident state store',
+      'outstanding teardown reads use the StationServices writer root from a '
+      'round worktree',
       () async {
-        final stateBd = RecordingBdRunner()
-          ..exportBeads = [_session('tgdog-sess1', workBead: 'tg-1')];
-        final workBd = RecordingBdRunner();
-        final stateStore = _StoreReader(stateBd, rejectSessionReads: false);
-        final ambientWorkStore = _StoreReader(workBd, rejectSessionReads: true);
+        final fixture = await _rootedBdFixture(readable: true);
+        addTearDown(() => fixture.root.delete(recursive: true));
         final loud = <String>[];
         final flares = <({String name, Map<String, String> data})>[];
         final git = _FakeGit();
+        final provider = FakeRuntimeProvider();
+        final services = StationServices(
+          provider: provider,
+          writer: StationBeadWriter(
+            bd: _fixtureBd(fixture, fixture.stateRoot),
+            reader: _roundReader(fixture),
+            ownership: BeadOwnershipPredicate(const {'tgdog'}),
+          ),
+          stateSubstation: 'tgdog',
+        );
+        addTearDown(() async {
+          services.dispose();
+          await provider.close();
+        });
         final reconciler = RestartReconciler(
           listWorktrees: git.listWorktrees,
           reapWorktree: git.reapWorktree,
@@ -562,42 +579,37 @@ void main() {
             substation: 'the_grid',
           ),
           groups: _FakeGroups(),
-          writer: StationBeadWriter(
-            bd: BdCliService(stateBd),
-            reader: stateStore,
-            ownership: BeadOwnershipPredicate(const {'tgdog'}),
-          ),
+          writer: services.writer,
           onOrphan: loud.add,
           onFlare: (name, data) => flares.add((name: name, data: data)),
           freshnessBarrier: () async {},
           stateSnapshot: () => GraphSnapshot.fromParts(
-            beads: stateBd.exportBeads,
+            beads: const [],
             dependencies: const [],
             readyIds: const [],
             capturedAt: DateTime(2026, 9, 22),
           ),
         );
 
-        final report = await reconciler.replayTeardownTail();
+        final report = await _fromDirectory(
+          fixture.roundWorktree,
+          reconciler.replayTeardownTail,
+        );
 
-        expect(report.replayed.map((entry) => entry.sessionId), [
-          'tgdog-sess1',
-        ]);
-        final stateSessionQueries = stateStore.openBeadCalls.where(
-          (call) => call.types.contains(GridIssueTypes.session),
-        );
-        expect(stateSessionQueries, hasLength(2));
+        expect(report.entries, isEmpty);
+        final dialedRoot = await fixture.stateRoot.resolveSymbolicLinks();
         expect(
-          stateSessionQueries.map((call) => call.types),
-          everyElement({GridIssueTypes.session}),
+          await fixture.log.readAsLines(),
+          unorderedEquals([
+            '$dialedRoot\tlist -t session --status open '
+                '--metadata-field grid.outcome=complete --json --limit 0',
+            '$dialedRoot\tlist -t session --status open '
+                '--metadata-field grid.outcome=commit_only --json --limit 0',
+          ]),
         );
-        expect(stateSessionQueries.map((call) => call.metadataAll), [
-          {'grid.outcome': 'complete'},
-          {'grid.outcome': 'commit_only'},
-        ]);
-        expect(ambientWorkStore.openBeadCalls, isEmpty);
-        expect(loud.join('\n'), isNot(contains('invalid issue type')));
+        expect(loud, isEmpty);
         expect(flares, isEmpty);
+        expect(git.listCalls, 0);
       },
     );
 
@@ -631,7 +643,7 @@ void main() {
 
       await f.reconciler.replayTeardownTail();
       // The second boot reads the store as the first left it: the session is
-      // closed, so `openBeads` no longer returns it at all.
+      // closed, so the scoped list no longer returns it at all.
       f.bd
         ..exportBeads = [
           _session('tgdog-sess1', workBead: 'tg-1', closed: true),
@@ -644,22 +656,33 @@ void main() {
       expect(_closedIds(f.bd), isEmpty);
     });
 
-    test('outstanding teardown read failure flares and fails loudly', () async {
+    test('an unreadable configured state store still fails closed with the '
+        'dialed store', () async {
+      final fixture = await _rootedBdFixture(readable: false);
+      addTearDown(() => fixture.root.delete(recursive: true));
       final git = _FakeGit();
-      final bd = RecordingBdRunner();
-      final reader = _ThrowingReader();
       final loud = <String>[];
       final flares = <({String name, Map<String, String> data})>[];
+      final provider = FakeRuntimeProvider();
+      final services = StationServices(
+        provider: provider,
+        writer: StationBeadWriter(
+          bd: _fixtureBd(fixture, fixture.stateRoot),
+          reader: _roundReader(fixture),
+          ownership: BeadOwnershipPredicate(const {'tgdog'}),
+        ),
+        stateSubstation: 'tgdog',
+      );
+      addTearDown(() async {
+        services.dispose();
+        await provider.close();
+      });
       final reconciler = RestartReconciler(
         listWorktrees: git.listWorktrees,
         reapWorktree: git.reapWorktree,
         workRoot: _workRoot,
         groups: _FakeGroups(),
-        writer: StationBeadWriter(
-          bd: BdCliService(bd),
-          reader: reader,
-          ownership: BeadOwnershipPredicate(const {'tgdog'}),
-        ),
+        writer: services.writer,
         onOrphan: loud.add,
         onFlare: (name, data) => flares.add((name: name, data: data)),
         freshnessBarrier: () async {},
@@ -672,7 +695,7 @@ void main() {
       );
 
       await expectLater(
-        reconciler.replayTeardownTail(),
+        _fromDirectory(fixture.roundWorktree, reconciler.replayTeardownTail),
         throwsA(
           isA<TeardownReplayReadFailure>()
               .having((failure) => failure.store, 'store', 'station-state')
@@ -681,31 +704,39 @@ void main() {
                 'reason',
                 allOf(
                   contains('station state store'),
-                  contains('probe exploded'),
+                  contains('no beads database found'),
                 ),
               )
               .having(
                 (failure) => failure.cause.toString(),
                 'cause',
-                contains('probe exploded'),
+                contains('no beads database found'),
               ),
         ),
       );
-      expect(reader.openBeadsCalls, 2);
+      final dialedRoot = await fixture.stateRoot.resolveSymbolicLinks();
+      expect(
+        await fixture.log.readAsLines(),
+        unorderedEquals([
+          '$dialedRoot\tlist -t session --status open '
+              '--metadata-field grid.outcome=complete --json --limit 0',
+          '$dialedRoot\tlist -t session --status open '
+              '--metadata-field grid.outcome=commit_only --json --limit 0',
+        ]),
+      );
       expect(loud, hasLength(1));
       expect(loud.single, contains('store=station-state'));
-      expect(loud.single, contains('probe exploded'));
+      expect(loud.single, contains('no beads database found'));
       expect(flares, hasLength(1));
       expect(flares.single.name, kTeardownReplayOutstandingReadFailedFlare);
       expect(flares.single.data['store'], 'station-state');
-      expect(flares.single.data['reason'], contains('probe exploded'));
+      expect(flares.single.data['reason'], contains('no beads database found'));
       expect(
         flares.single.data['reason']!.length,
         lessThanOrEqualTo(kMaxReasonChars),
       );
       expect(git.listCalls, 0);
       expect(git.reaped, isEmpty);
-      expect(bd.calls, isEmpty);
     });
 
     test(

@@ -22,6 +22,14 @@
 // write it sees, so both the peak (the bound) and the total (the latch) are
 // assertable. Zero I/O — the recording bd chokepoint + a fake transport
 // (Fakes, not mocks).
+//
+// tg-66w8 added the second group: the bound is STATION-WIDE. Per-WorkList it
+// multiplied by the roster (lunar's thirteen substations ⇒ up to twenty-six
+// simultaneous writes) and re-formed the burst one level up; every
+// session-terminal close of epoch 98 died at the deadline and none was
+// re-driven. The station-wide group mounts several substations under ONE
+// station and meters the whole station, and pins the re-drive of a failed
+// close even when the work bead is no longer eligible to re-mount.
 import 'dart:async';
 
 import 'package:beads_dart/beads_dart.dart';
@@ -263,6 +271,129 @@ List<({String name, Map<String, String> data})> _lateBuildReceipts(
   );
   return (owner: owner, root: root);
 }
+
+/// The substations the station-wide group composes — more than the bound, so
+/// a per-WorkList bound (bound × substations = 8) is unmistakable against the
+/// station bound (2).
+const _substationIds = ['sa', 'sb', 'sc', 'sd'];
+
+/// Terminal sessions per substation in the station-wide group.
+const _sessionsPerSubstation = 4;
+
+String _stationWorkBeadId(String substation, int index) => '$substation-$index';
+
+String _stationSessionId(String substation, int index) =>
+    'tgdog-done-$substation-$index';
+
+String _stationGateId(String substation, int index) =>
+    '$_gateIdPrefix$substation-$index';
+
+/// Every work bead of every substation is ready AND carries a `done` terminal
+/// session — the boot shape that hands the whole roster's terminal sweep to
+/// the drain at once. [attemptCapped] beads additionally carry an EXHAUSTED
+/// durable mount-attempt record, so the admission authority refuses them under
+/// the attempt-cap clause rather than `done`.
+JoinedSnapshot _stationJoined({Set<String> attemptCapped = const {}}) =>
+    JoinedSnapshot(
+      graph: GraphSnapshot.fromParts(
+        beads: [
+          for (final substation in _substationIds)
+            for (var i = 1; i <= _sessionsPerSubstation; i++)
+              _task(_stationWorkBeadId(substation, i)),
+        ],
+        dependencies: const [],
+        readyIds: {
+          for (final substation in _substationIds)
+            for (var i = 1; i <= _sessionsPerSubstation; i++)
+              _stationWorkBeadId(substation, i),
+        },
+        capturedAt: DateTime(2026),
+      ),
+      sessionsByWorkBead: {
+        for (final substation in _substationIds)
+          for (var i = 1; i <= _sessionsPerSubstation; i++)
+            _stationWorkBeadId(substation, i): SessionProjection(
+              workBeadId: _stationWorkBeadId(substation, i),
+              sessionId: _stationSessionId(substation, i),
+              isTerminal: true,
+              completed: true,
+            ),
+      },
+      mountAttemptsByWorkBead: {
+        for (final workBeadId in attemptCapped)
+          workBeadId: MountAttemptRecord(
+            recordId: 'tgdog-attempt-$workBeadId',
+            workBeadId: workBeadId,
+            count: kMaxMountAttempts,
+          ),
+      },
+    );
+
+/// One closed session row plus its one open gate per work bead, across the
+/// whole roster.
+List<Bead> _stationStateBeads() => [
+  for (final substation in _substationIds)
+    for (var i = 1; i <= _sessionsPerSubstation; i++) ...[
+      sessionBead(
+        id: _stationSessionId(substation, i),
+        workBeadId: _stationWorkBeadId(substation, i),
+        closed: true,
+        outcomeComplete: true,
+      ),
+      Bead(
+        id: _stationGateId(substation, i),
+        issueType: GridIssueTypes.gate,
+        metadata: {
+          'rig': stateSubstation,
+          'blocks': _stationSessionId(substation, i),
+          'node': '${_stationWorkBeadId(substation, i)}/route',
+        },
+      ),
+    ],
+];
+
+/// Mounts ONE station over [_substationIds] substations, each its own
+/// `SubstationScope` (and therefore its own `WorkList`), all sharing [ctx].
+({TreeOwner owner, Branch root}) _mountStation({
+  required JoinedSnapshotNotifier joined,
+  required StationServices ctx,
+  required ExplorationTransport transport,
+}) {
+  final owner = TreeOwner();
+  final root = owner.mountRoot(
+    ProviderScope(
+      child: InheritedSeed<JoinedSnapshotNotifier>(
+        value: joined,
+        child: InheritedSeed<StationServices>(
+          value: ctx,
+          child: InheritedSeed<CapabilityRegistry>(
+            value: RecordingCapabilityRegistry(circuits: const {}),
+            child: InheritedSeed<SessionResolver>(
+              value: CircuitResolver((_) => _code),
+              child: Station([
+                for (final substation in _substationIds)
+                  SubstationScope(
+                    configNotifier: SubstationConfigNotifier(
+                      SubstationConfig(
+                        substationId: substation,
+                        ownedSubstations: {substation},
+                      ),
+                    ),
+                    services: ServiceBundle(transport: transport),
+                    key: ValueKey('scope.$substation'),
+                  ),
+              ]),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  return (owner: owner, root: root);
+}
+
+int _stationWritesFor(_InFlightMeter meter, String gateId) =>
+    meter.entered.where((entered) => entered == gateId).length;
 
 StationServices _station(
   _MeteredGateWriteRunner runner,
@@ -586,6 +717,201 @@ void main() {
         ),
         isTrue,
       );
+    });
+  });
+
+  group('the terminal-write bound is STATION-WIDE (tg-66w8)', () {
+    const totalSessions = _sessionsPerSubstation * 4;
+
+    test('${_substationIds.length} substations × $_sessionsPerSubstation done '
+        'sessions sweep with at most kTerminalWriteConcurrency gate writes in '
+        'flight ACROSS THE STATION, and NONE is dropped', () async {
+      final meter = _InFlightMeter();
+      final runner = _MeteredGateWriteRunner(
+        meter,
+        hold: const Duration(milliseconds: 20),
+      )..exportBeads = _stationStateBeads();
+      final provider = FakeRuntimeProvider();
+      addTearDown(provider.close);
+      final station = _station(runner, provider);
+      addTearDown(station.dispose);
+      final transport = _RecordingTransport();
+      final mounted = _mountStation(
+        joined: JoinedSnapshotNotifier(_stationJoined()),
+        ctx: station,
+        transport: transport,
+      );
+      addTearDown(mounted.owner.dispose);
+
+      await _settleUntil(() => meter.completed.length >= totalSessions);
+
+      // THE STATION BOUND. A per-WorkList bound opens
+      // kTerminalWriteConcurrency × substations writes at once and reads
+      // ${kTerminalWriteConcurrency * _substationIds.length} here.
+      expect(
+        meter.maxInFlight,
+        lessThanOrEqualTo(kTerminalWriteConcurrency),
+        reason:
+            'the roster opened ${meter.maxInFlight} simultaneous terminal '
+            'gate writes across ${_substationIds.length} substations; the '
+            'station-wide bound is $kTerminalWriteConcurrency',
+      );
+      expect(
+        station.terminalWrites.peakInFlight,
+        lessThanOrEqualTo(kTerminalWriteConcurrency),
+      );
+      // …and the meter really observed overlap: the bound is a ceiling the
+      // drain reaches, not one it can never touch.
+      expect(meter.maxInFlight, greaterThan(1));
+      // NONE DROPPED: every substation's every terminal session was swept,
+      // exactly once.
+      expect(meter.completed, hasLength(totalSessions));
+      expect(meter.entered.toSet(), {
+        for (final substation in _substationIds)
+          for (var i = 1; i <= _sessionsPerSubstation; i++)
+            _stationGateId(substation, i),
+      });
+      expect(transport.named('gate.autoCloseFailed'), isEmpty);
+    });
+
+    test('a terminal close that fails is RE-DRIVEN on a later build even when '
+        'the work bead is no longer eligible to re-mount, and every failure '
+        'names its substation and attempt', () async {
+      final flaky = {
+        _stationGateId('sa', 2): _stationWorkBeadId('sa', 2),
+        _stationGateId('sc', 1): _stationWorkBeadId('sc', 1),
+        _stationGateId('sd', 4): _stationWorkBeadId('sd', 4),
+      };
+      final meter = _InFlightMeter();
+      final runner = _MeteredGateWriteRunner(
+        meter,
+        hold: const Duration(milliseconds: 5),
+        failFirstGateIds: flaky.keys.toSet(),
+      )..exportBeads = _stationStateBeads();
+      final provider = FakeRuntimeProvider();
+      addTearDown(provider.close);
+      final station = _station(runner, provider);
+      addTearDown(station.dispose);
+      final transport = _RecordingTransport();
+      final joined = JoinedSnapshotNotifier(_stationJoined());
+      final mounted = _mountStation(
+        joined: joined,
+        ctx: station,
+        transport: transport,
+      );
+      addTearDown(mounted.owner.dispose);
+
+      // Drain 1 — the whole roster swept, three closes dying in the
+      // store-deadline shape the live incident was made of.
+      await _settleUntil(() => meter.completed.length >= totalSessions);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(meter.entered, hasLength(totalSessions));
+      final firstFailures = transport.named('gate.autoCloseFailed');
+      expect(firstFailures, hasLength(flaky.length));
+      for (final failure in firstFailures) {
+        final sessionId = failure.data['sessionId']!;
+        final substation = sessionId.split('-')[2];
+        expect(
+          failure.data,
+          containsPair('substation', substation),
+          reason: 'the failure must name the WorkList that owns the session',
+        );
+        expect(failure.data, containsPair('attempt', '1'));
+        expect(failure.data, containsPair('cause', 'session-terminal'));
+        expect(
+          failure.data,
+          containsPair('deadlineConstant', 'DoltQueryService.queryTimeout'),
+        );
+      }
+
+      // Drain 2 — the rebuild arrives with the three flaky beads' durable
+      // mount-attempt budget EXHAUSTED, so admission refuses them under the
+      // attempt-cap clause, not `done`. The gate close is owed all the same.
+      joined.push(_stationJoined(attemptCapped: flaky.values.toSet()));
+      mounted.owner.flush();
+      await _settleUntil(
+        () => meter.completed.length >= totalSessions + flaky.length,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      // The receipt that the rebuild really did refuse them by eligibility —
+      // without it the re-drive assertion below would be testing the `done`
+      // path the first group already covers.
+      expect(
+        transport
+            .named('work.mountEligibilityRefused')
+            .map((flare) => flare.data['beadId'])
+            .toSet(),
+        flaky.values.toSet(),
+      );
+
+      // EXACTLY TWICE for the three that failed, EXACTLY ONCE for every other,
+      // across the whole roster.
+      for (final substation in _substationIds) {
+        for (var i = 1; i <= _sessionsPerSubstation; i++) {
+          final gateId = _stationGateId(substation, i);
+          expect(
+            _stationWritesFor(meter, gateId),
+            flaky.containsKey(gateId) ? 2 : 1,
+            reason:
+                '$gateId was written ${_stationWritesFor(meter, gateId)} '
+                'times',
+          );
+        }
+      }
+      expect(meter.entered, hasLength(totalSessions + flaky.length));
+      expect(
+        meter.maxInFlight,
+        lessThanOrEqualTo(kTerminalWriteConcurrency),
+        reason: 'the retry drain broke the station-wide bound',
+      );
+      // The re-drive succeeded, so no second failure was flared, and the
+      // three first-attempt failures stay the whole failure record.
+      expect(transport.named('gate.autoCloseFailed'), hasLength(flaky.length));
+
+      // A THIRD build issues nothing: every session is memoized on success.
+      joined.push(_stationJoined(attemptCapped: flaky.values.toSet()));
+      mounted.owner.flush();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(meter.entered, hasLength(totalSessions + flaky.length));
+    });
+
+    test('the governor releases a throwing write\'s permit, hands permits to '
+        'FIFO waiters, and never exceeds its bound', () async {
+      // The governor itself — the contract the WorkList relies on.
+      final governor = StateStoreWriteGovernor(bound: 2, lane: 'test');
+      final completers = <Completer<void>>[];
+      final results = <Future<void>>[];
+      for (var i = 0; i < 5; i++) {
+        final completer = Completer<void>();
+        completers.add(completer);
+        results.add(
+          governor.run(() async {
+            await completer.future;
+            if (i == 1) throw TimeoutException('Future not completed');
+          }),
+        );
+      }
+      // Attached BEFORE the write is released, so the throw is never an
+      // unhandled async error.
+      final failing = expectLater(results[1], throwsA(isA<TimeoutException>()));
+      expect(governor.inFlight, 2);
+      expect(governor.queued, 3);
+      completers[0].complete();
+      completers[1].complete();
+      await Future<void>.delayed(Duration.zero);
+      expect(governor.inFlight, 2);
+      expect(governor.queued, 1);
+      for (final completer in completers.skip(2)) {
+        completer.complete();
+      }
+      await failing;
+      for (final index in [0, 2, 3, 4]) {
+        await results[index];
+      }
+      expect(governor.inFlight, 0);
+      expect(governor.queued, 0);
+      expect(governor.peakInFlight, 2);
     });
   });
 }

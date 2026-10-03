@@ -76,15 +76,52 @@ JoinedSnapshot _joined({
   required List<Bead> beads,
   required Set<String> ready,
   Map<String, SessionProjection> sessions = const {},
+  DateTime? capturedAt,
 }) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
     beads: beads,
     dependencies: const [],
     readyIds: ready,
-    capturedAt: DateTime(2026),
+    capturedAt: capturedAt ?? DateTime(2026),
   ),
   sessionsByWorkBead: sessions,
 );
+
+/// An ADOPTED live molecule session whose steps sit in [agentState] / pending —
+/// the re-adopted-at-boot shape tg-t4k9 measured holding a slot while driving
+/// nothing.
+SessionProjection _moleculeSession(
+  String workBeadId, {
+  required String sessionId,
+  StepState agentState = StepState.pending,
+}) => SessionProjection(
+  workBeadId: workBeadId,
+  sessionId: sessionId,
+  isMolecule: true,
+  moleculeBeads: [
+    for (final step in const ['agent', 'land'])
+      Bead(
+        id: '$sessionId-$step',
+        issueType: GridIssueTypes.step,
+        metadata: {
+          'rig': 'tg',
+          MoleculeStepKeys.stepId: step,
+          MoleculeStepKeys.capability: step,
+          MoleculeStepKeys.kind: StepKind.job.name,
+          MoleculeStepKeys.path: '$workBeadId/$step',
+          MoleculeStepKeys.session: sessionId,
+          MoleculeStepKeys.state: step == 'agent'
+              ? agentState.name
+              : StepState.pending.name,
+        },
+      ),
+  ],
+);
+
+List<({String name, Map<String, String> data})> _named(
+  _RecordingTransport transport,
+  String name,
+) => transport.flares.where((flare) => flare.name == name).toList();
 
 Seed _root({
   required JoinedSnapshotNotifier joined,
@@ -427,6 +464,271 @@ void main() {
         containsAll(<String>['STOP work(tg-2)', 'START work(tg-1)']),
       );
       expect(recorder.handedSessionIds.last, 'tgdog-s1');
+    });
+  });
+
+  group('paused slots are released and resumed rows re-compete (tg-t4k9)', () {
+    test('pausing one of cap-many live sessions frees exactly its slot, and a '
+        'pending bead is admitted into it', () {
+      final recorder = _Recorder();
+      final transport = _RecordingTransport();
+      const cap = 3;
+      final beads = [for (var i = 1; i <= cap + 1; i++) _bead('tg-$i')];
+      final ready = {for (final bead in beads) bead.id};
+      Map<String, SessionProjection> sessions({String? paused}) => {
+        for (var i = 1; i <= cap; i++)
+          'tg-$i': _session(
+            'tg-$i',
+            sessionId: 'tgdog-s$i',
+            pauseState: paused == 'tg-$i'
+                ? SessionPauseState.paused
+                : SessionPauseState.none,
+          ),
+      };
+      final joined = JoinedSnapshotNotifier(
+        _joined(beads: beads, ready: ready, sessions: sessions()),
+      );
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      owner.mountRoot(
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+                maxConcurrentWork: cap,
+              ),
+            ),
+            services: ServiceBundle(transport: transport),
+            stationServices: _stationServices(maxConcurrentWork: cap),
+          ),
+        ),
+      );
+      // Cap-many live sessions hold every slot; the pending bead is throttled
+      // and the throttle names slot contention.
+      expect(recorder.events.toSet(), {
+        for (var i = 1; i <= cap; i++) 'START work(tg-$i)',
+      });
+      final throttled = _named(transport, 'work.throttled');
+      expect(throttled, isNotEmpty);
+      expect(throttled.last.data['beadIds'], 'tg-${cap + 1}');
+      expect(throttled.last.data['cause'], WorkThrottleCause.slotsFull);
+
+      // Pause ONE of them: exactly one slot frees and exactly one more bead is
+      // admitted — the paused session is not counted as mounted.
+      joined.push(
+        _joined(
+          beads: beads,
+          ready: ready,
+          sessions: sessions(paused: 'tg-2'),
+        ),
+      );
+      owner.flush();
+      expect(recorder.events.skip(cap).toSet(), {
+        'STOP work(tg-2)',
+        'START work(tg-${cap + 1})',
+      });
+      expect(recorder.events, hasLength(cap + 2));
+      final pausedFlares = _named(transport, 'work.paused');
+      expect(pausedFlares.single.data['beadId'], 'tg-2');
+    });
+
+    test('a resumed session at cap joins the pending competition (no bypass) '
+        'and is admitted within a bounded number of flushes once a slot '
+        'frees, with no unbounded work.throttled streak', () {
+      final recorder = _Recorder();
+      final transport = _RecordingTransport();
+      const cap = 2;
+      final beads = [_bead('tg-1'), _bead('tg-2'), _bead('tg-3')];
+      final ready = {for (final bead in beads) bead.id};
+      SessionProjection s2(SessionPauseState pauseState) =>
+          _session('tg-2', sessionId: 'tgdog-s2', pauseState: pauseState);
+      // Two ADOPTED live sessions hold the cap (the re-adopted-at-boot shape
+      // the bead measured) and the third is paused.
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: beads,
+          ready: ready,
+          sessions: {
+            'tg-1': _session('tg-1', sessionId: 'tgdog-s1'),
+            'tg-2': s2(SessionPauseState.paused),
+            'tg-3': _session('tg-3', sessionId: 'tgdog-s3'),
+          },
+        ),
+      );
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      owner.mountRoot(
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+                maxConcurrentWork: cap,
+              ),
+            ),
+            services: ServiceBundle(transport: transport),
+            stationServices: _stationServices(maxConcurrentWork: cap),
+          ),
+        ),
+      );
+      // The paused session occupies no slot: tg-1 and tg-3 fill the cap.
+      expect(recorder.events.toSet(), {'START work(tg-1)', 'START work(tg-3)'});
+
+      // RESUME at cap: per pause-is-a-non-terminal-blocking-disposition the
+      // resumed row re-enters the ordinary pending bin and WAITS — it does not
+      // displace live work — and the wait is named slots-full.
+      transport.flares.clear();
+      joined.push(
+        _joined(
+          beads: beads,
+          ready: ready,
+          sessions: {
+            'tg-1': _session('tg-1', sessionId: 'tgdog-s1'),
+            'tg-2': s2(SessionPauseState.resumed),
+            'tg-3': _session('tg-3', sessionId: 'tgdog-s3'),
+          },
+        ),
+      );
+      owner.flush();
+      expect(recorder.events, hasLength(2), reason: 'no eviction, no bypass');
+      final resumedHold = _named(transport, 'work.throttled');
+      expect(resumedHold, isNotEmpty);
+      expect(resumedHold.last.data['beadIds'], 'tg-2');
+      expect(resumedHold.last.data['cause'], WorkThrottleCause.slotsFull);
+
+      // A slot frees (tg-3 completes). Under correct accounting the resumed
+      // row WINS it within a bounded number of flushes.
+      transport.flares.clear();
+      joined.push(
+        _joined(
+          beads: beads,
+          ready: ready,
+          sessions: {
+            'tg-1': _session('tg-1', sessionId: 'tgdog-s1'),
+            'tg-2': s2(SessionPauseState.resumed),
+            'tg-3': _session(
+              'tg-3',
+              sessionId: 'tgdog-s3',
+              isTerminal: true,
+              completed: true,
+            ),
+          },
+        ),
+      );
+      const flushBound = 3;
+      var flushes = 0;
+      while (flushes < flushBound &&
+          !recorder.events.contains('START work(tg-2)')) {
+        owner.flush();
+        flushes += 1;
+      }
+      expect(
+        recorder.events,
+        containsAll(<String>['STOP work(tg-3)', 'START work(tg-2)']),
+        reason:
+            'the resumed session was not admitted within $flushBound '
+            'flushes of the slot freeing',
+      );
+      expect(recorder.handedSessionIds.last, 'tgdog-s2');
+      // The throttle streak after the slot freed is bounded by the flushes it
+      // took to admit — never an open-ended repeat against a free slot.
+      expect(
+        _named(
+          transport,
+          'work.throttled',
+        ).where((flare) => flare.data['beadIds']!.contains('tg-2')).length,
+        lessThanOrEqualTo(flushBound),
+      );
+    });
+
+    test('an adopted session that drives nothing for '
+        'kAdoptedSessionQuietSnapshots snapshots flares '
+        'work.adoptedSessionQuiet ONCE, naming session, bead and substation; '
+        'a step transition resets the watch', () {
+      final recorder = _Recorder();
+      final transport = _RecordingTransport();
+      final beads = [_bead('tg-1')];
+      var tick = 0;
+      JoinedSnapshot snapshotAt({StepState agentState = StepState.pending}) =>
+          _joined(
+            beads: beads,
+            ready: {'tg-1'},
+            sessions: {
+              'tg-1': _moleculeSession(
+                'tg-1',
+                sessionId: 'tgdog-s1',
+                agentState: agentState,
+              ),
+            },
+            capturedAt: DateTime(2026, 9, 22, 9, 30, tick++),
+          );
+      final joined = JoinedSnapshotNotifier(snapshotAt());
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      owner.mountRoot(
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+              ),
+            ),
+            services: ServiceBundle(transport: transport),
+            stationServices: _stationServices(maxConcurrentWork: 2),
+          ),
+        ),
+      );
+      expect(recorder.handedSessionIds, ['tgdog-s1'], reason: 'adopted');
+
+      // Snapshots 2..k-1 quiet: no flare yet. Rebuilds over the SAME snapshot
+      // are not ticks and never advance the count.
+      for (var i = 2; i < kAdoptedSessionQuietSnapshots; i++) {
+        joined.push(snapshotAt());
+        owner.flush();
+        owner.flush();
+      }
+      expect(_named(transport, 'work.adoptedSessionQuiet'), isEmpty);
+
+      // The k-th quiet snapshot: exactly one named flare.
+      joined.push(snapshotAt());
+      owner.flush();
+      final quiet = _named(transport, 'work.adoptedSessionQuiet');
+      expect(quiet, hasLength(1));
+      expect(quiet.single.data, {
+        'sessionId': 'tgdog-s1',
+        'beadId': 'tg-1',
+        'substation': 'tg',
+        'snapshots': '$kAdoptedSessionQuietSnapshots',
+      });
+
+      // Still quiet: no repeat.
+      joined.push(snapshotAt());
+      owner.flush();
+      expect(_named(transport, 'work.adoptedSessionQuiet'), hasLength(1));
+
+      // The first step transition resets the watch…
+      joined.push(snapshotAt(agentState: StepState.running));
+      owner.flush();
+      // …so a fresh quiet streak needs the full bound again before it flares.
+      for (var i = 1; i <= kAdoptedSessionQuietSnapshots; i++) {
+        joined.push(snapshotAt());
+        owner.flush();
+        expect(
+          _named(transport, 'work.adoptedSessionQuiet'),
+          hasLength(i < kAdoptedSessionQuietSnapshots ? 1 : 2),
+          reason: 'quiet snapshot $i after the reset',
+        );
+      }
     });
   });
 }

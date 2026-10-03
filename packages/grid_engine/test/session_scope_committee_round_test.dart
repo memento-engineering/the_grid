@@ -121,10 +121,10 @@ SessionProjection _projection(
 );
 
 List<Map<String, String>> _verdicts(String round) => [
-  {'lane': 'plan-completeness', 'grade': 'A', 'round': round},
+  {'lane': 'plan_completeness', 'grade': 'A', 'round': round},
   {'lane': 'coherence', 'grade': 'B', 'round': round},
-  {'lane': 'adr-alignment', 'grade': 'A', 'round': round},
-  {'lane': 'acceptance-testability', 'grade': 'A', 'round': round},
+  {'lane': 'adr_alignment', 'grade': 'A', 'round': round},
+  {'lane': 'acceptance_testability', 'grade': 'A', 'round': round},
 ];
 
 BeadDependency _supersedes(String successor, String prior) => BeadDependency(

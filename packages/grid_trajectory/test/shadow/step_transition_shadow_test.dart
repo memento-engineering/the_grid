@@ -489,4 +489,253 @@ void main() {
       isEmpty,
     );
   });
+
+  // ── CUT DISCIPLINE — THE RETIRED LEGACY CARRIER (tg-ul2v) ───────────────
+  //
+  // Under `discipline: cut` the step bead's running write and its
+  // gate-cleared rearm write are retired, so these pairs have no legacy
+  // oracle. They are printed as `legacy_carrier_retired` only with the
+  // session's cut stamp AND the fold's own proof; everything else keeps its
+  // ordinary classification.
+  group('cut discipline — the retired legacy carrier (tg-ul2v)', () {
+    const attemptA = '01J8ATTEMPT000000000000001';
+
+    Future<List<ShadowMismatch>> compare(
+      LegacyStepView legacy,
+      List<TrajectoryEnvelope> records,
+    ) async => (await _lane([
+      legacy,
+    ]).compare(sessionId: _session, records: _records(records))).mismatches;
+
+    final rearmed = [
+      _transition(
+        seq: 1,
+        stepPath: 'route',
+        state: 'running',
+        attemptId: attemptA,
+      ),
+      _transition(
+        seq: 2,
+        stepPath: 'route',
+        state: 'gated',
+        attemptId: attemptA,
+      ),
+      _transition(
+        seq: 3,
+        stepPath: 'route',
+        stepRound: 1,
+        state: 'pending',
+        cause: 'gate_cleared',
+      ),
+    ];
+
+    test('bead pending / fold running is the retired start write', () async {
+      final rows = await compare(
+        const LegacyStepView(
+          stepPath: 'build',
+          state: 'pending',
+          cutDiscipline: true,
+        ),
+        [
+          _transition(
+            seq: 1,
+            stepPath: 'build',
+            state: 'running',
+            attemptId: attemptA,
+          ),
+        ],
+      );
+      final row = rows.single;
+      expect(row.field, 'step_state');
+      expect(row.legacyValue, 'pending');
+      expect(row.foldValue, 'running');
+      expect(row.seq, 1);
+      expect(row.classification, ShadowMismatchClass.legacyCarrierRetired);
+      expect(row.classification.isUnshadowable, isTrue);
+      expect(row.classification.isNamedGap, isFalse);
+      expect(row.basis, contains('retired the step bead running write'));
+    });
+
+    test('bead gated / fold pending on the rearmed rung is the retired rearm '
+        'write — and the bead\'s stale "ran" rides the same carrier', () async {
+      final rows = await compare(
+        const LegacyStepView(
+          stepPath: 'route',
+          state: 'gated',
+          cutDiscipline: true,
+        ),
+        rearmed,
+      );
+      expect(rows.map((row) => row.field).toSet(), {
+        'step_state',
+        'step_attempt',
+      });
+      for (final row in rows) {
+        expect(row.classification, ShadowMismatchClass.legacyCarrierRetired);
+        expect(row.basis, contains('rearm write'));
+        expect(row.seq, 3);
+      }
+    });
+
+    test('bead gated / fold running on the rearmed rung (the re-run) is the '
+        'retired rearm AND start writes', () async {
+      final rows = await compare(
+        const LegacyStepView(
+          stepPath: 'route',
+          state: 'gated',
+          cutDiscipline: true,
+        ),
+        [
+          ...rearmed,
+          _transition(
+            seq: 4,
+            stepPath: 'route',
+            stepRound: 1,
+            state: 'running',
+            attemptId: '01J8ATTEMPT000000000000009',
+          ),
+        ],
+      );
+      final row = rows.single;
+      expect(row.field, 'step_state');
+      expect(row.foldValue, 'running');
+      expect(row.classification, ShadowMismatchClass.legacyCarrierRetired);
+      expect(row.basis, contains('rearm and running writes'));
+    });
+
+    test('bead failed / fold running at the failure\'s bumped incarnation is '
+        'the retired restart start write', () async {
+      final rows = await compare(
+        const LegacyStepView(
+          stepPath: 'build',
+          state: 'failed',
+          cutDiscipline: true,
+        ),
+        [
+          _transition(
+            seq: 1,
+            stepPath: 'build',
+            state: 'running',
+            attemptId: attemptA,
+          ),
+          _transition(
+            seq: 2,
+            stepPath: 'build',
+            state: 'failed',
+            incarnation: 1,
+            attemptId: attemptA,
+          ),
+          _transition(
+            seq: 3,
+            stepPath: 'build',
+            state: 'running',
+            incarnation: 1,
+            attemptId: '01J8ATTEMPT000000000000009',
+          ),
+        ],
+      );
+      expect(
+        rows.single.classification,
+        ShadowMismatchClass.legacyCarrierRetired,
+      );
+      expect(rows.single.basis, contains('incarnation 1'));
+    });
+
+    test(
+      'WITHOUT the cut stamp the same pairs keep their ordinary class',
+      () async {
+        final ahead = await compare(
+          const LegacyStepView(stepPath: 'build', state: 'pending'),
+          [
+            _transition(
+              seq: 1,
+              stepPath: 'build',
+              state: 'running',
+              attemptId: attemptA,
+            ),
+          ],
+        );
+        expect(ahead.single.classification, ShadowMismatchClass.unexplained);
+        final gated = await compare(
+          const LegacyStepView(stepPath: 'route', state: 'gated'),
+          rearmed,
+        );
+        expect(
+          gated.map((row) => row.classification),
+          isNot(contains(ShadowMismatchClass.legacyCarrierRetired)),
+        );
+      },
+    );
+
+    test('NEGATIVE SPACE — a cut pair without the fold\'s proof is not the '
+        'class', () async {
+      // A rung-1 pending with NO gate-cleared link to its predecessor.
+      final unlinked = await compare(
+        const LegacyStepView(
+          stepPath: 'route',
+          state: 'gated',
+          cutDiscipline: true,
+        ),
+        [
+          _transition(
+            seq: 1,
+            stepPath: 'route',
+            state: 'gated',
+            attemptId: attemptA,
+          ),
+          _transition(
+            seq: 2,
+            stepPath: 'route',
+            stepRound: 1,
+            state: 'pending',
+          ),
+        ],
+      );
+      expect(
+        unlinked.map((row) => row.classification),
+        isNot(contains(ShadowMismatchClass.legacyCarrierRetired)),
+      );
+      // A failed bead over a fold still at the PRE-failure incarnation: the
+      // failure's append is what is missing.
+      final lostFailure = await compare(
+        const LegacyStepView(
+          stepPath: 'build',
+          state: 'failed',
+          cutDiscipline: true,
+        ),
+        [
+          _transition(
+            seq: 1,
+            stepPath: 'build',
+            state: 'running',
+            attemptId: attemptA,
+          ),
+        ],
+      );
+      expect(
+        lostFailure.single.classification,
+        ShadowMismatchClass.unexplained,
+      );
+      // A bead AHEAD of the fold: the terminal write is never retired.
+      final ahead = await compare(
+        const LegacyStepView(
+          stepPath: 'build',
+          state: 'complete',
+          cutDiscipline: true,
+        ),
+        [
+          _transition(
+            seq: 1,
+            stepPath: 'build',
+            state: 'running',
+            attemptId: attemptA,
+          ),
+        ],
+      );
+      expect(
+        ahead.single.classification,
+        isNot(ShadowMismatchClass.legacyCarrierRetired),
+      );
+    });
+  });
 }
