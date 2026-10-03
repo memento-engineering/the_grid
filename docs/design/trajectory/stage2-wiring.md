@@ -145,6 +145,10 @@ The Stage 2 engine projection rule is:
 * Frontier and status consumers read P2 plus `proj_step_edges`.
 * An absent P2 row remains the existing pending/not-yet-materialized case; it
   is not proof of completion, supersession, or a missing graph.
+* An absent per-source `proj_step_edges` set is edge-not-materialized, encoded
+  as null from `blockersFor` or `validatesFor`; the frontier falls back to the
+  Circuit's declared relation, while a genuinely declaration-free step remains
+  unblocked.
 * Step result, cooldown, and restart fields continue to come from
   `StepTransition` until G4.
 * Lease breadcrumbs are read from the existing attempt-lease projections
@@ -159,6 +163,13 @@ authority selects structural data in `SessionScope` without passing
 The schema §9 falsifier checkpoint is satisfied only when the frontier/status
 suite rows 3/5/6/14/15/16 run through those projection reads with a guard that
 detects any legacy graph call.
+
+The G2-5 checkpoint also includes these missing-edge compatibility falsifiers:
+
+* authoritative zero-edge dependsOn: the dependent stays withheld behind its
+  declared pending blocker;
+* authoritative zero-edge validates: a failing validator invalidates and
+  re-releases its declared target.
 
 ## 4. Append discipline
 

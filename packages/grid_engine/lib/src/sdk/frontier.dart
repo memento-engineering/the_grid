@@ -23,7 +23,10 @@ import 'cursor.dart';
 import 'circuit.dart';
 
 /// Returns the projected dependency paths blocked by one full step path.
-typedef DependencyPathsFor = Iterable<String> Function(String stepPath);
+///
+/// A null result means the projected edges for that source path are not yet
+/// materialized, so callers fall back to the circuit's declared relation.
+typedef DependencyPathsFor = Iterable<String>? Function(String stepPath);
 
 /// The full path of [stepId] within a circuit rooted at [nodePath]
 /// (`'$nodePath/$stepId'`, or just [stepId] at an empty root).

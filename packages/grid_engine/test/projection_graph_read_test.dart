@@ -1,4 +1,7 @@
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/src/molecule/live_frontier.dart';
+import 'package:grid_engine/src/molecule/molecule_schema.dart'
+    show kValidatesParam;
 import 'package:test/test.dart';
 
 void main() {
@@ -39,6 +42,94 @@ void main() {
       expect(frontier.map((step) => step.stepId), ['verify']);
     },
   );
+
+  test('authoritative zero-edge blockers fall back to declared dependsOn', () {
+    final graph = _graph(
+      rows: [
+        _StepRow(path: 'work/build'),
+        _StepRow(path: 'work/verify'),
+      ],
+    );
+    final circuit = Circuit(
+      id: 'code',
+      terminalStepId: 'verify',
+      steps: const [
+        CapabilityStep(stepId: 'build', capabilityId: 'build'),
+        CapabilityStep(
+          stepId: 'verify',
+          capabilityId: 'verify',
+          dependsOn: {'build'},
+        ),
+      ],
+    );
+
+    expect(graph.blockersFor('work/verify'), isNull);
+
+    final frontier = eligibleSteps(
+      circuit,
+      graph.cursor,
+      'work',
+      circuitById: (_) => null,
+      now: DateTime.utc(2026),
+      dependencyPathsFor: graph.blockersFor,
+    );
+
+    expect(frontier.map((step) => step.stepId), ['build']);
+  });
+
+  test('authoritative zero-edge validates fall back to declared validates', () {
+    final graph = _graph(
+      rows: [
+        _StepRow(path: 'work/build', state: 'complete'),
+        _StepRow(
+          path: 'work/verify',
+          state: 'complete',
+          result: const {ResultKeys.grade: 'F'},
+        ),
+      ],
+    );
+    final circuit = Circuit(
+      id: 'code',
+      terminalStepId: 'verify',
+      steps: const [
+        CapabilityStep(stepId: 'build', capabilityId: 'build'),
+        CapabilityStep(
+          stepId: 'verify',
+          capabilityId: 'verify',
+          dependsOn: {'build'},
+          params: {kValidatesParam: 'build'},
+        ),
+      ],
+    );
+
+    expect(graph.validatesFor('work/verify'), isNull);
+    expect(
+      invalidatedNodes(
+        circuit,
+        graph.cursor,
+        graph.results,
+        'work',
+        circuitById: (_) => null,
+        supersedesDepthByPath: const {},
+        validatesPathsFor: graph.validatesFor,
+      ),
+      contains('work/build'),
+    );
+
+    final frontier = liveFrontier(
+      circuit,
+      graph.cursor,
+      graph.results,
+      'work',
+      circuitById: (_) => null,
+      supersedesDepthByPath: const {},
+      now: DateTime.utc(2026),
+      validatesPathsFor: graph.validatesFor,
+      dependencyPathsFor: graph.blockersFor,
+    );
+
+    expect(frontier.map((step) => step.stepId), ['build']);
+  });
 
   test('absent P2 row is pending and not complete', () {
     final read = _graph().stepAt('work/unmaterialized');
